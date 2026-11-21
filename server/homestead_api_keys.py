@@ -18,7 +18,10 @@ can do what its scopes say and no more:
   a wrong key is answered "too many" for a while - a right one never is.
 * A key reaches the MCP server (/mcp, homestead_mcp) only when it was made
   with mcp allowed, and only while an admin has it switched on; there it
-  is held to the same scopes.
+  is held to the same scopes. What an agent asks for that needs a person's
+  approval waits for one - unless the key was made to act without approval
+  (unattended), when it is approved at once as the key's maker, with the
+  role they hold then (homestead_mcp). Off unless an admin turns it on.
 
 When a key was last used, and from where, is kept on the data volume rather
 than in the Secret: a key in use must not rewrite the accounts, nor race a
@@ -154,16 +157,26 @@ def public(kid, rec, usage=None, now=None):
     now = now or time.time()
     used = (usage or {}).get(kid) or {}
     return {"id": kid, "name": rec["name"], "owner": rec["owner"], "scopes": list(rec["scopes"]),
-            "mcp": bool(rec.get("mcp")),
+            "mcp": bool(rec.get("mcp")), "unattended": bool(rec.get("mcp") and rec.get("unattended")),
             "networks": list(rec.get("networks") or []), "created": rec["created"], "expires": rec["expires"],
             "expired": rec["expires"] <= now, "last_used": used.get("at"), "last_ip": used.get("ip", "")}
 
 
-def create(name, scopes, ttl_seconds, networks, owner, mcp=False):
+def _unattended(value, mcp):
+    if not isinstance(value, bool):
+        raise ValueError("say whether AI agents using the key need a person's approval")
+    if value and not mcp:
+        raise ValueError("only a key that allows AI agents (MCP) can act without approval")
+    return value
+
+
+def create(name, scopes, ttl_seconds, networks, owner, mcp=False, unattended=False):
     """A new key, and its token - the only time the token exists outside the
-    caller. mcp: whether it may also be used on the MCP server."""
+    caller. mcp: whether it may also be used on the MCP server; unattended:
+    whether what an agent asks for there runs without a person's approval."""
     if not isinstance(mcp, bool):
         raise ValueError("say whether the key may be used by AI agents over MCP")
+    unattended = _unattended(unattended, mcp)
     name, scopes, networks = _name(name), _scopes(scopes), _networks(networks)
     try:
         ttl = int(ttl_seconds)
@@ -187,7 +200,8 @@ def create(name, scopes, ttl_seconds, networks, owner, mcp=False):
         kid = secrets.token_hex(6)
     secret = secrets.token_urlsafe(32)
     keys[kid] = {"name": name, "owner": owner, "scopes": scopes, "networks": networks,
-                 "created": now, "expires": now + ttl, "hash": _digest(secret), "mcp": mcp}
+                 "created": now, "expires": now + ttl, "hash": _digest(secret), "mcp": mcp,
+                 "unattended": unattended}
     AUTH._save(data)
     return {"token": f"{PREFIX}{kid}_{secret}", "key": public(kid, keys[kid], now=now)}
 
@@ -218,6 +232,10 @@ def edit(kid, changes, editor):
         if not isinstance(changes["mcp"], bool):
             raise ValueError("say whether the key may be used by AI agents over MCP")
         new["mcp"] = changes["mcp"]
+    if "unattended" in changes:
+        new["unattended"] = _unattended(changes["unattended"], new.get("mcp"))
+    if not new.get("mcp"):
+        new["unattended"] = False
     if changes.get("ttl_seconds") not in (None, ""):
         try:
             ttl = int(changes["ttl_seconds"])
@@ -227,8 +245,10 @@ def edit(kid, changes, editor):
             raise ValueError("a key lasts between an hour and a year")
         new["expires"] = int(time.time()) + ttl
     for field, label in (("name", "name"), ("scopes", "scopes"), ("networks", "networks"), ("mcp", "MCP"),
-                         ("expires", "expiry")):
-        if new.get(field) != rec.get(field):
+                         ("unattended", "approval"), ("expires", "expiry")):
+        # A key made before unattended existed has no such field: the same as off.
+        before, after = (bool(rec.get(field)), bool(new.get(field))) if field == "unattended" else (rec.get(field), new.get(field))
+        if after != before:
             said.append(label)
     keys[kid] = new
     AUTH._save(data)
@@ -241,12 +261,12 @@ def manage(action, body, user):
     body = body or {}
     if action == "keys":
         made = create(body.get("name"), body.get("scopes"), body.get("ttl_seconds"), body.get("networks"), user,
-                      body.get("mcp", False))
+                      body.get("mcp", False), body.get("unattended", False))
         return {"ok": True, **made}, "key-added", f"{made['key']['name']}: {', '.join(made['key']['scopes'])}"
     if action == "revoke":
         done = revoke(body.get("id"))
         return done, "key-revoked", done["name"]
-    done = edit(body.get("id"), {k: body[k] for k in ("name", "scopes", "networks", "mcp", "ttl_seconds") if k in body}, user)
+    done = edit(body.get("id"), {k: body[k] for k in ("name", "scopes", "networks", "mcp", "unattended", "ttl_seconds") if k in body}, user)
     return ({"ok": True, **done}, "key-changed",
             f"{done['key']['name']}: {', '.join(done['changed']) or 'nothing'} changed")
 
@@ -328,7 +348,8 @@ def verify(token, addr, now=None, force=False):
         refuse(f"the API key {rec['name']} has no scope its maker's role still allows")
     _note_use(kid, addr, now)
     return {"id": kid, "name": rec["name"], "owner": rec["owner"], "scopes": scopes, "expires": rec["expires"],
-            "mcp": bool(rec.get("mcp"))}
+            "mcp": bool(rec.get("mcp")), "unattended": bool(rec.get("mcp") and rec.get("unattended")),
+            "owner_role": owner.get("role", "viewer")}
 
 
 def scopes_for_role(role):

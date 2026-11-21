@@ -498,7 +498,7 @@ window.apiKeysPaint = async () => {
   STATE.data.apiKeys = found;
   // A list of like things: a stacked table, its buttons an actionBar.
   const rows = found.keys.map(k => `<tr>
-      <td><b>${esc(k.name)}</b> ${k.expired ? UI.chip("expired", "bad") : ""}${k.mcp ? ` ${UI.chip("MCP", "neutral")}` : ""}<div class="dim xs">made by ${esc(k.owner)}${k.networks.length ? ` · only from ${esc(k.networks.join(", "))}` : ""}</div></td>
+      <td><b>${esc(k.name)}</b> ${k.expired ? UI.chip("expired", "bad") : ""}${k.mcp ? ` ${UI.chip("MCP", "neutral")}` : ""}${k.unattended ? ` ${UI.chip("No approval", "warn", { tip: "AI agents using this key act without a person's approval" })}` : ""}<div class="dim xs">made by ${esc(k.owner)}${k.networks.length ? ` · only from ${esc(k.networks.join(", "))}` : ""}</div></td>
       <td data-label="May">${k.scopes.map(s => UI.chip(s, "neutral")).join(" ")}</td>
       <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
       <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}${k.last_ip_node ? ` ${UI.chip("host", "neutral", { tip: "A host's address inside the cluster, not the client's address" })}` : ""}</div>` : ""}` : '<span class="dim">Never</span>'}</td>
@@ -525,8 +525,16 @@ function apiKeyForm(key) {
       esc(text) + ((implies[scope] || []).length ? `<div class="dim xs">Includes ${esc(implies[scope].join(", "))}</div>` : ""),
       `<label class="toggle"><input type="checkbox" class="ak-scope" value="${esc(scope)}" ${chosen.has(scope) ? "checked" : ""}><span></span></label>`)).join("")
     + settingRow("Allow AI agents (MCP)", "Lets an AI assistant use this key at the MCP endpoint, within these scopes. When this is off, the key works only on the API.",
-      `<label class="toggle"><input type="checkbox" id="ak_mcp" ${key?.mcp ? "checked" : ""}><span></span></label>`);
+      `<label class="toggle"><input type="checkbox" id="ak_mcp" ${key?.mcp ? "checked" : ""} onchange="apiKeyMcpChanged()"><span></span></label>`)
+    + settingRow("Act without approval", "Deleting, restoring, storage moves and admin-only changes run as soon as the agent asks, as the key's maker, instead of waiting for a person to approve them. Every action is still recorded on the Agents page. Turn this on only for an agent trusted with everything these scopes allow.",
+      `<label class="toggle"><input type="checkbox" id="ak_unattended" ${key?.unattended ? "checked" : ""} ${key?.mcp ? "" : "disabled"}><span></span></label>`);
 }
+// Acting without approval is an MCP setting: it is off, and cannot be set, while MCP is.
+window.apiKeyMcpChanged = () => {
+  const box = $("#ak_unattended");
+  box.disabled = !$("#ak_mcp").checked;
+  if (box.disabled) box.checked = false;
+};
 window.apiKeyPreset = list => {
   const want = new Set(JSON.parse(list));
   for (const box of $$(".ak-scope")) box.checked = want.has(box.value);
@@ -550,7 +558,8 @@ window.apiKeyEdit = id => {
 };
 window.apiKeySave = async (button, id) => {
   const body = { id, name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
-    mcp: $("#ak_mcp").checked, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
+    mcp: $("#ak_mcp").checked, unattended: $("#ak_mcp").checked && $("#ak_unattended").checked,
+    networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
   if ($("#ak_ttl").value) body.ttl_seconds = +$("#ak_ttl").value;
   if (!body.name) return toast("Enter a name for the key", "bad");
   if (!body.scopes.length) return toast("Choose at least one scope", "bad");
@@ -574,7 +583,7 @@ window.apiKeyNew = () => {
 
 window.apiKeyMake = async button => {
   const body = { name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
-    mcp: $("#ak_mcp").checked, ttl_seconds: +$("#ak_ttl").value, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
+    mcp: $("#ak_mcp").checked, unattended: $("#ak_mcp").checked && $("#ak_unattended").checked, ttl_seconds: +$("#ak_ttl").value, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
   if (!body.name) return toast("Enter a name for the key", "bad");
   if (!body.scopes.length) return toast("Choose at least one scope", "bad");
   button.disabled = true;

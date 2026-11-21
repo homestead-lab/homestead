@@ -315,6 +315,26 @@ agent follows it with `get_agent_request`.
 - A request expires after **30 minutes**, and a key may have at most **10**
   waiting.
 
+### Acting without approval
+
+A key's **Act without approval** setting, in **Settings › Users and access ›
+API keys**, makes its requests run straight away. It is off for every key
+unless an administrator turns it on, and only a key that allows AI agents (MCP)
+can have it.
+
+- Each request the key files is approved the moment it is filed, **as the
+  key's maker**, with the role that person holds then. It goes through the same
+  approval as a person's: Homestead plans it again, records it, and lists it on
+  the **/agents** page as run without approval.
+- The agent is told when it connects that its destructive tools run when it
+  calls them.
+- A request the maker's role cannot approve still waits for a person. For
+  example, the maker is now an operator and the request needs an administrator.
+- With an administrator's key, this covers everything the key's scopes allow,
+  including deletes, restores, storage moves, privileged containers and
+  container commands. Turn it on only for an agent trusted with all of that.
+- The rate limits still apply: at most 5 destructive calls a minute.
+
 ## Security
 
 - **Off until you turn it on**, and `404` while it is off.
@@ -323,7 +343,8 @@ agent follows it with `get_agent_request`.
   to addresses.
 - **Origin.** A request that carries an Origin must come from Homestead's own.
 - **Operator at most.** Whoever made the key, it never acts as an administrator.
-  Admin-only actions go through an approval.
+  Admin-only actions go through an approval, which a key set to
+  [act without approval](#acting-without-approval) gives as its maker.
 - **Scopes decide the tool list.** An agent cannot call what it cannot see.
 - **Rate limits**, per key per minute: 120 reads, 20 changes, 5 destructive.
 - **Size.** Requests are at most 256 KiB, and there are no batches.

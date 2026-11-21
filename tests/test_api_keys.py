@@ -101,7 +101,7 @@ class KeyTests(unittest.TestCase):
         stored = json.dumps(self.store)
         self.assertNotIn(token.split("_", 2)[2], stored, "the secret is never written down")
         self.assertNotIn("hash", json.dumps(keys.list_keys()), "nor its hash shown")
-        self.assertEqual({"id", "name", "owner", "scopes", "expires", "mcp"}, set(keys.verify(token, "192.0.2.5")))
+        self.assertEqual({"id", "name", "owner", "scopes", "expires", "mcp", "unattended", "owner_role"}, set(keys.verify(token, "192.0.2.5")))
 
     def test_every_key_expires_within_a_year_and_an_expired_one_is_refused(self):
         for ttl in (60, 400 * DAY, None, "soon"):

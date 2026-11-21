@@ -216,8 +216,10 @@ def deny(rid, user, role):
     return public(_end(rid, detail=f"Denied by {FLEET.words(user)}"))
 
 
-def approve(rid, user, role):
-    """Plan it again as user; run it only if that plan is the one reviewed."""
+def approve(rid, user, role, unattended=False):
+    """Plan it again as user; run it only if that plan is the one reviewed.
+    unattended: approved by its key's own setting, as the key's maker, the
+    moment it was filed (homestead_mcp.call_tool); the record says so."""
     row = _take(rid, user, role, "running")
     tool = TOOLS.BY_NAME.get(row["tool"])
     # In a form no account can have (a username cannot contain ':'). A key's
@@ -244,10 +246,11 @@ def approve(rid, user, role):
     clipped, _ = TOOLS.clip(result)
     # Which stored values an approved edit deleted: names only, as the save answers them.
     deleted = result.get("secret_removed") if isinstance(result, dict) else None
+    who = (f"run without approval: the key acts for {FLEET.words(user)}" if unattended
+           else f"approved by {FLEET.words(user)}")
     AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "approved", addr=row.get("addr", ""), approved_by=user,
-                 detail=f"approved by {FLEET.words(user)}" + (f"; deleted stored values: {', '.join(map(str, deleted))}"
-                                                              if deleted else ""))
-    return public(_end(rid, status="done", result=clipped, detail=f"Approved by {FLEET.words(user)}"))
+                 detail=who + (f"; deleted stored values: {', '.join(map(str, deleted))}" if deleted else ""))
+    return public(_end(rid, status="done", result=clipped, detail=who[0].upper() + who[1:]))
 
 
 def alert_facts():
