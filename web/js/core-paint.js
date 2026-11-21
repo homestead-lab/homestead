@@ -108,6 +108,8 @@ function paint(html) {
     host.dataset.sig = html.length + ":" + STATE.view;
     if (window.applyRole) window.applyRole();
     dropOrphanTooltip();
+    // An open details sidebar shows its item with the data just painted.
+    if (window.refreshDetails) refreshDetails();
     watcher?.takeRecords();
     return;
   }
@@ -126,6 +128,7 @@ function paint(html) {
     loadAppIcons(host);
     if (window.applyRole) window.applyRole();
     dropOrphanTooltip();
+    if (window.refreshDetails) refreshDetails();
     watcher?.takeRecords();
   } finally {
     const focused = report.refocus, now = document.activeElement;

@@ -4142,6 +4142,25 @@ button.a2port{font-family:inherit;line-height:inherit}
   .whoami .nm,.whoami .rolechip{display:none}
   .fleet-slot:not(:empty){margin-top:6px}
 }
+/* The details sidebar (design.md): everything about one row, at the right,
+   over the list; a sheet from the bottom on a phone. */
+.details-panel{width:min(500px,94vw);display:flex;flex-direction:column;overflow:hidden;z-index:95;background:rgba(15,15,17,.97)}
+.details-scrim{position:fixed;inset:0;z-index:94;background:rgba(0,0,0,.45)}
+.details-scrim[hidden]{display:none}
+.details-hd{height:auto;padding:16px 20px;gap:12px}
+.details-title{display:flex;align-items:center;gap:12px;min-width:0}
+.details-title h3{overflow-wrap:anywhere}
+.details-body{padding:16px 20px 28px;display:flex;flex-direction:column;gap:16px;overflow-y:auto;flex:1 1 auto;min-height:0}
+.details-tabs{align-self:flex-start;flex-wrap:wrap}
+.details-tabs button{border:0;background:transparent;color:var(--mut);font:inherit;font-weight:600;padding:6px 14px;border-radius:10px;cursor:pointer}
+.details-tabs button.on{background:var(--tx);color:#000}
+.details-tab{display:flex;flex-direction:column;gap:14px;min-width:0}
+body.details-open{overflow:hidden}
+@media (max-width:600px){
+  .details-panel{top:auto;width:100%;height:86vh;border-left:0;border-top:1px solid var(--line2);border-radius:22px 22px 0 0;transform:translateY(100%)}
+  .details-panel.open{transform:none}
+  .details-hd::before{content:"";position:absolute;top:7px;left:50%;width:44px;height:5px;margin-left:-22px;border-radius:9px;background:var(--line2)}
+}
 /* Hover cards (design.md): the card a hover, focus or tap on a status, a figure
    or a name shows, on the same surface as the ⋯ menus. Unlike a tooltip it
    takes the pointer, so its link can be clicked. */
