@@ -106,7 +106,7 @@ test("the summary line counts the apps working normally and links each one that 
   vm.runInContext('STATE.data.uptime={apps:{"apps/paperless":{state:"down",since:0,last:{error:"connection refused"},strip:[]}}}',c);
   const line=c.workloadSummary([ok,down,off],{updateCount:2});
   assert.match(line,/<b>1 of 2 running apps is working normally\.<\/b>/);
-  assert.match(line,/<button type="button" class="linkish sum-bad" onclick="openDetails\('app',[^"]*paperless[^"]*\)">paperless is down<\/button>\./);
+  assert.match(line,/<button type="button" class="linkish sum-link sum-bad" onclick="openDetails\('app',[^"]*paperless[^"]*\)">paperless is down<\/button>\./);
   assert.match(line,/1 app is stopped\./);
   assert.match(line,/onclick="imageUpdateCenter\(\)">Updates are ready for 2 apps\.<\/button>/);
   assert.match(c.workloadSummary([ok],{current:true}),/<b>The running app is working normally\.<\/b> Every image is current\./);

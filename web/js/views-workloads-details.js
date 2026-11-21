@@ -79,7 +79,7 @@ if (typeof HOVER_CARDS === "object") HOVER_CARDS["app-status"] = key => {
     rows: [
       problem && ["Why", esc(problem.line), "alert"],
       ["Copies ready", `${w.ready} of ${w.desired}`, "layers"],
-      a && a.state !== "off" && ["Monitoring", esc(`${ANSWER_WORDS[a.state] || a.state} · ${answerDetail(a)}`), "pulse"],
+      a && !["off", "down", "slow"].includes(a.state) && ["Monitoring", esc(`${ANSWER_WORDS[a.state] || a.state} · ${answerDetail(a)}`), "pulse"],
       a && a.state !== "off" && ["Last 30 days", esc(answerShare(a.uptime_30d)), "check"],
       !off && w.uptime && ["Running for", esc(fmtUp(w.uptime)), "clock"],
     ],

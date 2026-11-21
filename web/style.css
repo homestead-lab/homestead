@@ -1545,7 +1545,7 @@ th.sortable[aria-sort="descending"]::after{content:" ↓";color:var(--tx)}
 .actionmenu-group{padding:7px 9px 3px;font-size:10.5px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--mut)}
 .actionmenu-group:not(:first-child){margin-top:4px;padding-top:9px;border-top:1px solid var(--line)}
 /* A summary line's links to what needs attention. */
-.linkish.sum-bad{color:var(--crit)}.linkish.sum-warn{color:var(--med)}
+.linkish.sum-link{padding:0}.linkish.sum-bad{color:var(--crit)}.linkish.sum-warn{color:var(--med)}
 .wltable .wl-actions{width:1%}.wltable .wl-actions .wacts{justify-content:flex-end;gap:4px;flex-wrap:nowrap;min-height:0}
 .wltable .actionmenu{margin-left:0}
 .wltable .waccess .plink,.wltable .waccess .tag{padding:2px 7px}
@@ -4141,9 +4141,11 @@ button.a2port{font-family:inherit;line-height:inherit}
   .fleet-slot:not(:empty){margin-top:6px}
 }
 /* The details sidebar (design.md): everything about one row, at the right,
-   over the list; a sheet from the bottom on a phone. */
-.details-panel{width:min(500px,94vw);display:flex;flex-direction:column;overflow:hidden;z-index:95;background:rgba(15,15,17,.97)}
-.details-scrim{position:fixed;inset:0;z-index:94;background:rgba(0,0,0,.45)}
+   over the list; a sheet from the bottom on a phone. It is above the page,
+   its bars and popovers, and below what it opens: dialogs (70), ⋯ menus (75)
+   and toasts (80). */
+.details-panel{width:min(500px,94vw);display:flex;flex-direction:column;overflow:hidden;z-index:65;background:rgba(15,15,17,.97)}
+.details-scrim{position:fixed;inset:0;z-index:64;background:rgba(0,0,0,.45)}
 .details-scrim[hidden]{display:none}
 .details-hd{height:auto;padding:16px 20px;gap:12px}
 .details-title{display:flex;align-items:center;gap:12px;min-width:0}

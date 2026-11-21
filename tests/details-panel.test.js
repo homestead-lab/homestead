@@ -5,6 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const between = require("./helpers/between");
 
 function load() {
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -68,4 +69,14 @@ test("an item on a linked cluster marks the panel with it, so its actions go the
   c.DETAIL_KINDS.app.head = head;
   c.detailsTab("logs");
   assert.equal(panel.dataset.cluster, undefined, "one on this cluster leaves it off");
+});
+
+test("the sidebar is above the page and below the dialogs, menus and toasts it opens", () => {
+  const css = fs.readFileSync("web/style.css", "utf8");
+  // The z-index in the rule that starts a line with the selector.
+  const z = selector => Number((between(css, `\n${selector}{`, "}").match(/z-index:(\d+)/) || [])[1]);
+  const panel = z(".details-panel"), scrim = z(".details-scrim");
+  assert.ok(scrim < panel, "the dimmed page is under the panel");
+  for (const above of [".top", ".bottombar", ".jobtray", ".fleet-menu"]) assert.ok(z(above) < scrim, `${above} is under the sidebar`);
+  for (const over of [".modal", ".askdlg", ".actionmenu-portal", "#toast"]) assert.ok(panel < z(over), `${over} opens over the sidebar`);
 });

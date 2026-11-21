@@ -30,19 +30,16 @@ function renderWorkloads() {
     { label: "Search logs", icon: "search", run: "logSearch()", tip: "Find a line in every app's recent logs" },
     { label: "Log alerts", icon: "bell", run: "logAlerts()", tip: "Saved log searches that raise an alert when they match too many lines" },
     { label: "Power schedules", icon: "clock", run: "schedulesOverview()", tip: "Apps and VMs that stop and start on their own" }];
-  const logoless = all.filter(logoCanHave).length;
-  const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
-    ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}`.trim();
+  const summary = workloadSummary(rows, { q, group, updateCount, updateErrors, unchecked, current: report && !updateCount && !updateErrors });
   const deploy = '<button class="btn pri" data-need="operator" onclick="go(\'deploy\')">＋ Deploy</button>';
   paint(`<div class="containers-page collection-page" data-collection="containers">${UI.pageHeader(`Containers`,
-      workloadSummary(rows, { q, group, updateCount, updateErrors, unchecked, current: report && !updateCount && !updateErrors }) + metricsNotice(STATE.data.wl),
+      summary + metricsNotice(STATE.data.wl),
       `<span class="dim xs scanprogress" id="scanprogress"></span>
       ${layoutSwitch("containers", "renderWorkloads")}
       ${moreMenu(platform.length ? [...items, { label: `${platformShown() ? "Hide" : "Show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}`, icon: "layers", run: "togglePlatformContainers()",
         tip: "Homestead and its helpers, updated under Settings › Updates, and components such as KubeVirt and CDI, which their own operators run" }] : items)}
       ${deploy}`, {extraHtml:`${all.length ? workloadGroupBar(all, group) : ""}`})}
-    ${UI.collectionHeader(`${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}`, `<span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
-        ${unchecked ? `<span class="dim" data-tip="Stopped or still starting, so not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}${logoless ? `<span class="dim">·</span> <a class="linkish" data-need="operator" onclick="logoFixup()">${logoless} without a logo</a>` : ""}`)}
+    ${UI.collectionHeader(`${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}`, `<span>${summary}</span>`)}
 
     ${uptimeUnreadNote()}
     ${rows.length ? workloadSections(rows, layout, group)
@@ -62,13 +59,13 @@ function workloadSummary(rows, { q = "", group = "", updateCount = 0, updateErro
     : !running.length ? `${rows.length === 1 ? "The app" : `All ${rows.length} apps`}${scope} ${rows.length === 1 ? "is" : "are"} stopped.`
     : fine === running.length ? `${running.length === 1 ? "The running app" : `All ${running.length} running apps`}${scope} ${running.length === 1 ? "is" : "are"} working normally.`
     : `${fine} of ${plural(running.length, "running app", "running apps")}${scope} ${fine === 1 ? "is" : "are"} working normally.`;
-  const shown = troubled.slice(0, 3).map(([w, p]) => `<button type="button" class="linkish sum-${p.tone}" onclick="openDetails('app',${jsq(workloadRowKey(w))})">${esc(w.name)} ${esc(p.word)}</button>`);
+  const shown = troubled.slice(0, 3).map(([w, p]) => `<button type="button" class="linkish sum-link sum-${p.tone}" onclick="openDetails('app',${jsq(workloadRowKey(w))})">${esc(w.name)} ${esc(p.word)}</button>`);
   const more = troubled.length > 3 ? ` and ${troubled.length - 3} more` : "";
   return [`<b>${head}</b>`,
     shown.length ? `${shown.join(", ")}${more}.` : "",
     stopped && running.length ? `${plural(stopped, "app is", "apps are")} stopped.` : "",
-    updateCount ? `<button type="button" class="linkish" onclick="imageUpdateCenter()">${updateCount === 1 ? "An update is" : "Updates are"} ready for ${plural(updateCount, "app", "apps")}.</button>` : "",
-    updateErrors ? `<button type="button" class="linkish sum-bad" onclick="imageUpdateCenter()" data-tip="Every other image was compared with its registry">${plural(updateErrors, "image", "images")} could not be checked.</button>` : "",
+    updateCount ? `<button type="button" class="linkish sum-link" onclick="imageUpdateCenter()">${updateCount === 1 ? "An update is" : "Updates are"} ready for ${plural(updateCount, "app", "apps")}.</button>` : "",
+    updateErrors ? `<button type="button" class="linkish sum-link sum-bad" onclick="imageUpdateCenter()" data-tip="Every other image was compared with its registry">${plural(updateErrors, "image", "images")} could not be checked.</button>` : "",
     unchecked ? `<span data-tip="Stopped or still starting, so not yet compared with their registries. They are marked ? in the list.">${plural(unchecked, "image has", "images have")} not been checked yet.</span>` : current ? "Every image is current." : "",
   ].filter(Boolean).join(" ");
 }

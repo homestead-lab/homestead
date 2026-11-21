@@ -86,8 +86,9 @@ column headings are the one small upper-case label.
    page.
    On a phone, Containers and Virtual machines keep their page tabs above one
    compact toolbar. Containers has a group picker, Options and Deploy; Virtual
-   machines has an All VMs scope label, Options and New VM. The count and
-   image-update or running state share one line below.
+   machines has an All VMs scope label, Options and New VM. The page's
+   summary line is below them: on Containers, the same sentence a computer
+   shows; on Virtual machines, the count and running state.
    `listOptions()` puts sorting, layout and platform visibility inside the
    standard action menu; preferences never add permanent toolbar rows. With
    no groups, a plain scope label replaces the picker.
