@@ -34,11 +34,12 @@ function renderWorkloads() {
   const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
     ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}`.trim();
   const deploy = '<button class="btn pri" data-need="operator" onclick="go(\'deploy\')">＋ Deploy</button>';
-  paint(`<div class="containers-page collection-page" data-collection="containers">${UI.pageHeader(`Containers`, `${rows.length} app${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
-        ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and its helpers, updated under Settings › Updates, and components such as KubeVirt and CDI, which their own operators run and which are upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
-        : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list. They have been stopped since Homestead started, so they have not yet been compared with their registries.">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}${logoless ? ` · <a class="linkish" data-need="operator" onclick="logoFixup()">${logoless} without a logo</a>` : ""}${metricsNotice(STATE.data.wl)}`, `<span class="dim xs scanprogress" id="scanprogress"></span>${updateButtons}
+  paint(`<div class="containers-page collection-page" data-collection="containers">${UI.pageHeader(`Containers`,
+      workloadSummary(rows, { q, group, updateCount, updateErrors, unchecked, current: report && !updateCount && !updateErrors }) + metricsNotice(STATE.data.wl),
+      `<span class="dim xs scanprogress" id="scanprogress"></span>
       ${layoutSwitch("containers", "renderWorkloads")}
-      ${moreMenu(items)}
+      ${moreMenu(platform.length ? [...items, { label: `${platformShown() ? "Hide" : "Show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}`, icon: "layers", run: "togglePlatformContainers()",
+        tip: "Homestead and its helpers, updated under Settings › Updates, and components such as KubeVirt and CDI, which their own operators run" }] : items)}
       ${deploy}`, {extraHtml:`${all.length ? workloadGroupBar(all, group) : ""}`})}
     ${UI.collectionHeader(`${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}`, `<span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
         ${unchecked ? `<span class="dim" data-tip="Stopped or still starting, so not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}${logoless ? `<span class="dim">·</span> <a class="linkish" data-need="operator" onclick="logoFixup()">${logoless} without a logo</a>` : ""}`)}
@@ -46,6 +47,30 @@ function renderWorkloads() {
     ${uptimeUnreadNote()}
     ${rows.length ? workloadSections(rows, layout, group)
       : `<div class="empty">${q || group ? "Nothing matches that search." : "No apps have been deployed yet."}</div>`}</div>`);
+}
+
+/* The page's one line (design.md "Summary line"): how many apps run as they
+   should, each one that does not as a link to its details, and the updates
+   waiting. A search or a group says what is shown. */
+function workloadSummary(rows, { q = "", group = "", updateCount = 0, updateErrors = 0, unchecked = 0, current = false } = {}) {
+  const running = rows.filter(w => w.desired > 0), stopped = rows.length - running.length;
+  const troubled = rows.map(w => [w, workloadProblem(w)]).filter(([, p]) => p);
+  const fine = running.filter(w => !workloadProblem(w)).length;
+  const scope = `${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""}`;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const head = !rows.length ? `No apps${scope}.`
+    : !running.length ? `${rows.length === 1 ? "The app" : `All ${rows.length} apps`}${scope} ${rows.length === 1 ? "is" : "are"} stopped.`
+    : fine === running.length ? `${running.length === 1 ? "The running app" : `All ${running.length} running apps`}${scope} ${running.length === 1 ? "is" : "are"} working normally.`
+    : `${fine} of ${plural(running.length, "running app", "running apps")}${scope} ${fine === 1 ? "is" : "are"} working normally.`;
+  const shown = troubled.slice(0, 3).map(([w, p]) => `<button type="button" class="linkish sum-${p.tone}" onclick="openDetails('app',${jsq(workloadRowKey(w))})">${esc(w.name)} ${esc(p.word)}</button>`);
+  const more = troubled.length > 3 ? ` and ${troubled.length - 3} more` : "";
+  return [`<b>${head}</b>`,
+    shown.length ? `${shown.join(", ")}${more}.` : "",
+    stopped && running.length ? `${plural(stopped, "app is", "apps are")} stopped.` : "",
+    updateCount ? `<button type="button" class="linkish" onclick="imageUpdateCenter()">${updateCount === 1 ? "An update is" : "Updates are"} ready for ${plural(updateCount, "app", "apps")}.</button>` : "",
+    updateErrors ? `<button type="button" class="linkish sum-bad" onclick="imageUpdateCenter()" data-tip="Every other image was compared with its registry">${plural(updateErrors, "image", "images")} could not be checked.</button>` : "",
+    unchecked ? `<span data-tip="Stopped or still starting, so not yet compared with their registries. They are marked ? in the list.">${plural(unchecked, "image has", "images have")} not been checked yet.</span>` : current ? "Every image is current." : "",
+  ].filter(Boolean).join(" ");
 }
 
 /* An image with no tag is Docker's latest; saying so is clearer than leaving it off. */
@@ -93,9 +118,13 @@ function platformTag(w) {
 
 /* The same actions for a card and a row: a row shows them as icons. */
 function workloadActions(w, update, off, compact = false) {
+  return actionBar(workloadActionItems(w, update, off), {label:`More actions for ${w.name}`,iconOnly:compact});
+}
+/* Every action an app has, in order: the details sidebar offers them all. */
+function workloadActionItems(w, update, off) {
   const ns = jsq(w.ns), name = jsq(w.name);
   const item = (label, run, iconName, options = {}) => ({label, run, icon:iconName, ariaLabel:`${label} ${w.name}`, ...options});
-  const bar = items => actionBar(items, {label:`More actions for ${w.name}`,iconOnly:compact});
+  const bar = items => items.filter(Boolean);
   const logs = item("Logs", `wlLogs(${ns},${jsq(w.pods?.[0]?.name || "")},${name})`, "log", {tip:"View the container's live logs"});
   const restart = item("Restart", `wlRestart(${ns},${name})`, "restart", {need:"operator",tip:"Restart every copy of the app"});
   if (w.managed_smb || w.managed_nfs) return bar([logs, item("Network Shares", "go('shares')", "edit")]);
@@ -128,6 +157,67 @@ function workloadActions(w, update, off, compact = false) {
     update?.can_rollback && item("Rollback", `imageRollback(${ns},${name})`, "rollback", {need:"operator"}),
     item("Delete", `wlDelete(${ns},${name})`, "trash", {danger:true,need:"operator"})
   ]);
+}
+/* A row's actions (design.md "Resource list"): one labelled action that fits
+   the app's state, then ⋯ with the actions people reach for, grouped by
+   purpose. Everything else is in the details sidebar, a click on the row away. */
+function workloadRowActions(w, update, off) {
+  return actionBar(workloadMenuItems(w, update, off) || workloadActionItems(w, update, off), {label:`More actions for ${w.name}`, shown:1});
+}
+/* The sidebar's actions: the row's, in the row's order, then every other
+   action the app has. */
+function workloadDetailActions(w, update, off) {
+  const first = workloadMenuItems(w, update, off), all = workloadActionItems(w, update, off);
+  if (!first) return all;
+  const runs = new Set(first.map(i => i.run));
+  return [...first, ...all.filter(i => !runs.has(i.run)).map(i => ({ ...i, pri: false, group: "More" }))];
+}
+/* The row's curated actions, its main one first; null for an app Homestead
+   runs for itself, a managed share or a platform part, which keep their own short list. */
+function workloadMenuItems(w, update, off) {
+  const ns = jsq(w.ns), name = jsq(w.name);
+  const item = (label, run, iconName, options = {}) => ({label, run, icon:iconName, ariaLabel:`${label} ${w.name}`, ...options});
+  const port = (w.ports || []).find(p => p.primary && p.ip) || (w.ports || []).find(p => p.ip);
+  const troubled = !off && !!workloadProblem(w);
+  const openApp = port && item("Open app", `openSvc(${jsq(port.ip)},${port.port})`, "ext", {group:"Use", tip:`Open ${svcUrl(port.ip, port.port)}`});
+  const logs = item("Open logs", `wlLogs(${ns},${jsq(w.pods?.[0]?.name || "")},${name})`, "log", {group:"Use"});
+  if (w.managed_smb || w.managed_nfs || w.homestead === "self" || w.homestead === "objectstore" || w.platform) return null;
+  const canUpdate = update?.available && !updateOwner(update);
+  const items = [
+    openApp, logs,
+    item("Open console", `wlConsole(${ns},${name})`, "console", {need:"operator", group:"Use"}),
+    item("Diagnostics", `wlDiagnostics(${ns},${name})`, "bug", {group:"Use"}),
+    canUpdate && item("Update image", `imageUpdateReview(${ns},${name})`, "update", {need:"operator", group:"Change"}),
+    item("Edit settings", `wlEdit(${ns},${name})`, "edit", {need:"operator", group:"Change"}),
+    off ? item("Start app", `wlScale(${ns},${name},1)`, "play", {need:"operator", group:"Change"})
+      : item("Restart app", `wlRestart(${ns},${name})`, "restart", {need:"operator", group:"Change"}),
+    !off && item("Stop app", w.self ? `wlStopSelf(${ns},${name})` : `wlScale(${ns},${name},0)`, "stop", {need:"operator", group:"Change"}),
+    item("Move app…", `moveWorkload(${name},${ns})`, "move", {need:"operator", group:"Change"}),
+    update?.can_rollback && item("Roll back image", `imageRollback(${ns},${name})`, "rollback", {need:"operator", group:"Change"}),
+    item("Delete app…", `wlDelete(${ns},${name})`, "trash", {danger:true, need:"operator", group:"Remove"}),
+  ].filter(Boolean);
+  // The main action: the update when there is one, the logs when it is in
+  // trouble, Start when it is stopped, otherwise the app itself.
+  const main = (canUpdate && items.find(i => i.label === "Update image")) || (troubled && logs)
+    || (off && items.find(i => i.label === "Start app")) || openApp || logs;
+  return [main, ...items.filter(i => i !== main)];
+}
+/* What is wrong with an app, if anything: {tone, chip, line}, the line in a
+   full sentence for the row and the summary. Stopped on purpose is not a problem. */
+function workloadProblem(w) {
+  const blocked = workloadBlocked(w);
+  if (blocked) return { tone: "bad", chip: "Blocked", word: "is blocked", line: blocked };
+  if (w.desired === 0) return null;
+  const answer = typeof answerOf === "function" ? answerOf(w) : null;
+  if (answer?.state === "down") return { tone: "bad", chip: "Down", word: "is down", line: `It does not respond. ${answerDetail(answer)}` };
+  if (w.ready < w.desired) {
+    const pull = workloadPull(w);
+    if (pull) return { tone: "warn", chip: `Downloading ${Math.min(100, pull.percent || 0)}%`, word: "is downloading its image", line: `Downloading ${pull.image || "its image"}.` };
+    return { tone: w.ready ? "warn" : "bad", chip: `${w.ready}/${w.desired}`, word: w.ready ? "is partly ready" : "is not ready",
+      line: `${w.ready} of ${w.desired} cop${w.desired === 1 ? "y is" : "ies are"} ready.` };
+  }
+  if (answer?.state === "slow") return { tone: "warn", chip: "Slow", word: "is slow", line: `It responds slowly: ${answerDetail(answer)}` };
+  return null;
 }
 
 /* Starts after (#746): names in words, and a time in seconds or minutes. */
@@ -179,11 +269,13 @@ window.startWaitText = startWaitText;
 
 /* A workload's state tags, the same in a row and a card so the two can't
    drift: its schedule, how it updates, who updates it, and an update waiting.
-   A row whose own Update button is shown says the update there, not twice. */
+   A row whose own Update button is shown says the update there, not twice,
+   and leaves how it updates to the hover card on its name; a host
+   preference stays on the row, where people look. */
 function workloadStateTags(w, update, { row = false } = {}) {
   const owner = updateOwner(update);
   const button = row && update?.available && !owner && (typeof can !== "function" || can("operator"));
-  return `${startWaitChip(w)}${scheduleTag(w)}${autoUpdateTag(w)}${row ? preferTag(w) : ""}${owner ? updateOwnerPill(update, row)
+  return `${startWaitChip(w)}${scheduleTag(w)}${row ? preferTag(w) : ""}${row ? "" : autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
     : update?.available && !button ? UI.chip("update available", "warn") : ""}${uncheckedMark(update)}`;
 }
 
@@ -229,11 +321,11 @@ function workloadTable(rows, sections = null, folded = new Set()) {
   // orders the rows within each group rather than mixing them.
   const bodies = sections ? sections.map(([name, members]) => {
     const shut = folded.has(name || NO_GROUP);
-    return `<tbody class="grouphead"><tr><td colspan="8">${workloadGroupHead(name, members, shut)}</td></tr></tbody>
+    return `<tbody class="grouphead"><tr><td colspan="6">${workloadGroupHead(name, members, shut)}</td></tr></tbody>
       <tbody${shut ? " hidden" : ""}>${workloadTableRows(members)}</tbody>`;
   }).join("") : `<tbody>${workloadTableRows(rows)}</tbody>`;
   return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack compact wltable" data-sort="containers" data-sort-controls="containers"><thead><tr>
-    <th>App</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th class="wl-uptime">Uptime</th><th data-nosort>Actions</th></tr></thead>
+    <th>App</th><th>Status</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th data-nosort>Actions</th></tr></thead>
     ${bodies}</table></div>`;
 }
 
@@ -258,63 +350,35 @@ window.openWorkloadVolume = claim => {
   go("storage", { keepSearch: true });
 };
 
-const workloadExpanded = new Set();
 const workloadRowKey = w => JSON.stringify([w.site?.id || "", w.ns, w.name]);
+/* One line per app (design.md "Resource list"): its name, how it is, what it
+   uses, its address and one labelled action. A problem colours the row's edge
+   and says why in a sentence. A click on the name opens the details sidebar,
+   and a pause on the name or the status shows a hover card. */
 function workloadTableRows(rows) {
   return rows.map(w => {
-    const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
-    const key = workloadRowKey(w), id = `wl-detail-${encodeURIComponent(key)}`, open = workloadExpanded.has(key);
-    const uptime = !off && Number.isFinite(w.uptime) && w.uptime > 0 ? w.uptime : null;
+    const off = w.desired === 0;
+    const key = workloadRowKey(w);
     const update = w.platform || w.managed_smb || w.managed_nfs || remoteRow(w) ? null : workloadUpdate(w.ns, w.name);
-    const updateError = update?.images?.find(x => x.error), pull = workloadPull(w), blocked = workloadBlocked(w);
-    const quiet = off && !update?.unchecked && !updateError && !update?.available && !pull && !blocked;
-    const disclosure = collectionDisclosure({label:`Details for ${w.name}`,id:`wl-toggle-${encodeURIComponent(key)}`,controls:id,expanded:open,
-      run:`workloadToggleDetails(${jsq(key)},this)`,bodyHtml:`${appAvatar(w.name, w.icon)}<span class="wtitle"><b>${esc(w.name)}</b> ${clusterTag(w)}</span>`});
-    return `<tr class="wl-row${off ? " wl-off" : ""}${quiet ? " wl-quiet" : ""}${open ? " wl-expanded" : ""}" data-row-key="${esc(key)}" data-mkey="row:${esc(key)}"${clusterAttr(w)}>
-      <td class="wl-name" data-sort="${esc(w.name)}">${disclosure}
-        <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `${UI.chip(`managed ${w.managed_nfs ? "NFS" : "SMB"}`, "info", { size: "slim" })} ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}</div></td>
-      <td class="wl-status" data-status data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row wl-state-tags">
-        ${UI.chip(off ? "Stopped" : `${w.ready}/${w.desired}`, ok ? "ok" : off ? "neutral" : "bad", { size: "slim", tip: `${w.ready} of ${w.desired} ready` })}
-        ${answerTag(w)}${workloadStateTags(w, update, { row: true })}
-        ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable. ${esc(updateError.error)}" data-tip="Registry check unavailable. ${esc(updateError.error)}">!</span>` : ""}
-        ${pull ? UI.chip(`Downloading ${Math.min(100, pull.percent || 0)}%`, "neutral", { tip: `Downloading ${pull.image || "the image"}` }) : ""}
-        ${blocked ? UI.chip("Blocked", "bad", { tip: blocked }) : ""}</div></td>
-      <td class="wl-image" data-sm-hide><div class="mono xs wl-imagetext" title="${imageTitle(w.images)}">${imageShort(w.images)}</div>
-        ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</td>
+    const updateError = update?.images?.find(x => x.error), problem = workloadProblem(w);
+    const quiet = off && !update?.unchecked && !updateError && !update?.available && !problem;
+    const hardware = hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []));
+    return `<tr class="wl-row${off ? " wl-off" : ""}${quiet ? " wl-quiet" : ""}${problem ? ` wl-problem ${problem.tone}` : ""}" data-row-key="${esc(key)}" data-mkey="row:${esc(key)}"${clusterAttr(w)}>
+      <td class="wl-name" data-sort="${esc(w.name)}"><button type="button" class="wl-open" data-card="app|${esc(key)}" aria-label="Open details for ${esc(w.name)}"
+        onclick="openDetails('app',${jsq(key)})">${appAvatar(w.name, w.icon)}<span class="wtitle"><b>${esc(w.name)}</b> ${clusterTag(w)}</span></button>
+        <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `${UI.chip(`managed ${w.managed_nfs ? "NFS" : "SMB"}`, "info", { size: "slim" })} ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}${hardware ? ` <span class="wl-hardware">${hardware}</span>` : ""}</div></td>
+      <td class="wl-status" data-status data-sort="${off ? -1 : problem ? 0 : 1}"><div class="row wl-state-tags" data-card="app-status|${esc(key)}">
+        ${problem ? UI.chip(problem.chip, problem.tone, { size: "slim" }) : `<span class="wl-state dim">${off ? "Stopped" : "Running"}</span>`}
+        ${workloadStateTags(w, update, { row: true })}
+        ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable. ${esc(updateError.error)}" data-tip="Registry check unavailable. ${esc(updateError.error)}">!</span>` : ""}</div>
+        ${problem ? `<div class="wl-reason xs">${esc(problem.line)}</div>` : ""}</td>
       <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Current use. 100% is one fully used CPU core.">${off ? "—" : workloadCpuPercent(w.cpu)}</td>
       <td class="mono small nowrap wl-ram" data-sort="${off ? "" : w.mem_mb}">${off ? "—" : workloadMemory(w.mem_mb)}</td>
       <td class="wl-access" data-sm-hide><div class="waccess">${accessPorts(w.ports)}</div></td>
-      <td class="mono small nowrap wl-uptime" data-sm-hide data-sort="${uptime ?? ""}">${uptime === null ? "—" : esc(fmtUp(uptime))}</td>
-      <td class="wl-actions" data-actions><div class="wacts">${workloadActions(w, update, off, true)}</div></td>
-    </tr>
-    <tr class="wl-detail-row" data-detail-for="${esc(key)}" data-mkey="detail:${esc(key)}"${clusterAttr(w)}${open ? "" : " hidden"}><td colspan="8">
-      <div class="wl-inline-detail" id="${esc(id)}">
-        ${blocked ? `<div class="wblocked">${esc(blocked)}</div>` : ""}${pull ? pullBar(pull) : ""}
-        <div class="about-grid">
-          <div><span>Host</span><b>${esc((w.nodes || []).join(", ") || "Unscheduled")}</b></div>
-          <div><span>Namespace · uptime</span><b>${esc(w.ns)} · ${esc(off ? "Stopped" : w.uptime ? fmtUp(w.uptime) : "Starting")}</b></div>
-          <div class="wl-detail-image"><span>Image</span><b class="mono small">${w.images.map(esc).join("<br>") || "—"}</b><div class="wl-detail-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div></div>
-          <div class="wl-detail-access"><span>Access</span><b class="waccess">${accessPorts(w.ports)}</b></div>
-          ${(w.claims || []).length && !remoteRow(w) ? `<div class="wl-detail-volumes"><span>Volumes</span><b class="row">${w.claims.map(claim =>
-            `<button type="button" class="tag info linkish" title="Open ${esc(claim)} in Volumes" onclick="openWorkloadVolume(${jsq(claim)})">${esc(claim)}</button>`).join("")}</b></div>` : ""}
-          ${(released => released ? `<div class="wl-detail-released"><span>Old volumes</span>${released}</div>` : "")(workloadReleasedRow(w, true))}
-          ${gitopsDetail(w)}
-          ${startsAfterFact(w)}
-        </div>
-        ${workloadHierarchy(w, { wide: true })}
-        <div class="wl-detail-actions">${workloadActions(w, update, off)}</div>
-      </div></td></tr>`;
+      <td class="wl-actions" data-actions><div class="wacts">${workloadRowActions(w, update, off)}</div></td>
+    </tr>`;
   }).join("");
 }
-window.workloadToggleDetails = (key, button) => {
-  const open = !workloadExpanded.has(key);
-  if (open) workloadExpanded.add(key); else workloadExpanded.delete(key);
-  button.setAttribute("aria-expanded", String(open));
-  const row = button.closest("tr");
-  row?.classList.toggle("wl-expanded", open);
-  const detail = row?.nextElementSibling;
-  if (detail?.dataset.detailFor === key) detail.hidden = !open;
-};
 
 
 function accessPorts(ports) {
@@ -532,5 +596,5 @@ window.wlScaleGo = async (ns, name, n, confirmed = false, reviewed = false) => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  renderWorkloads, imageLabel, imageShortLabel, imageTitle, imageShort, imagePullRef, imagePullNote, platformTag, workloadActions, startsWords, startsSpan, startWaitText, startsAfterNames, startWaitsLine, startsAfterFact, startWaitChip, workloadStateTags, workloadCard, workloadTable, uncheckedMark, workloadExpanded, workloadRowKey, workloadTableRows, accessPorts, capacityPlacementHtml, capacityHosts, capacityHostTable, HOST_MEMORY, hostReasonWords, SCHEDULER_ECHO, noRoomLine, reviewAck, startProblems, VM_LAUNCHER, startCaveats, startReview
+  renderWorkloads, workloadSummary, imageLabel, imageShortLabel, imageTitle, imageShort, imagePullRef, imagePullNote, platformTag, workloadActions, workloadActionItems, workloadRowActions, workloadDetailActions, workloadMenuItems, workloadProblem, startsWords, startsSpan, startWaitText, startsAfterNames, startWaitsLine, startsAfterFact, startWaitChip, workloadStateTags, workloadCard, workloadTable, uncheckedMark, workloadRowKey, workloadTableRows, accessPorts, capacityPlacementHtml, capacityHosts, capacityHostTable, HOST_MEMORY, hostReasonWords, SCHEDULER_ECHO, noRoomLine, reviewAck, startProblems, VM_LAUNCHER, startCaveats, startReview
 };

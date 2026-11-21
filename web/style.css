@@ -1500,11 +1500,8 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 .seg.iconseg button{padding:6px 10px;display:grid;place-items:center}
 .seg .btnicon{width:15px;height:15px}
 .btn.iconic{padding:5px 8px;gap:0;min-width:30px}
-/* Containers as rows: every workload on one line, its actions as icons. */
+/* Containers as rows: every app on one line, one labelled action and ⋯. */
 .wltable-wrap{overflow:visible;container-type:inline-size;container-name:container-rows}
-/* Uptime is an extra column only when the list itself has room for it. */
-.wltable .wl-uptime{display:none}
-@container container-rows (min-width:1100px){.wltable .wl-uptime{display:table-cell}}
 .pill.slim{padding:2px 8px;font-size:11px;box-shadow:none}
 /* A page's shape while its data is on the way, and a page shown from last time. */
 .skel{display:block;position:relative;overflow:hidden;border-radius:9px;background:rgba(255,255,255,.045)}
@@ -1533,13 +1530,25 @@ th.sortable[aria-sort="descending"]::after{content:" ↓";color:var(--tx)}
 .wltable td{vertical-align:middle}
 .wltable .wl-name{max-width:280px}.wltable .wtitle{min-width:0}
 .wltable .wtitle>div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wltable .wl-image{max-width:280px}
-.wltable .wl-imagetext{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;color:var(--dim)}
-.wltable .wl-image .ui-chip{height:auto;padding:1px 6px;font-size:10px;margin-top:3px}
+/* The name opens the details sidebar; a problem colours the row's edge and
+   says why under its chip (design.md "Resource list"). */
+.wltable .wl-open{display:flex;align-items:center;gap:9px;min-width:0;max-width:100%;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.wltable .wl-open:hover b{text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--mut)}
+.wltable .wl-open:focus-visible{outline:2px solid var(--low);outline-offset:2px;border-radius:6px}
+.wltable .wl-hardware{display:inline-flex;gap:4px;vertical-align:middle;margin-left:4px}
+.wltable .wl-hardware .ui-chip{height:auto;padding:1px 6px;font-size:10px}
+.wltable .wl-state{font-size:12.5px}
+.wltable .wl-reason{margin-top:3px;color:var(--mut);max-width:360px;overflow-wrap:anywhere;white-space:normal}
+.wltable tr.wl-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+.wltable tr.wl-problem.warn>td:first-child{box-shadow:inset 3px 0 0 var(--med)}
+/* A ⋯ menu's group headings. */
+.actionmenu-group{padding:7px 9px 3px;font-size:10.5px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--mut)}
+.actionmenu-group:not(:first-child){margin-top:4px;padding-top:9px;border-top:1px solid var(--line)}
+/* A summary line's links to what needs attention. */
+.linkish.sum-bad{color:var(--crit)}.linkish.sum-warn{color:var(--med)}
 .wltable .wl-actions{width:1%}.wltable .wl-actions .wacts{justify-content:flex-end;gap:4px;flex-wrap:nowrap;min-height:0}
 .wltable .actionmenu{margin-left:0}
 .wltable .waccess .plink,.wltable .waccess .tag{padding:2px 7px}
-@media(max-width:1320px){.wltable .wl-image{display:none}}
 @media(max-width:1060px) and (min-width:561px){.wltable .wl-access{display:none}}
 /* Onboarding: a form in sections, then one plan's three ways to boot and its timeline. */
 .modalbox[data-context="onboard"]{width:min(1080px,100%)}
@@ -2330,9 +2339,6 @@ div.ipam-line.dim{display:block}
 .ui-meter .now{left:0;background:rgba(255,255,255,.55);border-radius:5px 0 0 5px}
 .ui-meter .after{background:var(--ok)}
 .ui-meter.warn .after{background:var(--med)}.ui-meter.bad .after{background:var(--crit)}
-.wl-inline-detail .wl-detail-volumes{grid-column:1/-1}
-.wl-inline-detail .wl-detail-volumes .row{gap:6px;flex-wrap:wrap}
-.wl-inline-detail .wl-detail-released{grid-column:1/-1}
 .ui-meter .freed{background:repeating-linear-gradient(135deg,var(--crit) 0 3px,transparent 3px 6px);opacity:.8}
 .ui-meter .mark{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(255,255,255,.35)}
 
@@ -3259,15 +3265,8 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
 .wltable .wl-name{max-width:none;min-width:160px;width:27%}
 .wltable .wl-state-tags{gap:4px;flex-wrap:wrap}
 .wltable .wl-actions .actionbar{justify-content:flex-end;flex-wrap:nowrap}
-.wltable .wl-actions .actionbar>.btn{gap:0;min-width:30px;padding:4px 7px}
+.wltable .wl-actions .actionbar>.btn{gap:5px;min-width:30px;padding:4px 8px;white-space:nowrap}
 .wltable .wl-actions .actionbar>.btn svg{width:14px;height:14px}
-.wltable tr.wl-expanded{background:var(--surf2)}
-.wltable .wl-detail-row>td{padding:0;white-space:normal}
-.wl-inline-detail{padding:12px 16px 16px;background:var(--surf2);border-bottom:1px solid var(--line)}
-.wl-inline-detail .about-grid{margin:0;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,.75fr)}
-.wl-inline-detail .workloadtree{margin:10px 0 0}
-.wl-detail-actions{display:none}
-.wl-detail-hardware{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
 .collection-mobile-head{display:none}
 html[data-theme="light"] .collection-mobile-summary .pillbtn.warn{color:#8a5200}
 html[data-theme="light"] .collection-mobile-summary .pillbtn.crit{color:#a1242a}
@@ -3354,21 +3353,20 @@ html[data-theme="light"] .collection-mobile-summary .pillbtn.crit{color:#a1242a}
   .tbl.stack.compact.wltable .wl-state-tags{display:flex;justify-content:flex-end;gap:3px}
   .tbl.stack.compact.wltable .wl-row>.wl-cpu{grid-area:cpu;font-size:11.5px;line-height:1.4}
   .tbl.stack.compact.wltable .wl-row>.wl-ram{grid-area:ram;font-size:11.5px;line-height:1.4}
+  .tbl.stack.compact.wltable .wl-row>.wl-cpu,.tbl.stack.compact.wltable .wl-row>.wl-ram{white-space:nowrap}
+  .tbl.stack.compact.wltable .wl-state-tags .ui-chip{max-width:86px;overflow:hidden;text-overflow:ellipsis}
   .tbl.stack.compact.wltable .wl-row>.wl-cpu::before,.tbl.stack.compact.wltable .wl-row>.wl-ram::before{content:attr(data-label) " ";display:inline;font-size:11.5px;color:var(--mut);margin:0}
-  .tbl.stack.compact.wltable .wl-row>.wl-image,.tbl.stack.compact.wltable .wl-row>.wl-access,.tbl.stack.compact.wltable .wl-row>.wl-actions,
-  .tbl.stack.compact.wltable .wl-row>.wl-uptime,
+  .tbl.stack.compact.wltable .wl-row>.wl-access,.tbl.stack.compact.wltable .wl-row>.wl-actions,.tbl.stack.compact.wltable .wl-reason,
   .tbl.stack.compact.wltable tr.wl-off>.wl-cpu,.tbl.stack.compact.wltable tr.wl-off>.wl-ram,.wltable .wl-row-meta{display:none}
-  .wltable .collection-disclosure .av{width:24px;height:24px;flex:0 0 24px}
-  .wltable .collection-disclosure .wtitle{font-size:13px}
-  .tbl.stack.compact.wltable tr.wl-detail-row{display:block;padding:0}
-  .tbl.stack.compact.wltable tr.wl-detail-row>td{display:block;padding:0;width:100%;text-align:left}
-  .tbl.stack.compact.wltable .wl-inline-detail{display:block;padding:10px 12px 12px}
-  .wl-inline-detail .about-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .wl-inline-detail .wl-detail-image,.wl-inline-detail .wl-detail-access{grid-column:1/-1}
+  .wltable .wl-open .av{width:24px;height:24px;flex:0 0 24px}
+  .wltable .wl-open .wtitle{font-size:13px}
+  .tbl.stack.compact.wltable tr.wl-problem>td:first-child{box-shadow:none}
+  /* A phone's narrow status column says only what is wrong or set apart. */
+  .tbl.stack.compact.wltable tr:not(.wl-off) .wl-state{display:none}
+  .tbl.stack.compact.wltable tr.wl-problem.bad{box-shadow:inset 3px 0 0 var(--crit)}
+  .tbl.stack.compact.wltable tr.wl-problem.warn{box-shadow:inset 3px 0 0 var(--med)}
   .tbl.stack.compact.wltable .wl-name .wl-row-meta{display:none}
   .phead .seg.iconseg:not(.phone-keep){display:none}
-  .wl-detail-actions{display:block;margin-top:12px}
-  .wl-detail-actions .actionbar{justify-content:flex-end}
 }
 @media(max-width:350px){
   .collection-mobile-toolbar .list-options-label{display:none}
@@ -4140,7 +4138,13 @@ button.a2port{font-family:inherit;line-height:inherit}
 .details-tabs button{border:0;background:transparent;color:var(--mut);font:inherit;font-weight:600;padding:6px 14px;border-radius:10px;cursor:pointer}
 .details-tabs button.on{background:var(--tx);color:#000}
 .details-tab{display:flex;flex-direction:column;gap:14px;min-width:0}
+.details-tab .wl-detail-more{margin:0;grid-template-columns:minmax(0,1fr)}
+.details-tab .workloadtree{margin:0}
+.details-tab .ui-facts .waccess,.details-tab .ui-facts .row{gap:6px;flex-wrap:wrap}
+.ui-card-answer{display:flex;width:100%}
 body.details-open{overflow:hidden}
+html[data-motion="off"] .details-panel{transition:none}
+@media(prefers-reduced-motion:reduce){.details-panel{transition:none}}
 @media (max-width:600px){
   .details-panel{top:auto;width:100%;height:86vh;border-left:0;border-top:1px solid var(--line2);border-radius:22px 22px 0 0;transform:translateY(100%)}
   .details-panel.open{transform:none}

@@ -55,3 +55,17 @@ test("an unknown kind, or an item that is gone, has nothing to show", () => {
   assert.equal(c.detailsHtml("nope", "x"), "");
   assert.equal(c.detailsHtml("app", "lab/gone"), "");
 });
+
+test("an item on a linked cluster marks the panel with it, so its actions go there", () => {
+  const c = load(); register(c);
+  const panel = { dataset: {}, innerHTML: "", querySelector: () => null, classList: { add() {}, remove() {} }, setAttribute() {} };
+  c.document.getElementById = id => id === "detailsPanel" ? panel : id === "detailsScrim" ? { hidden: true } : null;
+  c.document.body = { classList: { add() {}, remove() {} }, append() {} };
+  const head = c.DETAIL_KINDS.app.head;
+  c.DETAIL_KINDS.app.head = key => ({ ...head(key), cluster: "secondary-example" });
+  c.openDetails("app", "lab/paperless");
+  assert.equal(panel.dataset.cluster, "secondary-example");
+  c.DETAIL_KINDS.app.head = head;
+  c.detailsTab("logs");
+  assert.equal(panel.dataset.cluster, undefined, "one on this cluster leaves it off");
+});

@@ -4,7 +4,8 @@
    tabs (Overview first), each built from the page's own data. A phone shows it
    as a sheet from the bottom. A classic script, loaded after ui.js. */
 
-// kind -> { head(key) -> { title, sub, iconHtml }, actions(key) -> actionBar items, tabs: [{ id, label, html(key) }] }
+// kind -> { head(key) -> { title, sub, iconHtml, cluster? }, actions(key) -> actionBar items, tabs: [{ id, label, html(key) }] }
+// cluster: the linked cluster an item belongs to, so what is done from the panel goes to it (fleet.js).
 const DETAIL_KINDS = {};
 const DETAILS = { kind: "", key: "", tab: "", opener: null, sig: "" };
 
@@ -58,6 +59,8 @@ function renderDetails() {
   DETAILS.sig = html;
   const { panel } = detailsElements();
   const body = panel.querySelector(".details-body"), scroll = body ? body.scrollTop : 0;
+  const cluster = DETAIL_KINDS[DETAILS.kind].head(DETAILS.key)?.cluster || "";
+  if (cluster) panel.dataset.cluster = cluster; else delete panel.dataset.cluster;
   panel.innerHTML = html;
   if (typeof enhanceActions === "function") enhanceActions(panel);
   const next = panel.querySelector(".details-body");
@@ -66,6 +69,7 @@ function renderDetails() {
 
 function openDetails(kind, key, tab = "") {
   if (!DETAIL_KINDS[kind]) return false;
+  if (typeof hideCard === "function") hideCard();
   const reopening = DETAILS.kind === kind && DETAILS.key === key;
   if (!DETAILS.kind) DETAILS.opener = document.activeElement;
   Object.assign(DETAILS, { kind, key, tab: tab || (reopening ? DETAILS.tab : ""), sig: "" });
