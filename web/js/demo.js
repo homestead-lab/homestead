@@ -14,6 +14,17 @@
     "harvester-node2": [],
     "harvester-node3": [demoOsPackage("openssl", true), demoOsPackage("vim")],
   };
+  // Why an update would leave Homestead's own host unrestarted: the one sentence
+  // (restart_refusal) and the same reasons as parts (restart_reasons, #1494).
+  const DEMO_OS_REFUSAL = "some workloads have no other host to run on; a volume has its only healthy copy on this host: "
+    + "lab/nextcloud-data, lab/paperless-data (the settings do not accept that)";
+  const DEMO_OS_SETTING = '"Restart a host even when a volume has its only healthy copy there" in the Host updates settings';
+  const DEMO_OS_REASONS = [
+    { kind: "stranded", text: "1 workload has no other host to run on.", count: 1, names: ["lab/paperless"],
+      clears: "Only a person can accept stopping it, in this host's Restart host… review." },
+    { kind: "single-copy", text: "2 volumes have their only healthy copy on this host.", count: 2, names: ["lab/nextcloud-data", "lab/paperless-data"],
+      clears: `Turn on ${DEMO_OS_SETTING}, or wait until Longhorn has rebuilt copies on two other hosts.` },
+  ];
   // What would keep a host from draining (homestead_drain_blockers' rows), one of each kind.
   const demoDrainBlockers = node => {
     const there = "harvester-node2", row = (id, kind, what, why, fix, extra = {}) =>
@@ -938,7 +949,8 @@
       return { restart_policy: "when-needed", single_copy: false, blocked: window.__demoOsRun ? "An OS update is already running. It must end first." : "", review_token: "demo",
         hosts: names.map(node => { const updates = DEMO_OS_WAITING[node] || []; return { node, ready: true, updates, security: updates.filter(u => u.security).length,
           reboot: node === "harvester-node2", reboot_for: node === "harvester-node2" ? "linux-image-6.8.0-90-generic" : "", at: Math.floor(Date.now() / 1000) - 15660,
-          homestead_here: node === own, restart_refusal: node === own ? "some workloads have no other host to run on" : "", restart_unread: "", busy: "" }; }) };
+          homestead_here: node === own, restart_refusal: node === own ? DEMO_OS_REFUSAL : "", restart_reasons: node === own ? DEMO_OS_REASONS : [],
+          restart_unread: "", busy: "" }; }) };
     },
     "/api/os-updates/start": (url, init) => {
       const nodes = JSON.parse(init?.body || "{}").nodes || ["harvester-node2", "harvester-node3", "harvester-node1"];
