@@ -35,7 +35,7 @@ self.addEventListener("activate", event => {
 const immutable = url => url.origin === self.location.origin &&
   (url.searchParams.has("v") || url.pathname.startsWith("/vendor/") || url.pathname.startsWith("/icons/"));
 
-const BUILD = /\/js\/core\.js\?v=([^"'&\s]+)/;
+const BUILD = /\/js\/core\.js\?v=([0-9A-Za-z._+-]+)/; // the server's PAGE_VERSION characters
 const buildOf = url => url.searchParams.get("v") || (/^\/vendor\/@([^/]+)\//.exec(url.pathname) || [])[1] || "";
 
 async function keepOnly(build) {
@@ -58,7 +58,8 @@ self.addEventListener("fetch", event => {
       if (response.ok && response.type === "basic") {
         const copy = response.clone();
         caches.open(CACHE).then(cache => cache.put(SHELL, copy)).catch(() => {});
-        const pruned = response.clone().text().then(page => {
+        const html = (response.headers.get("Content-Type") || "").startsWith("text/html");
+        const pruned = (html ? response.clone().text() : Promise.resolve("")).then(page => {
           const named = BUILD.exec(page);
           return named && keepOnly(named[1]);
         }).catch(() => {});
