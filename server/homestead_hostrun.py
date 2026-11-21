@@ -183,7 +183,9 @@ def _delete(path):
 def _clear_ended():
     """Helpers of runs that ended without removing theirs (the run's process
     stopped, or the pod reached its deadline) are deleted - never one still
-    running, which is another run's. Housekeeping: a failed read skips it."""
+    running, which is another run's. Housekeeping: a failed read skips it,
+    and a failed delete leaves that helper for a later run; neither stops
+    the run that asked."""
     selector = urllib.parse.quote(NAMES.key("task") + "=" + TASK)
     try:
         pods = (kget(f"/api/v1/namespaces/{NS}/pods?labelSelector={selector}") or {}).get("items") or []
@@ -197,7 +199,7 @@ def _clear_ended():
                 ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{meta['name']}",
                       {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0,
                        **({"preconditions": {"uid": meta["uid"]}} if meta.get("uid") else {})})
-            except urllib.error.HTTPError:
+            except Exception:
                 pass
 
 

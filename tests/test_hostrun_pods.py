@@ -4,7 +4,6 @@ never one still running (#597). On the shared fake API (tests/fakes/kube.py)."""
 import sys
 import unittest
 import urllib.error
-import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -124,6 +123,17 @@ class HelperLeftBehindTests(unittest.TestCase):
             HOSTRUN.run("node-2", "sleep 99", timeout=5, sleep=lambda s: None)
         self.assertIn("did not finish within 5 seconds", str(caught.exception))
         self.assertEqual("half", caught.exception.stdout)
+
+    def test_a_run_goes_ahead_when_an_ended_helper_cannot_be_cleared(self):
+        for failure in self.LOST:
+            with self.subTest(failure().__class__.__name__):
+                ended = helper("homestead-host-node-2-dead01", "node-2", "Failed")
+                kube = self.use([ended])
+                kube.fail(f"{PODS}/homestead-host-node-2-dead01", failure(), method="DELETE")
+                out, _ = HOSTRUN.run("node-2", "echo ok", sleep=lambda s: None)
+                self.assertEqual("ok", out)
+                self.assertEqual(1, len(self.exec.ran_in), "the script ran")
+                self.assertIsNotNone(kube.object(f"{PODS}/homestead-host-node-2-dead01"), "left for a later run")
 
 
 if __name__ == "__main__":

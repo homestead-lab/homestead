@@ -836,8 +836,8 @@ class LostAnswerTests(Unfinished):
 
     def test_the_real_helper_failing_to_remove_its_pod_after_a_good_answer_never_leads_to_a_second_restart(self):
         # The real homestead_hostrun, on the fake API, around an exec that
-        # answers OK: the DELETE of its helper pod then fails on transport, and
-        # that error replaces the good answer (hostrun._delete catches HTTPError only).
+        # answers OK: the DELETE of its helper pod then fails on transport.
+        # hostrun keeps the good answer; this pins that the restart runs once.
         import homestead_hostrun as HOSTRUN
         self.addCleanup(HOSTRUN.bind, *(getattr(HOSTRUN, name, None) for name in ("kget", "ksend", "exec_in", "NS")))
         restarts = []
