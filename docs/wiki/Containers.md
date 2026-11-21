@@ -480,6 +480,9 @@ container and a count at the top of the page.
 
 **Update** pins the new image, watches the rollout (pulling, starting, ready),
 and keeps the previous image so **Roll back** returns to exactly it.
+Every host that still holds the old image, such as one the app moved off,
+downloads the new image too, so the app can start there again without waiting
+for a download.
 Homestead's own updates are not listed here: they are on the top bar's
 **Homestead** button and under [Settings → Updates](Settings#homestead-updates). A registry
 that cannot be checked is shown on that container only; the rest still show

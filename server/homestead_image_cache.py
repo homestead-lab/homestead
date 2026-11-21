@@ -1059,6 +1059,40 @@ def stop_prepull(name):
     return {"ok": True, "daemonset": name, "message": f"Pre-download {name} stopped"}
 
 
+def refresh_spares(changes, get=None):
+    """Pull an update's new images onto the nodes that hold the old ones.
+
+    A node an app moved off keeps its image, so the app can come back there
+    without a download. After an update that copy is the old release: the
+    app, failing over to it, would wait for the new one. changes maps each
+    old image to its new one, both pinned by digest. The node the rollout
+    starts on is included: containerd fetches the same layers once, and the
+    new pod may start on another node, which leaves the old one a spare.
+    The old image stays for Roll back. Returns the pulls started, as
+    {"image", "nodes", "daemonset"}. get: the caller's read of the cluster."""
+    _load_scans()
+    holds = {}
+    for node in (get or I.kget)("/api/v1/nodes").get("items", []):
+        name = node["metadata"]["name"]
+        names = {ref for image in _merged(_scanned_images(name), node["status"].get("images", []) or [])
+                 for ref in image.get("names") or []}
+        holds[name] = {_image_digest(ref) for ref in names} - {""}
+    started = []
+    for old, new in changes.items():
+        digest, target = _image_digest(old), _image_digest(new)
+        if not digest or not target or digest == target:
+            continue
+        spares = sorted(node for node, digests in holds.items()
+                        if digest in digests and target not in digests)
+        if spares:
+            try:
+                pull = prepull(new, spares, own=True)
+            except ValueError:  # every one of them cordoned or not ready
+                continue
+            started.append({"image": new, "nodes": pull["nodes"], "daemonset": pull["daemonset"]})
+    return started
+
+
 def forget_rollback(namespace, name):
     """Stop keeping a workload's previous image for a one-click rollback.
 
