@@ -170,9 +170,13 @@ def body(node, lifetime=900, name=""):
 
 
 def _delete(path):
+    """Remove a run's helper. Never raises: it runs in _run's finally, where
+    any error would replace the script's answer or its own error. A helper
+    left behind is cleared by a later run once it has ended (_clear_ended),
+    or ends at its activeDeadlineSeconds."""
     try:
         ksend("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0})
-    except urllib.error.HTTPError:
+    except Exception:
         pass
 
 
