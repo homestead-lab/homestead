@@ -214,6 +214,18 @@ instead. `.about-grid` markup gets the same icons in `paint()` and
 adds a pattern to `FACT_ICONS` and a line to `tests/fact-icons.test.js`
 rather than falling back to the generic icon.
 
+**Hover cards.** A status, a figure or a name that has more to say than a
+tooltip shows a card: a title and its chip, three or four facts with their
+icons, a small chart (`UI.spark`) or uptime strip (`UI.strip`) where the trend
+matters, and one link to the next step (`UI.card`). The element is marked
+`data-card="kind|key"` and the page registers `HOVER_CARDS[kind] = (key,
+element) => UI.card(...)`, so the card is built when the pointer arrives,
+never for every row. It opens after a short pause, at once on keyboard focus
+or a tap, and stays while the pointer is over it. A card never holds the
+only way to act: its link leads somewhere the page or the details sidebar
+also reaches. With no card to build, the element's plain tooltip
+(`data-tip`) stands.
+
 A table marked `stack` needs nothing else: its cells are labelled from its
 headings, and long ones are laid across the card automatically. Keep the
 first column the item's name, and the last its buttons - always an

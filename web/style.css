@@ -4127,3 +4127,25 @@ button.a2port{font-family:inherit;line-height:inherit}
 .week-clashes{margin:6px 0}
 .week-clashes li{overflow-wrap:anywhere}
 .week-summary .ui-help{margin-top:4px}
+/* Hover cards (design.md): the card a hover, focus or tap on a status, a figure
+   or a name shows, on the same surface as the ⋯ menus. Unlike a tooltip it
+   takes the pointer, so its link can be clicked. */
+.uicard{position:fixed;z-index:10000;width:min(320px,calc(100vw - 20px));padding:13px 14px 11px;border:1px solid var(--line2);border-radius:12px;
+  background:rgba(20,20,23,.98);box-shadow:0 16px 45px rgba(0,0,0,.6);backdrop-filter:blur(20px);color:var(--tx);font-size:12.5px;line-height:1.45}
+.uicard[hidden]{display:none}
+.ui-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
+.ui-card-head b{font-size:13.5px}
+.ui-card-chart{margin:2px 0 9px}
+.ui-spark{display:block;width:100%;height:54px}
+.ui-spark .area{fill:color-mix(in srgb,var(--tx) 8%,transparent)}
+.ui-spark .line{fill:none;stroke:var(--tx);stroke-width:1.6}
+.ui-spark .project,.ui-spark .limit{fill:none;stroke:var(--med);stroke-width:1.4;stroke-dasharray:4 4}
+.ui-spark circle{fill:var(--tx)}
+.ui-card-strip{display:grid;width:100%;margin-top:6px}
+.ui-card-rows{display:grid;gap:5px;margin:0}
+.ui-card-rows>div{display:flex;justify-content:space-between;gap:12px}
+.ui-card-rows dt{display:flex;align-items:center;gap:6px;color:var(--mut)}
+.ui-card-rows dd{margin:0;text-align:right;overflow-wrap:anywhere}
+.ui-card-link{margin-top:10px;padding-top:9px;border-top:1px solid var(--line)}
+.ui-card-link .linkish{font-weight:600}
+[data-card]{cursor:default}
