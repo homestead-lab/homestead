@@ -153,3 +153,55 @@ test("summaries prioritize critical conditions and bound lock-screen text",async
  const sw=worker({pending:answer({alerts})});await sw.fire("push");
  assert.match(sw.shown[0].body,/^Critical disk/);assert.ok(sw.shown[0].body.length<=300);assert.equal(sw.shown[0].data.href,"/settings?tab=device");
 });
+
+/* A stand-in for one Cache: requests kept by their full URL, as the browser keys them. */
+function store(urls) {
+  const kept = new Map(urls.map(url => [url, "old"]));
+  const key = request => typeof request === "string" ? new URL(request, "https://home.example.com/").href : request.url;
+  return {
+    kept,
+    keys: async () => [...kept.keys()].map(url => new Request(url)),
+    delete: async request => kept.delete(key(request)),
+    put: async (request, response) => { kept.set(key(request), response); },
+    match: async request => kept.get(key(request)),
+    add: async () => {},
+  };
+}
+
+/* Loads web/sw.js with one cache, then makes a page load that the server answers with html. */
+async function navigate(cache, html) {
+  const handlers = {};
+  const self = { location: new URL("https://home.example.com/"), addEventListener: (type, fn) => { handlers[type] = fn; },
+    registration: {}, clients: { claim: async () => {} }, skipWaiting: async () => {}, navigator: {} };
+  const page = () => ({ ok: true, type: "basic", status: 200, clone: page, text: async () => html });
+  const context = { self, URL, Response, Request, Promise, JSON, atob, Uint8Array,
+    caches: { open: async () => cache, keys: async () => [], match: async request => cache.match(request) },
+    fetch: async () => page() };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "web", "sw.js"), "utf8"), context);
+  const pending = [];
+  let answered;
+  handlers.fetch({ request: { method: "GET", mode: "navigate", url: "https://home.example.com/settings" },
+    respondWith: p => { answered = p; }, waitUntil: p => { pending.push(p); } });
+  await answered;
+  await Promise.all(pending);
+  for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+  return [...cache.kept.keys()].map(url => url.replace("https://home.example.com", "")).sort();
+}
+
+test("a page load keeps only the files of the build that page names", async () => {
+  const cache = store([
+    "https://home.example.com/js/core.js?v=c111111111111", "https://home.example.com/style.css?v=c111111111111",
+    "https://home.example.com/vendor/@c111111111111/xterm/xterm.js",
+    "https://home.example.com/js/core.js?v=c222222222222", "https://home.example.com/vendor/@c222222222222/xterm/xterm.js",
+    "https://home.example.com/icons/icon-192.png", "https://home.example.com/vendor/fonts/Inter.0123456789.woff2",
+  ]);
+  const left = await navigate(cache, '<script src="/js/core.js?v=c222222222222"></script>');
+  assert.deepEqual(left, ["/", "/icons/icon-192.png", "/js/core.js?v=c222222222222",
+    "/vendor/@c222222222222/xterm/xterm.js", "/vendor/fonts/Inter.0123456789.woff2"]);
+});
+
+test("a page that names no build leaves the cache as it was", async () => {
+  const cache = store(["https://home.example.com/js/core.js?v=c111111111111"]);
+  const left = await navigate(cache, "<p>Signing in</p>");
+  assert.deepEqual(left, ["/", "/js/core.js?v=c111111111111"]);
+});

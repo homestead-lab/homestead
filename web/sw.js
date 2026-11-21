@@ -9,7 +9,10 @@
    Caching is deliberately narrow. Versioned files (?v=) and vendored libraries
    never change under one address, so they are served from the cache. A page
    load always tries the network first and falls back to the saved shell only
-   when there is no network at all. Nothing under /api/ is ever cached. */
+   when there is no network at all. Nothing under /api/ is ever cached.
+   A build that is not a release names its files by a hash of the web folder,
+   so each build adds its own; a page load keeps only the build that page
+   names (and this worker's release) and drops the files of every other. */
 const VERSION = "2.9.1-dev.4";
 const CACHE = `homestead-${VERSION}`;
 const SHELL = "/";
@@ -32,6 +35,18 @@ self.addEventListener("activate", event => {
 const immutable = url => url.origin === self.location.origin &&
   (url.searchParams.has("v") || url.pathname.startsWith("/vendor/") || url.pathname.startsWith("/icons/"));
 
+const BUILD = /\/js\/core\.js\?v=([^"'&\s]+)/;
+const buildOf = url => url.searchParams.get("v") || (/^\/vendor\/@([^/]+)\//.exec(url.pathname) || [])[1] || "";
+
+async function keepOnly(build) {
+  const cache = await caches.open(CACHE);
+  const stale = (await cache.keys()).filter(request => {
+    const named = buildOf(new URL(request.url));
+    return named && named !== build && named !== VERSION;
+  });
+  await Promise.all(stale.map(request => cache.delete(request)));
+}
+
 self.addEventListener("fetch", event => {
   const request = event.request;
   if (request.method !== "GET") return;
@@ -43,6 +58,11 @@ self.addEventListener("fetch", event => {
       if (response.ok && response.type === "basic") {
         const copy = response.clone();
         caches.open(CACHE).then(cache => cache.put(SHELL, copy)).catch(() => {});
+        const pruned = response.clone().text().then(page => {
+          const named = BUILD.exec(page);
+          return named && keepOnly(named[1]);
+        }).catch(() => {});
+        try { event.waitUntil(pruned); } catch (_) { /* the page still loads; the clean-up may not finish */ }
       }
       return response;
     }).catch(() => caches.match(SHELL).then(hit => hit || Response.error())));
