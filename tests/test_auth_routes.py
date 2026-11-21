@@ -391,7 +391,7 @@ class KeysAndAccounts(Routes):
                 mock.patch.object(API_KEYS, "edit", return_value=changed) as edit:
             token = self.signed_in(role="admin")
             a = self.send("POST", "/api/auth/keys", {"name": "ha", "scopes": ["read", "metrics"]}, token=token)
-            create.assert_called_once_with("ha", ["read", "metrics"], None, None, "ada", False)
+            create.assert_called_once_with("ha", ["read", "metrics"], None, None, "ada", False, False)
             self.assertEqual((200, {"ok": True, **made}, []), (a.status, a.body, a.cookies))
             self.assertEqual(self.row("key-added", "ada", detail="ha: read, metrics"), self.history()[0])
             a = self.send("POST", "/api/auth/keys/edit", {"id": "k1", "scopes": ["read"], "other": 1}, token=token)
