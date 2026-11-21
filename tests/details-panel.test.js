@@ -5,6 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const between = require("./helpers/between");
 
 function load() {
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -54,4 +55,28 @@ test("an unknown kind, or an item that is gone, has nothing to show", () => {
   const c = load(); register(c);
   assert.equal(c.detailsHtml("nope", "x"), "");
   assert.equal(c.detailsHtml("app", "lab/gone"), "");
+});
+
+test("an item on a linked cluster marks the panel with it, so its actions go there", () => {
+  const c = load(); register(c);
+  const panel = { dataset: {}, innerHTML: "", querySelector: () => null, classList: { add() {}, remove() {} }, setAttribute() {} };
+  c.document.getElementById = id => id === "detailsPanel" ? panel : id === "detailsScrim" ? { hidden: true } : null;
+  c.document.body = { classList: { add() {}, remove() {} }, append() {} };
+  const head = c.DETAIL_KINDS.app.head;
+  c.DETAIL_KINDS.app.head = key => ({ ...head(key), cluster: "secondary-example" });
+  c.openDetails("app", "lab/paperless");
+  assert.equal(panel.dataset.cluster, "secondary-example");
+  c.DETAIL_KINDS.app.head = head;
+  c.detailsTab("logs");
+  assert.equal(panel.dataset.cluster, undefined, "one on this cluster leaves it off");
+});
+
+test("the sidebar is above the page and below the dialogs, menus and toasts it opens", () => {
+  const css = fs.readFileSync("web/style.css", "utf8");
+  // The z-index in the rule that starts a line with the selector.
+  const z = selector => Number((between(css, `\n${selector}{`, "}").match(/z-index:(\d+)/) || [])[1]);
+  const panel = z(".details-panel"), scrim = z(".details-scrim");
+  assert.ok(scrim < panel, "the dimmed page is under the panel");
+  for (const above of [".top", ".bottombar", ".jobtray", ".fleet-menu"]) assert.ok(z(above) < scrim, `${above} is under the sidebar`);
+  for (const over of [".modal", ".askdlg", ".actionmenu-portal", "#toast"]) assert.ok(panel < z(over), `${over} opens over the sidebar`);
 });

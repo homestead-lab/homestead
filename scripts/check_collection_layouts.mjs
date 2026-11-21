@@ -104,19 +104,19 @@ try {
 
     await page.evaluate(()=>go('workloads'));
     await page.locator('.wl-row').first().waitFor();
-    const toggle=page.locator('.collection-disclosure').first();
-    const key=await page.locator('.wl-row').first().getAttribute('data-row-key');
-    await toggle.focus();await page.keyboard.press('Enter');
-    assert.equal(await toggle.getAttribute('aria-expanded'),'true');
-    assert.equal(await page.locator('.wl-detail-row').first().isVisible(),true);
+    // A click on the name opens the app's details sidebar; a refresh or a new
+    // sort keeps it open on the same app, and Escape gives focus back.
+    const opener=page.locator('.wl-open').first();
+    const name=(await page.locator('.wl-row').first().locator('.wtitle b').textContent()).trim();
+    await opener.focus();await page.keyboard.press('Enter');
+    const panel=page.locator('#detailsPanel.open');
+    await panel.waitFor();
+    assert.equal((await panel.locator('#detailsTitle').textContent()).trim(),name);
+    assert.equal(await page.locator('.wl-detail-row').count(),0,'no row opens inside the list');
     await page.evaluate(()=>renderWorkloads());
-    assert.equal(await toggle.getAttribute('aria-expanded'),'true','refresh retains expansion');
-    for(const order of [{col:0,dir:-1},{col:3,dir:-1},{col:3,dir:1}]) {
-      await page.evaluate(order=>saveSort('containers',order),order);
-      assert.equal(await page.locator('.wl-row').evaluateAll(rows=>rows.every(row=>row.nextElementSibling?.dataset.detailFor===row.dataset.rowKey)),true,'sort keeps each detail beside its parent');
-    }
-    assert.equal(await page.locator('.collection-disclosure[aria-expanded=true]').count(),1);
-    assert.equal(await page.locator('.collection-disclosure[aria-expanded=true]').evaluate(b=>b.closest('tr').dataset.rowKey),key);
+    for(const order of [{col:0,dir:-1},{col:2,dir:-1},{col:2,dir:1}]) await page.evaluate(order=>saveSort('containers',order),order);
+    assert.equal(await page.locator('#detailsPanel.open').count(),1,'refresh and sorting keep the details open');
+    assert.equal((await panel.locator('#detailsTitle').textContent()).trim(),name);
     await page.evaluate(()=>{localStorage.removeItem('homestead.sort.containers');renderWorkloads()});
     if(width<=560) {
       const shortRows=await page.locator('.wl-row:not(.wl-off)').evaluateAll(rows=>rows.filter(r=>!r.querySelector('.ui-chip.warn')).map(r=>r.getBoundingClientRect().height));
@@ -124,12 +124,18 @@ try {
       assert.equal(await page.locator('.wl-row').first().locator('.wl-row-meta').isVisible(),false);
       const heads=await page.locator('.wgroup-headrow').evaluateAll(rows=>rows.map(r=>[...r.children].map(c=>{const b=c.getBoundingClientRect();return b.top+b.height/2})));
       assert.ok(heads.length&&heads.every(centres=>centres.every(c=>Math.abs(c-centres[0])<6)),'a group heading keeps its name, tier and Tier… on one row');
-      assert.equal(await page.locator('.wl-detail-row').first().locator('.wl-detail-actions').isVisible(),true);
+      await page.waitForFunction(()=>getComputedStyle(document.querySelector('#detailsPanel')).transform==='none');
+      const sheet=await panel.boundingBox();
+      const [viewportWidth,viewportHeight]=await page.evaluate(()=>[document.documentElement.clientWidth,innerHeight]);
+      // Desktop Chromium keeps a scrollbar gutter while a drawer is open; a phone's scrollbar takes no room.
+      assert.ok(sheet.x<1&&sheet.width>=viewportWidth-16&&Math.abs(sheet.y+sheet.height-viewportHeight)<2,`a phone shows the details as a sheet from the bottom: ${JSON.stringify(sheet)} in ${viewportWidth}x${viewportHeight}`);
     }
+    assert.equal(await panel.locator('.details-actions').isVisible(),true);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     await page.screenshot({path:`${output}/containers-${width}-${theme}.png`,fullPage:true});
-    await page.locator('.collection-disclosure[aria-expanded=true]').click();
-    assert.equal(await page.locator('.wl-detail-row').first().isVisible(),false);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(()=>!document.querySelector('#detailsPanel.open'));
+    assert.equal(await page.evaluate(()=>document.activeElement?.classList.contains('wl-open')),true,'focus goes back to the name');
 
     if(width<=560) {
       const header=page.locator('.collection-mobile-head'), toolbar=header.locator('.collection-mobile-toolbar');
@@ -193,15 +199,20 @@ try {
     });
     await page.waitForFunction(()=>document.querySelectorAll('.wl-row').length===2);
     const remote=page.locator('.wl-row[data-cluster="secondary-example"]');
-    await remote.locator('.collection-disclosure').click();
-    assert.equal(await page.locator('.wl-detail-row[data-cluster="primary-example"]').isVisible(),false);
-    const actions=width<=560?page.locator('.wl-detail-row[data-cluster="secondary-example"] .wl-detail-actions'):remote.locator('.wl-actions');
-    await actions.getByRole('button',{name:'Logs example-container',exact:true}).click();
+    await remote.locator('.wl-open').click();
+    const details=page.locator('#detailsPanel.open');
+    await details.waitFor();
+    assert.equal(await details.getAttribute('data-cluster'),'secondary-example','the sidebar carries the cluster of its app');
+    await details.locator('.details-actions').getByRole('button',{name:'Open logs example-container',exact:true}).click();
     assert.equal(await page.evaluate(()=>window.__routedCalls.at(-1).target),'secondary-example');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-    // Space, keyboard focus, and full labels remain usable for long names.
-    await remote.locator('.collection-disclosure').focus();await page.keyboard.press('Space');
-    assert.equal(await remote.locator('.collection-disclosure').getAttribute('aria-expanded'),'false');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(()=>!document.querySelector('#detailsPanel.open'));
+    // Space opens it from the keyboard too.
+    await remote.locator('.wl-open').focus();await page.keyboard.press('Space');
+    await details.waitFor();
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(()=>!document.querySelector('#detailsPanel.open'));
     await page.evaluate(()=>{
       window.__workloadsFixture[0].name='a-container-with-a-long-descriptive-name';
       window.__workloadsFixture[0].desired=0;window.__workloadsFixture[0].ready=0;

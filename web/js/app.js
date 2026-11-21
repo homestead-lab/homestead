@@ -189,6 +189,8 @@ function go(v, options = {}) {
   window.HomesteadRecorder?.note("navigation", { action: v });
   if (window.setupNavigation) setupNavigation(v);
   if (!$("#modal").classList.contains("hidden")) closeModal(false);
+  // The details sidebar belongs to the page it was opened on.
+  if (window.closeDetails) closeDetails();
   // Anything still loading belongs to the page being left behind - and a
   // quiet refresh waiting on it never finishes (its reads are abandoned), so
   // it no longer counts as running. Its reads are cancelled, so they stop

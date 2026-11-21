@@ -86,8 +86,9 @@ column headings are the one small upper-case label.
    page.
    On a phone, Containers and Virtual machines keep their page tabs above one
    compact toolbar. Containers has a group picker, Options and Deploy; Virtual
-   machines has an All VMs scope label, Options and New VM. The count and
-   image-update or running state share one line below.
+   machines has an All VMs scope label, Options and New VM. The page's
+   summary line is below them: on Containers, the same sentence a computer
+   shows; on Virtual machines, the count and running state.
    `listOptions()` puts sorting, layout and platform visibility inside the
    standard action menu; preferences never add permanent toolbar rows. With
    no groups, a plain scope label replaces the picker.
@@ -211,7 +212,9 @@ a sheet from the bottom. The page registers the kind once,
 html(key) }] }`, and opens it with `openDetails(kind, key)`; every paint of
 the page redraws an open sidebar with the new data, keeping its tab and
 scroll, and closes it when its item is gone. Escape, a click on the dimmed
-page or ✕ closes it and gives focus back. A host keeps its own page.
+page or ✕ closes it and gives focus back. An item on a linked cluster names
+it (`head(key).cluster`), so the panel carries `data-cluster` as its row
+does and its actions go to that cluster. A host keeps its own page.
 
 ### Collections
 
@@ -258,11 +261,21 @@ sideways. A single host uses a card. Uptime bars and pod dots stay visible.
 Only short metrics remain in the phone matrix; selecting a host shows its
 storage and facts beneath it. Full host names remain in accessible labels and in the selected host heading.
 
-Compact container rows use `collectionDisclosure()` for their title. This
-native button expands facts and runtime objects directly under the row;
-`actionBar()` still holds the app actions. Sorting moves the detail with
-its parent, and refreshing keeps the disclosure state. A disclosure is a
-view control, separate from a row's app actions.
+**A row of a resource list** - the Containers page first, then the others -
+holds what a person scans for and nothing they look up: the name, with what
+it runs on beneath it; its state; the figures that change; its address; and
+its actions. A healthy item's state reads in quiet words (Running); a problem
+is a chip, a sentence under it saying why, and a coloured edge on the row
+(`wl-problem bad` or `warn`), so problems are found by scanning the edge. The
+actions are one labelled button that fits the item's state - the update when
+one is waiting, the logs when it is in trouble, Start when it is stopped,
+otherwise opening the app - then ⋯ with the actions people reach for, under
+group headings (an item's `group` in `actionBar()`: Use, Change, Remove).
+The rest, and the facts the row leaves out, such as the image and how long it
+has run, are in the details sidebar, which a click on the name opens; a
+pause on the name or the state shows a hover card. The page's summary line
+says how many items work normally and links each one that does not to its
+details.
 
 The form exception: a button that edits a form laid out as a table - the ✕
 that removes a row being typed - is a plain button marked `data-form-row`.

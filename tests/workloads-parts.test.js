@@ -7,7 +7,7 @@ const WL = require("./helpers/workloads-source");
 
 const WEB = path.join(__dirname, "..", "web");
 // The order the pieces had in one file.
-const PARTS = ["views-workloads.js", "views-workloads-groups.js", "views-workloads-list.js", "views-workloads-balance.js",
+const PARTS = ["views-workloads.js", "views-workloads-groups.js", "views-workloads-list.js", "views-workloads-details.js", "views-workloads-balance.js",
   "views-workloads-actions.js", "views-workloads-updates.js", "views-workloads-console.js", "views-workloads-deploy.js",
   "views-workloads-vip.js", "views-workloads-store.js"];
 const html = fs.readFileSync(path.join(WEB, "index.html"), "utf8");

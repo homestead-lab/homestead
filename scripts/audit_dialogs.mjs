@@ -235,7 +235,8 @@ const DIALOGS = [
   ["vm-cluster-copy-devices", "settings", "settingsTab('fleet')", "moveReview('branch','vm','gpu-desktop','copy','default')", "const select = document.querySelector('[aria-label=\"Destination device for display\"]'); select.value = 'homestead.io/pci-10de-1e87'; select.dispatchEvent(new Event('change', { bubbles: true }));"],
   ["container-cluster-copy", "settings", "settingsTab('fleet')", "moveReview('branch','container','frigate','copy','lab')"],
   ["vm-cluster-copy-picker", "vms", "[...document.querySelectorAll('[onclick]')].find(e => e.getAttribute('onclick').includes('moveToCluster(') && e.getAttribute('onclick').includes(\"'copy'\")).click()"],
-  ["container-cluster-copy-picker", "workloads", "[...document.querySelectorAll('[onclick]')].find(e => e.getAttribute('onclick').includes('moveToCluster(') && e.getAttribute('onclick').includes(\"'copy'\")).click()"],
+  // Copy to cluster is in an app's details sidebar.
+  ["container-cluster-copy-picker", "workloads", "openDetails('app', workloadRowKey(STATE.data.wl.find(w => !w.self && !w.platform && !w.homestead && !w.managed_smb && !w.managed_nfs)));[...document.querySelectorAll('#detailsPanel [onclick]')].find(e => e.getAttribute('onclick').includes('moveToCluster(') && e.getAttribute('onclick').includes(\"'copy'\")).click()"],
   ["vip-add", "network", "vipAdd()"],
   ["host-bond", "network", "hostBondDialog('harvester-node1')"],
   ["smart-disk", "nodes", "smartDisk('harvester-node1','nvme0n1')"],
