@@ -85,6 +85,8 @@ function paint(html) {
   const tabs = pageTabs(STATE.view);
   if (tabs) html = html.replace(/<div class="phead">\s*<div>/, match => `${match}${tabs}`);
   html = filterBar() + html;
+  // Facts on a page carry their icons (UI.withFactIcons), as UI.facts does in a dialog.
+  if (window.UI?.withFactIcons) html = UI.withFactIcons(html);
   keepSnapshot(snapshotKey(STATE.view), html);
   host.classList.remove("refreshing");
   // The same data as the last paint of this page is nothing to do: no element built,

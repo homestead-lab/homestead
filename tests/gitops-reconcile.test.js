@@ -181,5 +181,5 @@ test("The review says Flux applies the revision it last fetched, with the count 
   const html = t.dialogs.at(-1).html;
   assert.match(html, /revision it last fetched/);
   assert.doesNotMatch(html, /from git now/);
-  assert.match(html, /<dt>Apps<\/dt><dd>2<\/dd>/);
+  assert.match(html, /<dt>(?:<svg[^>]*><use[^>]*\/><\/svg>)?Apps<\/dt><dd>2<\/dd>/);
 });

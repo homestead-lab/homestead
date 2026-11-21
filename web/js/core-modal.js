@@ -52,7 +52,7 @@ function modal(t, h, wide, contextClass = "") {
   window.__modalGuard = null;   // each modal decides for itself what is at stake
   MODAL_EDITS = new Map();
   setModalTitle(t);
-  $("#mbody").innerHTML = h;
+  $("#mbody").innerHTML = window.UI?.withFactIcons ? UI.withFactIcons(h) : h;
   enhanceActions($("#mbody"));
   if (window.normaliseDialogActions) normaliseDialogActions($("#mbody"));
   $(".modalbox").classList.toggle("wide", !!wide);

@@ -218,9 +218,68 @@ const UI = (() => {
     ${title || asideHtml ? `<header><h4>${text(title)}</h4>${asideHtml ? `<div class="ui-section-aside">${asideHtml}</div>` : ""}</header>` : ""}
     ${bodyHtml}</section>`;
 
-  /* [[label, valueHtml], ...] - values are HTML so they can carry chips. */
-  const facts = pairs => `<dl class="ui-facts">${pairs.filter(Boolean).map(([label, valueHtml]) =>
-    `<div><dt>${text(label)}</dt><dd>${valueHtml}</dd></div>`).join("")}</dl>`;
+  /* Every fact carries an icon for what it is, so a panel of values can be
+     scanned by shape: an address, a size, memory, a host. The icon comes from
+     the label, the first pattern that matches; a third item in a pair names
+     one instead. The order matters: "Host failure" is a risk before it is a
+     host, "Last backup" a backup before it is a time. */
+  const FACT_ICONS = [
+    [/temperature|temp\b|°/i, "thermo"],
+    [/memory|\bram\b/i, "memory"],
+    [/fail|risk|error|problem|warning|blocked/i, "alert"],
+    [/snapshot/i, "snapshot"],
+    [/migration|\bmove/i, "move"],
+    [/guest os|operating system|\bos\b/i, "vm"],
+    [/strategy|restart|autostart/i, "power"],
+    [/kernel|driver|firmware/i, "layers"],
+    [/^access\b|access mode/i, "link"],
+    [/backup|protect|restore|kept|retention|recycle/i, "shield"],
+    [/\bcpu|vcpu|cores?\b/i, "chip"],
+    [/hardware|gpu|device|usb|passthrough/i, "chip"],
+    [/path|url|link|endpoint|nfs|smb|windows/i, "link"],
+    [/address|\bip\b|virtual ip|\bvip|network|interface|subnet|gateway|dns|mac\b|route|vlan|bridge/i, "network"],
+    [/\bports?\b|answers on/i, "port"],
+    [/disk|volume|storage|space|capacity|free|filesystem|cop(y|ies)|replica|class\b|footprint/i, "disk"],
+    [/^size$|^sizes?\b|each vm/i, "box"],
+    [/\bvms?\b|machine/i, "vm"],
+    [/host|node|server|placement/i, "node"],
+    [/image|version|release|chart|kubernetes|harvester|homestead/i, "layers"],
+    [/uptime|state|status|health|ready|running/i, "pulse"],
+    [/schedule|when|time|last|next|ago|date|created|expires|since|updated|taken|tried|checked/i, "clock"],
+    [/user|owner|account|role|\bby\b|guests?/i, "user"],
+    [/apps?\b|workload|container|pod|service/i, "box"],
+    [/log|event|activity/i, "log"],
+    [/update/i, "update"],
+    [/power/i, "power"],
+    [/source|from|import|migration/i, "import"],
+    [/namespace|group|scope|site|name/i, "list"],
+  ];
+  const factIcon = (label, chosen = "") => chosen || (FACT_ICONS.find(([re]) => re.test(String(label || ""))) || [0, "info"])[1];
+  const factIconSvg = (label, chosen = "") => `<svg class="ui-fact-icon" aria-hidden="true"><use href="#i-${factIcon(label, chosen)}"/></svg>`;
+  /* [[label, valueHtml, icon?], ...] - values are HTML so they can carry chips. */
+  const facts = pairs => `<dl class="ui-facts">${pairs.filter(Boolean).map(([label, valueHtml, chosen]) =>
+    `<div><dt>${factIconSvg(label, chosen)}${text(label)}</dt><dd>${valueHtml}</dd></div>`).join("")}</dl>`;
+  /* A page's .about-grid items (<div><span>label</span><b>value</b></div>)
+     get the same icons as UI.facts, added to the markup before it is painted. */
+  const withFactIcons = html => {
+    const source = String(html || "");
+    if (!source.includes("about-grid")) return source;
+    let out = "", from = 0;
+    for (let start = source.indexOf('class="about-grid', from); start !== -1; start = source.indexOf('class="about-grid', from)) {
+      const open = source.lastIndexOf("<div", start);
+      let depth = 0, i = open, end = source.length;
+      const tag = /<\/?div\b/g;
+      tag.lastIndex = open;
+      for (let m = tag.exec(source); m; m = tag.exec(source)) {
+        depth += m[0] === "<div" ? 1 : -1;
+        if (depth === 0) { end = source.indexOf(">", m.index) + 1; break; }
+      }
+      out += source.slice(from, open) + source.slice(open, end).replace(/(<div(?: class="[^"]*")?>\s*<span>)(?!<svg)([^<]{1,60})(<\/span>)/g,
+        (all, before, label, after) => `${before}${factIconSvg(label.trim())}${label}${after}`);
+      from = end;
+    }
+    return out + source.slice(from);
+  };
 
   /* [{ state: ok|warn|bad|todo|run|skip, title, detailHtml }] */
   const STATE_ICON = { ok: "check", warn: "alert", bad: "x", todo: "", run: "", skip: "" };
@@ -776,7 +835,7 @@ const UI = (() => {
   const openDialog = (title, spec, { wide = false, context = "", child = false } = {}) =>
     (child && typeof childModal === "function" ? childModal : modal)(title, dialog(spec), wide, context);
 
-  return { dialog, openDialog, head: subjectHtml, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, checklist, steps, progress, meter, table, more, ack,
+  return { factIcon, withFactIcons, dialog, openDialog, head: subjectHtml, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, checklist, steps, progress, meter, table, more, ack,
     fields, field, typedConfirm, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,

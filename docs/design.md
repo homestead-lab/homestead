@@ -205,6 +205,15 @@ after reloading the page. Returning rechecks the facts.
 | A set of values - an endpoint, a bucket, a size | `.about-grid` on a page, `UI.facts` in a dialog | Two to a row, one panel |
 | Headline figures | `UI.stats` | Two to a row |
 
+**Every fact has an icon.** A facts panel (`UI.facts`, `.about-grid`) shows
+an icon beside each label, so a panel is scanned by shape: an address, a
+size, memory, a host. The icon comes from the label (`UI.factIcon`, the first
+pattern in `FACT_ICONS` that matches); a third item in a pair names one
+instead. `.about-grid` markup gets the same icons in `paint()` and
+`modal()`, so pages and dialogs never draw them by hand. A new kind of fact
+adds a pattern to `FACT_ICONS` and a line to `tests/fact-icons.test.js`
+rather than falling back to the generic icon.
+
 A table marked `stack` needs nothing else: its cells are labelled from its
 headings, and long ones are laid across the card automatically. Keep the
 first column the item's name, and the last its buttons - always an
