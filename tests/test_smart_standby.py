@@ -114,13 +114,17 @@ class KeepLastTests(Base):
                 "temperature_c": None, "wear": {"life_pct": None}}
 
     def test_a_sleeping_drive_keeps_its_last_reading_with_the_temperature_unknown(self):
-        SMART.keep_last("node-1", {"sda": dict(AWAKE)})
-        row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
+        # A fixed clock: the real one can pass a second between the reading and the check.
+        with mock.patch.object(SMART, "_wall", lambda: 1000.9):
+            SMART.keep_last("node-1", {"sda": dict(AWAKE)})
+        with mock.patch.object(SMART, "_wall", lambda: 1001.1):
+            row = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
         self.assertTrue(row["asleep"])
         self.assertEqual(1200, row["power_on_hours"])
         self.assertEqual("passed", row["health"])
         self.assertIsNone(row["temperature_c"])
-        self.assertEqual(int(SMART._wall()), row["read_at"])
+        # The time of the last reading awake, not of the sleeping read after it.
+        self.assertEqual(1000, row["read_at"])
         # Still kept on the next sleeping read.
         again = SMART.keep_last("node-1", {"sda": self.asleep()})["sda"]
         self.assertEqual(1200, again["power_on_hours"])
