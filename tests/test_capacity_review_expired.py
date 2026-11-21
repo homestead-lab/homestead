@@ -5,6 +5,7 @@ had run out, and the refusal read as if placement or memory had changed. It
 now says the review is older than its time, and that nothing changed. A token
 for another input, or one never confirmed, keeps the old words."""
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -57,6 +58,20 @@ class ExpiredReviewTests(unittest.TestCase):
     def test_an_old_review_not_confirmed_keeps_the_general_words(self):
         config = {**self.config(1000), "confirm_capacity": False}
         self.assertNotIn("minutes old", self.refusal(config, 1000 + 25 * 60))
+
+
+class QueueRechecksBeforeTheTokenRunsOutTests(unittest.TestCase):
+    """The update queue reviews an app again once its review is REVIEW_FRESH_MS
+    old. That must stay well under the server's TTL, or a long queue applies
+    tokens the server has already let run out, as it did in Nov 2026."""
+
+    def test_the_queue_rechecks_well_before_the_server_ttl(self):
+        source = (Path(__file__).resolve().parents[1] / "web" / "js" / "views-workloads-updates.js").read_text(encoding="utf-8")
+        match = re.search(r"const REVIEW_FRESH_MS = (\d+) \* 60 \* 1000;", source)
+        self.assertIsNotNone(match, "REVIEW_FRESH_MS is no longer written as N * 60 * 1000; update this test")
+        fresh_seconds = int(match.group(1)) * 60
+        self.assertLessEqual(fresh_seconds, review.TTL // 2,
+                             f"The queue re-checks after {fresh_seconds}s, but the server keeps a review for only {review.TTL}s")
 
 
 if __name__ == "__main__":
