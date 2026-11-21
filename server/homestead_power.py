@@ -397,6 +397,8 @@ def _allow_scheduling(item, ref):
 def _scheduling(ref):
     if ref.get("planned_outage"):
         return "Scheduling was left unchanged"
+    if ref.get("cordon_kept"):
+        return ref["cordon_kept"]
     if ref.get("uncordoned"):
         return "Scheduling is allowed on it again"
     if ref.get("cordoned_before"):

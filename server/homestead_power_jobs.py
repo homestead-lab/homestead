@@ -11,11 +11,13 @@ server.py binds the cluster reads and writes and Homestead's own pod; its
 background loop asks the job tray, whose resolver resumes a job here.
 """
 import os
+import re
 import threading
 import time
 import urllib.error
 import urllib.parse
 
+import homestead_cordon as CORDON
 import homestead_history as HISTORY
 import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_leader as LEADER
@@ -146,25 +148,102 @@ def _job_ref(operation_id):
     return next(((i.get("ref") or {}) for i in OPS.stored() if i.get("id") == operation_id), {})
 
 
+# The job kind whose mark a host job's cordon carries (homestead_cordon).
+CORDON_KIND = "node-power"
+
+
 def _cordon_found(operation_id, power_plan, phase):
     """At the job's cordon step, just before it cordons: whether the host has
-    no cordon yet, so that the cordon there after it is this job's own (#1289).
-    Recorded once: a resumed job finds its own cordon from its first run and
-    keeps that first answer. A host that cannot be read, or is not the reviewed
-    host, counts as cordoned already, so its cordon is never taken off."""
+    no cordon yet, so that the cordon there after it is this job's own (#1289),
+    and then that cordon, with this job's mark on the Node (homestead_cordon).
+    A person's Cordon or Uncordon on the Hosts page clears the mark, and the
+    job's end then leaves the host as they set it (cordon_held, or its mark
+    could not be written: the host stays cordoned at the end).
+    own_cordon is recorded once: a resumed job keeps its first answer, and
+    one that died before recording it finds its own mark on the host. A
+    resumed job whose cordon was its own marks again what its cordon step
+    cordons again (a person may have uncordoned the host since). A host that
+    is not the reviewed host counts as cordoned already, so its cordon is
+    never taken off. One that cannot be read is still marked: cordon() reads
+    it again and tells a person's cordon apart; if that fails too, the host
+    stays cordoned at the end, saying so."""
     if phase != "cordoning":
         return {}
     try:
-        if "own_cordon" in _job_ref(operation_id):
-            return {}
+        ref = _job_ref(operation_id)
+        if "own_cordon" in ref:
+            return _mark(power_plan, operation_id) if ref.get("cordon_held") else {}
         own = False
         if power_plan.get("node_uid"):
             found = kget(f"/api/v1/nodes/{urllib.parse.quote(power_plan['node'], safe='')}")
             own = ((found.get("metadata") or {}).get("uid") == power_plan["node_uid"]
-                   and not (found.get("spec") or {}).get("unschedulable"))
+                   and (not (found.get("spec") or {}).get("unschedulable")
+                        or f"{CORDON_KIND}:{operation_id}" in CORDON.holders(found)))
+        return {"own_cordon": own, **(_mark(power_plan, operation_id) if own else {"cordon_held": False})}
     except Exception:
-        own = False
-    return {"own_cordon": own}
+        pass
+    try:
+        marked = _mark(power_plan, operation_id)
+    except Exception:
+        marked = {"cordon_held": False}
+    # Not its own only when cordon() found someone else's cordon.
+    return {"own_cordon": not marked.get("cordon_taken"), **marked}
+
+
+def _mark(power_plan, operation_id):
+    """Cordon the host with this job's mark. A host a person cordoned since
+    stays theirs (cordon_taken). Any other failure may follow a write whose
+    reply was lost, so the mark is released (homestead_cordon's rule) and the
+    host stays cordoned at the end, as the job then says."""
+    node = power_plan["node"]
+    outcome = CORDON.cordon(node, CORDON_KIND, operation_id)
+    if outcome.done:
+        return {"cordon_held": True}
+    if outcome.reason in CORDON.BEFORE:
+        return {"cordon_held": False, "cordon_taken": True}
+    CORDON.release(node, CORDON_KIND, operation_id, power_plan.get("node_uid") or "")
+    return {"cordon_held": False}
+
+
+# What a job tells a person to do with a host it leaves cordoned.
+READY_AGAIN = "Uncordon it on the Hosts page when it is ready for work again"
+
+
+def _title(holder):
+    """A cordon holder as the Hosts page names it: release() gives a mark
+    (<kind>:<job id>) or a job's title, or its kind when it has none. A mark
+    names its job's title; a kind, or a job not listed, is "another job"."""
+    kind, colon, ident = holder.partition(":")
+    if colon and re.fullmatch(r"[a-z0-9-]+", kind) and re.fullmatch(r"[A-Za-z0-9._-]+", ident):
+        try:
+            item = next((i for i in OPS.stored() if str(i.get("id")) == ident), None)
+        except Exception:
+            item = None
+        return (item or {}).get("title") or "another job"
+    return "another job" if re.fullmatch(r"[a-z0-9-]+", holder) else holder
+
+
+def give_back(node, operation_id, uid):
+    """Release a host job's marked cordon (homestead_cordon.release) and say
+    what became of it: (what, words, the helper's reason). what is "uncordoned";
+    "free" (it was not cordoned); "gone" (another host by now); "changed" (a
+    person's Cordon or Uncordon took the cordon over: left as they set it);
+    "kept" (held for another job or left for a person); "retry" (it could not
+    be read or written: it stays cordoned for now). words: for "kept" and
+    "retry", what follows "The host" or "It"."""
+    outcome = CORDON.release(node, CORDON_KIND, operation_id, uid or "")
+    reason = outcome.reason
+    what = {"uncordoned": "uncordoned", "released": "free", CORDON.GONE: "gone",
+            "not held by this job": "changed"}.get(reason)
+    if what:
+        return what, "", reason
+    if reason == CORDON.FOR_PERSON:
+        return "kept", ("stays cordoned, because a job left it cordoned for a person to check. "
+                        "Uncordon it on the Hosts page once it has been checked"), reason
+    if reason.startswith("still held by "):
+        return "kept", (f"stays cordoned while {_title(reason[len('still held by '):])} holds it. "
+                        "If it is still cordoned once that has ended, uncordon it on the Hosts page"), reason
+    return "retry", f"stays cordoned, because uncordoning it failed: {reason}. {READY_AGAIN}", reason
 
 
 # The drain's and the recheck's own words for the cordon, which the job says
@@ -186,8 +265,19 @@ def _after_stop(operation_id, power_plan, opening, cause):
     for old, new in _CORDON_WORDS:
         cause = cause.replace(old, new)
     cause = (cause[:1].upper() + cause[1:]).rstrip(" .")    # what follows starts with ". "
-    if ref.get("cordoned_before") is not False or not ref["own_cordon"]:
+    if ref.get("cordoned_before") is not False:
         return f"{opening}. The host stays cordoned, as it was before this job. {cause}", {}
+    if not ref["own_cordon"]:
+        return f"{opening}. The host stays cordoned, as it was before this job's cordon step. {cause}", {}
+    if "cordon_held" in ref:
+        if not ref["cordon_held"]:
+            if not ref.get("cordon_taken") and _cordoned(power_plan["node"], power_plan.get("node_uid")) is False:
+                # Its lost mark was released and its own cordon step then failed.
+                return f"{opening}. The host is not cordoned. {cause}", {}
+            return f"{opening}. The host {_unheld(ref, 'this job')}. {cause}", {}
+        what, words, _ = give_back(power_plan["node"], operation_id, power_plan.get("node_uid"))
+        return (f"{opening}. {_STOP_WORDS.get(what) or f'The host {words}.'} {cause}",
+                {"uncordoned": True} if what == "uncordoned" else {})
     try:
         found = kget(f"/api/v1/nodes/{urllib.parse.quote(power_plan['node'], safe='')}")
     except Exception as error:
@@ -201,6 +291,53 @@ def _after_stop(operation_id, power_plan, opening, cause):
     except Exception as error:
         return f"{opening}. The host stays cordoned, because uncordoning it failed: {error}. {cause}", {}
     return f"{opening}. The host was uncordoned, because this job had cordoned it. {cause}", {"uncordoned": True}
+
+
+# What a stopped job says of its marked cordon, by what give_back() found.
+_STOP_WORDS = {"uncordoned": "The host was uncordoned, because this job had cordoned it.",
+               "free": "The host is not cordoned.",
+               "gone": "The host was replaced during this job, so its cordon was left alone.",
+               "changed": "The host was left as someone set it during this job."}
+# What a job that ran says of a marked cordon it did not take off.
+_KEPT_WORDS = {"gone": "The host was replaced, so its cordon was left alone",
+               "changed": "It was left as someone set it during this job"}
+
+
+def _cordoned(node, uid):
+    """Whether the host (by uid) is cordoned now; None when that is not known."""
+    try:
+        found = kget(f"/api/v1/nodes/{urllib.parse.quote(node, safe='')}")
+    except Exception:
+        return None
+    if (found.get("metadata") or {}).get("uid") != uid:
+        return None
+    return bool((found.get("spec") or {}).get("unschedulable"))
+
+
+def _unheld(ref, who):
+    """Words, after "The host" or "It", for a cordon whose mark is not this
+    job's: one a person put on, or one it could not mark."""
+    if ref.get("cordon_taken"):
+        return f"was left as someone set it during {who}"
+    return f"stays cordoned, because {who} could not mark its cordon as its own. {READY_AGAIN}"
+
+
+def _give_back_job(item):
+    """A job whose cordon carries its mark, its host back: take its cordon
+    off, or record on the job why it stays. False while it could not be done."""
+    ref = item.get("ref") or {}
+    if not ref.get("cordon_held"):
+        ref["cordon_kept"] = ("It stays cordoned, as it was before this job's cordon step" if not ref.get("own_cordon")
+                              else "It " + _unheld(ref, "this job"))
+        return True
+    what, words, _ = give_back(ref["node"], item["id"], ref.get("node_uid"))
+    if what == "retry":
+        return False
+    if what in ("uncordoned", "free"):
+        ref["uncordoned"] = True
+    else:
+        ref["cordon_kept"] = _KEPT_WORDS.get(what) or "It " + words
+    return True
 
 
 def _key(item):
@@ -313,13 +450,18 @@ def _open_maintenance(operation_id, power_plan, declared, planned_outage):
     drain doesn't eat the time asked for."""
     now = int(time.time())
     apps = _moved_apps(power_plan)
-    started = next(((i.get("ref") or {}).get("started_epoch") for i in OPS.stored() if i.get("id") == operation_id), None)
+    ref = _job_ref(operation_id)
+    started = ref.get("started_epoch")
+    # Whether End finds the cordon still this job's by its mark; an event without it is from before.
+    mark = {"cordon_held": ref["cordon_held"]} if "cordon_held" in ref else {}
     try:
         return HISTORY.maintenance_declare(
             power_plan["node"], declared["reason"], operation_id, now + declared["hours"] * 3600,
             # Nothing was cordoned on a single host, so End has nothing to take off.
-            cordoned_before=bool(power_plan.get("cordoned")) or planned_outage, node_uid=power_plan["node_uid"],
-            held=_held_by(operation_id), apps=apps, started=started, now=now)
+            # A host cordoned before the job's cordon step (own_cordon False) stays so too.
+            cordoned_before=bool(power_plan.get("cordoned")) or planned_outage or ref.get("own_cordon") is False,
+            node_uid=power_plan["node_uid"],
+            held=_held_by(operation_id), apps=apps, started=started, now=now, **mark)
     except OPS.Superseded:
         raise
     except Exception as error:
@@ -440,8 +582,15 @@ def restore_held(item, uncordon=True):
     ref = item.get("ref") or {}
     if not LEADER.is_leader() or ref.get("restored") is not None:
         return ref.get("restored") is not None
-    if uncordon and not ref.get("planned_outage") and not ref.get("cordoned_before"):
+    if uncordon and not ref.get("planned_outage") and not ref.get("cordoned_before") and "cordon_held" in ref:
         # What waited is for this host; it cannot start here while cordoned.
+        if not ref.get("uncordoned") and not ref.get("cordon_kept"):
+            if not _give_back_job(item):
+                return False
+            if ref.get("cordon_kept") and _cordoned(ref["node"], ref.get("node_uid")):
+                ref["cordon_kept"] += ". What waited is started; what can run only on this host starts once it is uncordoned"
+    elif uncordon and not ref.get("planned_outage") and not ref.get("cordoned_before"):
+        # A job from before its cordon carried its mark.
         node = kget(f"/api/v1/nodes/{urllib.parse.quote(ref['node'], safe='')}")
         if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") == ref["node_uid"]:
             NODE_ACTIONS.set_cordon(ref["node"], False)
@@ -453,12 +602,16 @@ def restore_held(item, uncordon=True):
 
 def allow_scheduling(item):
     """Uncordon a host its power job cordoned, now it is back. Leader only,
-    once; only the host the job was for, by identity."""
+    once; only the host the job was for, by identity, and only while the
+    cordon is still the job's own (its mark)."""
     ref = item.get("ref") or {}
     if not LEADER.is_leader():
         return False
-    if ref.get("uncordoned"):
+    if ref.get("uncordoned") or ref.get("cordon_kept"):
         return True
+    if "cordon_held" in ref:
+        return _give_back_job(item)
+    # A job from before its cordon carried its mark.
     node = kget(f"/api/v1/nodes/{urllib.parse.quote(ref['node'], safe='')}")
     if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") != ref["node_uid"]:
         return False

@@ -299,9 +299,12 @@ def maintenance_close(job, now=None, outcome="ended"):
     return None
 
 
-def maintenance_declare(node, reason, op, until, *, cordoned_before, node_uid, held=(), apps=(), started=None, now=None):
+def maintenance_declare(node, reason, op, until, *, cordoned_before, node_uid, held=(), apps=(), started=None, now=None,
+                        cordon_held=None):
     """Open the maintenance a person declared, or return the one this op opened
-    already. Whatever End needs is on the event, as jobs get pruned."""
+    already. Whatever End needs is on the event, as jobs get pruned.
+    cordon_held: whether its job's cordon carries the job's mark (None: a job
+    from before it did, and the event says nothing)."""
     now = int(time.time() if now is None else now)
     with _lock:
         data = _read()
@@ -312,6 +315,8 @@ def maintenance_declare(node, reason, op, until, *, cordoned_before, node_uid, h
                  "declared": True, "until": until, "op": op, "cordoned_before": bool(cordoned_before),
                  "node_uid": node_uid, "held": list(held), "apps": list(apps),
                  "started": now if started is None else started, "released": False}
+        if cordon_held is not None:
+            event["cordon_held"] = bool(cordon_held)
         data["maintenance"].append(event)
         _save(data)
         return event

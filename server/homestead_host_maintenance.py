@@ -102,6 +102,9 @@ def _allow_scheduling(node, event):
     """Take off the cordon this maintenance put on, only from the host it was
     for, saying what is true of it now: it may never have been cordoned, or
     someone may have uncordoned it. Returns those words, and whether all went well."""
+    if "cordon_held" in event and not event.get("cordoned_before"):
+        return _give_back(node, event)
+    # An event from before its job's cordon carried the job's mark.
     try:
         found = POWER_JOBS.kget(f"/api/v1/nodes/{urllib.parse.quote(node, safe='')}")
     except urllib.error.HTTPError as error:
@@ -121,6 +124,20 @@ def _allow_scheduling(node, event):
     except Exception as error:
         return f"It is still cordoned: that could not be changed ({str(error)[:120]})", False
     return "Scheduling is allowed on it again", True
+
+
+def _give_back(node, event):
+    """The cordon comes off only while it is still its job's own, by the job's
+    mark: a person's Cordon or Uncordon during the maintenance took it over,
+    and it is left as they set it."""
+    if not event["cordon_held"]:
+        return ("It stays cordoned, because this maintenance could not tell that the cordon was its own. "
+                + POWER_JOBS.READY_AGAIN), True
+    what, words, reason = POWER_JOBS.give_back(node, event["op"], event.get("node_uid"))
+    return {"uncordoned": "Scheduling is allowed on it again", "free": "Scheduling was already allowed on it",
+            "gone": "This host has been replaced or removed since, so its cordon was left alone",
+            "changed": "It was left as someone set it during this maintenance",
+            "kept": f"It {words}", "retry": f"It is still cordoned: {reason}"}[what], what != "retry"
 
 
 def _unread(event, error):
