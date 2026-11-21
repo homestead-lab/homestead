@@ -263,7 +263,7 @@ window.mcpCardPaint = async () => {
     ${UI.more("Connect Claude Code", `<pre class="mono small agent-raw">${esc(window.__mcpText.code)}</pre><div class="row">${copy("code")}</div>`, false, "mcp-claude-code")}
     ${UI.more("Connect Claude Desktop", `<p class="small">Add this to claude_desktop_config.json, with the key in place of hsk_...</p><pre class="mono small agent-raw">${esc(window.__mcpText.desktop)}</pre><div class="row">${copy("desktop")}</div>`, false, "mcp-claude-desktop")}
     <p class="small">Reading and routine changes run at once. Anything that deletes or restores data waits for a person to approve it on
-      <a href="${esc(HomesteadRouter.urlFor("agents"))}" onclick="event.preventDefault();go('agents')">AI agent requests</a>${waiting ? ` ${UI.chip(waiting + " waiting", "warn")}` : ""}${requests.unread ? ` <span class="badtext">The number waiting could not be read. ${esc(requests.unread)}</span>` : ""}.</p>
+      <a href="${esc(HomesteadRouter.urlFor("agents"))}" onclick="event.preventDefault();go('agents')">AI agent requests</a>${waiting ? ` ${UI.chip(waiting + " waiting", "warn")}` : ""}${requests.unread ? ` <span class="badtext">The number waiting could not be read. ${esc(requests.unread)}</span>` : ""}, unless its key is set to act without approval.</p>
     ${UI.section("Recent calls", audit.error ? `<div class="dim small">${esc(audit.error)}</div>` : UI.table(
       [{ label: "When" }, { label: "Key" }, { label: "Tool or action" }, { label: "Outcome" }],
       (audit.calls || []).map(c => [esc(agentWhen(c.at)), esc(c.name || c.key), `<span class="mono xs">${esc(c.action)}</span>${c.via === "api" ? ' <span class="dim xs">API</span>' : c.via === "mqtt" ? ' <span class="dim xs">MQTT</span>' : ""}`,
