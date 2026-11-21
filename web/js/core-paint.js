@@ -83,7 +83,12 @@ function paint(html) {
   // Changes since the last paint that the watcher has not been told of yet.
   if (watcher && watcher.takeRecords().length) delete host.dataset.hash;
   const tabs = pageTabs(STATE.view);
-  if (tabs) html = html.replace(/<div class="phead">\s*<div>/, match => `${match}${tabs}`);
+  // On a computer the page's tabs and its main actions go into the top bar
+  // beside its title (design.md "One bar"); the summary and the list's own
+  // controls stay on the page as its one toolbar line. A phone keeps them on
+  // the page for now.
+  if (oneBar()) html = liftPageBar(html, tabs);
+  else if (tabs) html = html.replace(/<div class="phead">\s*<div>/, match => `${match}${tabs}`);
   html = filterBar() + html;
   // Facts on a page carry their icons (UI.withFactIcons), as UI.facts does in a dialog.
   if (window.UI?.withFactIcons) html = UI.withFactIcons(html);
@@ -126,6 +131,72 @@ function paint(html) {
     const focused = report.refocus, now = document.activeElement;
     if (focused && (!now || now === document.body) && host.contains(focused)) focused.focus({ preventScroll: true });
   }
+}
+const PAGE_HEAD = /<div class="phead">\s*/;
+/* One bar: a computer-wide window shows the page's tabs and actions in the top bar. */
+function oneBar() {
+  return typeof matchMedia === "function" && matchMedia("(min-width: 901px)").matches && !!document.getElementById("pagebar");
+}
+/* The page header's actions block (<div class="row page-actions ...">), whole: [start, end] or null. */
+function pageActionsSpan(html) {
+  const head = html.search(PAGE_HEAD);
+  const at = head < 0 ? -1 : html.indexOf('<div class="row page-actions', head);
+  // Only the header's own actions, which pageHeader() writes near its start.
+  if (at < 0 || at - head > 6000) return null;
+  const tag = /<\/?div\b/g;
+  tag.lastIndex = at;
+  let depth = 0;
+  for (let m = tag.exec(html); m; m = tag.exec(html)) {
+    depth += m[0] === "<div" ? 1 : -1;
+    if (depth === 0) return [at, html.indexOf(">", m.index) + 1];
+  }
+  return null;
+}
+/* The top-level elements of some markup, each as its own markup. */
+const VOID_TAG = /^(input|img|br|hr|meta|link|use|path|circle|rect|line|polyline|polygon|source|col|wbr)$/i;
+function topLevelElements(markup) {
+  const out = [], tag = /<(\/?)([a-zA-Z][\w-]*)\b[^>]*?(\/?)>/g;
+  let depth = 0, start = 0;
+  for (let m = tag.exec(markup); m; m = tag.exec(markup)) {
+    if (m[1]) { if (--depth === 0) out.push(markup.slice(start, tag.lastIndex)); continue; }
+    if (depth === 0) start = m.index;
+    if (m[3] || VOID_TAG.test(m[2])) { if (depth === 0) out.push(markup.slice(start, tag.lastIndex)); }
+    else depth++;
+  }
+  return out;
+}
+/* The header's action row split in two: what goes into the top bar (the
+   page's buttons and its ⋯ menu) and what stays on the page with the list's
+   other controls (a count pill, a view switch, a field). A header that is a
+   search, the App Store's field and its button, stays whole. */
+function splitPageActions(row) {
+  const open = row.slice(0, row.indexOf(">") + 1), inner = row.slice(open.length, row.lastIndexOf("</div>"));
+  const stays = el => /\bstore-search\b/.test(open) || /^<(input|select|label)\b/i.test(el)
+    || /^<[^>]*\b(class="[^"]*\b(pill|iconseg|scanprogress)\b|id="scanprogress")/.test(el);
+  const items = topLevelElements(inner);
+  const up = items.filter(el => !stays(el)), down = items.filter(stays);
+  return { lifted: up.length ? `${open}${up.join("")}</div>` : "", kept: down.length ? `<div class="row page-actions page-controls">${down.join("")}</div>` : "" };
+}
+/* Moves the page's actions out of its markup and, with its tabs, into the top
+   bar. The bar is redrawn only when it changes, so an open ⋯ menu in it
+   survives a refresh of the page. Returns the page's markup without them. */
+function liftPageBar(html, tabs) {
+  const bar = document.getElementById("pagebar");
+  let actions = "";
+  const span = pageActionsSpan(html);
+  if (span) {
+    const { lifted, kept } = splitPageActions(html.slice(span[0], span[1]));
+    actions = lifted;
+    html = html.slice(0, span[0]) + kept + html.slice(span[1]);
+  }
+  const next = `${tabs || ""}${actions}`;
+  if (bar.dataset.sig !== next) {
+    bar.dataset.sig = next;
+    bar.innerHTML = next;
+    enhanceActions(bar);
+  }
+  bar.hidden = !next;
+  return html;
 }
 /* The paint skip above compares with the last paint, so content that changes between paints - a
    sort that moves rows itself (sortRows), a menu lifted out, an icon taken away - must make the next
@@ -259,6 +330,6 @@ function resetPaint() { const h = V(); delete h.dataset.painted; delete h.datase
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
   PAGE_SNAPSHOT, PAGE_SNAPSHOT_KEEP, keepSnapshot, snapshotKey, pagePlaceholder, pageSkeleton, filterBar, pageTabs,
-  paint, paintWatcher, paintSignature, iconRetryDue, mkeyOf, morphNode, morphKeyed, morph, syncAttrs,
+  paint, PAGE_HEAD, oneBar, pageActionsSpan, VOID_TAG, topLevelElements, splitPageActions, liftPageBar, paintWatcher, paintSignature, iconRetryDue, mkeyOf, morphNode, morphKeyed, morph, syncAttrs,
   resetPaint
 };

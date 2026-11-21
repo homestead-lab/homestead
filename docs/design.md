@@ -74,13 +74,16 @@ column headings are the one small upper-case label.
 
 ### The shape of a page
 
-1. **Header** (`UI.pageHeader`) - on the left, the page family's tabs when it has
-   them (added by `paint()`), then a one-line subtitle; on the right, on the
-   same line as the tabs, the actions: the cards/rows switch if the page has
-   one, `moreMenu()` for everything secondary, and one main button (`pri`) -
-   or `menuButton()` when the main action is a choice (＋ Import). Filters
-   that belong to the list, such as Containers' group chips, share the
-   subtitle's line.
+1. **Header** (`UI.pageHeader`) - **one bar.** On a computer, `paint()`
+   lifts the page family's tabs and the header's buttons - `moreMenu()` for
+   everything secondary and one main button (`pri`), or `menuButton()` when
+   the main action is a choice (＋ Import) - into the top bar beside the
+   page's title (`liftPageBar`). There is no breadcrumb; the sidebar shows the
+   place, and the cluster switch is shown under the brand. What filters the list
+   stays on the page: the subtitle becomes the page's one toolbar line, with
+   the list's controls on its right - Containers' group chips, a count pill,
+   the cards/rows switch, a search field. A phone keeps the header on the
+   page.
    On a phone, Containers and Virtual machines keep their page tabs above one
    compact toolbar. Containers has a group picker, Options and Deploy; Virtual
    machines has an All VMs scope label, Options and New VM. The count and
