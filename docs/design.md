@@ -195,6 +195,21 @@ after reloading the page. Returning rechecks the facts.
   Store catalogue are a service row or a setting row on the page, their fields
   in a standard dialog with its own Save.
 
+### Details sidebar
+
+A click on a row of things that have more to say - an app, a VM, a volume, a
+network share - opens the **details sidebar** at the right, over the list,
+which stays where it was so a person can go from row to row. It leads with the
+item's name and its main actions (the first three as buttons, the rest in
+⋯), then tabs - Overview first, with what needs attention at the top of it,
+then the facts - each tab built from the page's own data. A phone shows it as
+a sheet from the bottom. The page registers the kind once,
+`DETAIL_KINDS[kind] = { head(key), actions(key), tabs: [{ id, label, when?,
+html(key) }] }`, and opens it with `openDetails(kind, key)`; every paint of
+the page redraws an open sidebar with the new data, keeping its tab and
+scroll, and closes it when its item is gone. Escape, a click on the dimmed
+page or ✕ closes it and gives focus back. A host keeps its own page.
+
 ### Collections
 
 | Showing | Use | On a phone |
