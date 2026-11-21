@@ -1,10 +1,5 @@
 /* Homestead views: the Volumes page, storage classes and the file editor (Monaco, loaded on first use). Split from views-storage.js (#911); a classic script. */
 /* ---------------- volumes ---------------- */
-/* A reason is worth showing only when something is actually wrong: a detached
-   volume has no live health to report, which is not a problem to explain. */
-const volumeReason = v => (v.health_reason && v.state === "attached"
-  && v.robustness !== "healthy") ? v.health_reason : "";
-
 /* What a volume is for, when nothing is using it right now. Detached alone
    said nothing about whether the data is wanted: a stopped container's
    volume keeps its data for the next start; one nothing refers to is the
@@ -18,17 +13,6 @@ function volumeUse(x) {
   return x.used_by.length ? { kind: "stopped", by: x.used_by } : { kind: "orphaned" };
 }
 
-/* Where a volume's copies are: host and disk, grouped by host. */
-function volumeCopiesLine(x) {
-  // null: Longhorn's replicas could not be read (#1002).
-  if (x.copies === null) return `<span class="dim xs vol-copies" data-tip="${esc(volumeCopiesTip(x))}">copies unknown</span>`;
-  const copies = x.copies || [];
-  if (!copies.length) return "";
-  const hosts = {};
-  copies.forEach(c => (hosts[c.node || "?"] ||= []).push(c));
-  return `<span class="dim xs vol-copies" data-tip="${esc(volumeCopiesTip(x))}">on ${Object.entries(hosts).map(([node, rows]) =>
-    `${esc(node.replace(/^harvester-/, ""))}: ${rows.map(c => `<span class="${c.healthy ? "" : "warn"}">${esc(c.disk)}</span>`).join(" + ")}`).join(" · ")}</span>`;
-}
 function volumeCopiesTip(x) {
   if (x.copies === null) return "The locations of this volume's copies could not be read from Longhorn";
   const copies = x.copies || [], want = +x.replicas || 0;
@@ -62,55 +46,47 @@ const volumeBusy = v => v.restore || v.rebuild || null;
 const volumeProgressBar = pct => `<div class="meter volprogress" role="progressbar" aria-valuenow="${+pct || 0}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.min(100, +pct || 0)}%"></span></div>`;
 
 function volumeHealthCell(x) {
-  const restore = x.restore, rebuild = x.rebuild;
-  if (restore && restore.error) return `${UI.chip("restore failed", "bad")}
-    <span class="dim xs volume-reason">${esc(restore.error)}</span>`;
-  if (restore) return `${UI.chip(`restoring ${restore.pct}%`, "info", { tip: "Longhorn is restoring this volume from a backup. It can be used when the restore finishes." })}
+  const restore = x.restore, rebuild = x.rebuild, problem = volumeProblem(x);
+  if (restore && !restore.error) return `${UI.chip(`restoring ${restore.pct}%`, "info", { tip: "Longhorn is restoring this volume from a backup. It can be used when the restore finishes." })}
     ${volumeProgressBar(restore.pct)}`;
-  if (rebuild && rebuild.error) return `${UI.chip("rebuild failed", "bad")}
-    <span class="dim xs volume-reason">${esc(rebuild.error)}</span>`;
   // Rebalancing builds the new copy before the old one goes: nothing is short.
-  if (rebuild && x.rebalancing) return `${UI.chip(`moving a copy ${rebuild.pct}%`, "ok", { tip: x.health_reason || "A new copy is being built on another host before the old one is removed. All existing copies stay complete." })}
+  if (rebuild && !rebuild.error && x.rebalancing) return `${UI.chip(`moving a copy ${rebuild.pct}%`, "ok", { tip: x.health_reason || "A new copy is being built on another host before the old one is removed. All existing copies stay complete." })}
     ${volumeProgressBar(rebuild.pct)}`;
-  if (x.rebalancing && x.state === "attached") return `${UI.chip("healthy", "ok", { tip: x.health_reason || "" })} ${UI.chip("moving a copy", "info")}
-    ${volumeShortCell(x)}`;
-  if (rebuild) return `${UI.chip(`rebuilding ${rebuild.pct}%`, "neutral", { tip: "Longhorn is rebuilding a copy from a healthy one. The volume can be read and written during the rebuild." })}
+  if (rebuild && !rebuild.error) return `${UI.chip(`rebuilding ${rebuild.pct}%`, "neutral", { tip: "Longhorn is rebuilding a copy from a healthy one. The volume can be read and written during the rebuild." })}
     ${volumeProgressBar(rebuild.pct)}
     <span class="dim xs volume-reason">${rebuild.replicas === 1 ? "1 copy" : `${rebuild.replicas} copies`} being rebuilt</span>`;
-  return `${x.state === "attached"
-    ? UI.chip(x.robustness, x.robustness === "healthy" ? "ok" : x.robustness === "degraded" ? "warn" : "bad", { tip: x.health_reason || "" })
-    // Detached is where a volume sits when nothing is using it - a stopped
-    // workload, not a fault. Longhorn calls it detached, so do we.
-    : UI.chip("detached", "neutral", { tip: "No app is using this volume, so Longhorn does not report the health of its copies." })}
-    ${volumeShortCell(x)}
-    ${volumeReason(x) ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}`;
+  // A problem is a chip and a sentence saying why; a healthy or detached
+  // volume reads in a quiet word (design.md "Resource list").
+  if (problem) return `${UI.chip(problem.chip, problem.tone, { size: "slim" })}<div class="vol-reason xs">${esc(problem.line)}</div>`;
+  if (x.rebalancing && x.state === "attached") return `<span class="vol-state dim">Healthy</span> ${UI.chip("moving a copy", "info", { size: "slim" })}`;
+  return `<span class="vol-state dim">${x.state === "attached" ? "Healthy" : "Detached"}</span>`;
 }
 
-/* Longhorn rebuilds a missing copy only while a volume is attached, unless
-   offline rebuilding is on. A detached volume a copy short stays that way. */
-function volumeShortCell(x) {
-  const short = x.copies_short;
-  if (!short) return "";
-  if (!short.whole) return UI.chip("no whole copy", "bad", { tip: "No complete copy of this volume is left, so Longhorn cannot rebuild it." });
-  return UI.chip(`${short.whole} of ${short.wanted} copies`, "warn", { tip: `This detached volume has ${short.whole} of ${short.wanted} copies. Longhorn rebuilds missing copies only while a volume is attached, unless Rebuild copies of detached volumes is on. Rebuild now, in the row's actions, starts a rebuild.` });
+/* A volume's actions, in groups (#506): Rebuild now first when a detached
+   volume is short of copies. The details sidebar offers them all. */
+function volumeActionItems(x) {
+  const vol = esc(JSON.stringify(x)), ns = jsq(x.namespace || "lab"), pvc = jsq(x.pvc_name || x.name), title = volumeTitle(x);
+  const item = (label, run, iconName, options = {}) => ({ label, run, icon: iconName, ariaLabel: `${label} ${title}`, ...options });
+  return [
+    x.copies_short?.whole && item("Rebuild now", `volumeRebuild(${jsq(x.name)})`, "refresh", { need: "operator", group: "Use", tip: "Rebuild the missing copies now." }),
+    item("Open snapshots", `lhSnaps(${jsq(x.name)},${pvc})`, "snapshot", { group: "Use", tip: "Take, view or restore snapshots and backups of this volume." }),
+    item("Browse files", `fileManager(${ns},${pvc},${x.state === "attached"},${esc(JSON.stringify(x.access_modes || []))})`, "list", { need: "admin", group: "Use", tip: "Browse and edit the files on this volume" }),
+    item("Expand volume", `volumeEdit(${vol})`, "edit", { need: "operator", group: "Change", tip: "Resize the volume or change its number of copies." }),
+    item("Move copies…", `volumeCopyMove(${vol})`, "move", { need: "operator", group: "Change",
+      tip: "Move this volume's copies to disks with different tags, for example NVMe disks. The volume stays in use." }),
+    item("Change storage class…", `volumeReclass(${vol})`, "move", { need: "admin", group: "Change", tip: "Copy this volume to another storage class, keeping its name." }),
+    item("Fix ownership…", `volumeChown(${ns},${pvc})`, "shield", { need: "admin", group: "Change", tip: "Give ownership of this volume's files to the user the app runs as." }),
+    item("Delete volume…", `volumeDelete(${vol})`, "trash", { need: "admin", danger: true, group: "Remove", tip: "Review what uses this volume and what would be lost before deleting it." }),
+  ].filter(Boolean);
 }
-/* A volume row's buttons (#506): Rebuild now first when a detached volume is
-   short of copies, then Snapshots and Edit, the rest and Delete in ⋯. */
+/* A volume row's actions: the one that fits its state labelled - Rebuild now
+   when a copy is missing, Expand volume when it is filling up, otherwise its
+   snapshots - then the rest in ⋯ under their groups. */
 function volumeActions(x) {
-  const vol = esc(JSON.stringify(x)), ns = jsq(x.namespace || "lab"), pvc = jsq(x.pvc_name || x.name);
-  const rebuild = x.copies_short?.whole ? { label: "Rebuild now", icon: "refresh", run: `volumeRebuild(${jsq(x.name)})`, need: "operator",
-    tip: "Rebuild the missing copies now." } : null;
-  return actionBar([
-    rebuild,
-    { label: "Snapshots", icon: "snapshot", run: `lhSnaps(${jsq(x.name)},${pvc})`, tip: "Take, view or restore snapshots and backups of this volume." },
-    { label: "Edit", icon: "edit", run: `volumeEdit(${vol})`, need: "operator", tip: "Resize the volume or change its number of copies." },
-    { label: "Browse files", icon: "list", run: `fileManager(${ns},${pvc},${x.state === "attached"},${esc(JSON.stringify(x.access_modes || []))})`, need: "admin", tip: "Browse and edit the files on this volume" },
-    { label: "Move copies", icon: "move", run: `volumeCopyMove(${vol})`, need: "operator",
-      tip: "Move this volume's copies to disks with different tags, for example NVMe disks. The volume stays in use." },
-    { label: "Change storage class", icon: "move", run: `volumeReclass(${vol})`, need: "admin", tip: "Copy this volume to another storage class, keeping its name." },
-    { label: "Fix ownership", icon: "shield", run: `volumeChown(${ns},${pvc})`, need: "admin", tip: "Give ownership of this volume's files to the user the app runs as." },
-    { label: "Delete", icon: "trash", run: `volumeDelete(${vol})`, need: "admin", danger: true, tip: "Review what uses this volume and what would be lost before deleting it." },
-  ], { shown: rebuild ? 3 : 2, label: `More actions for ${x.pvc_name || x.name}`, iconOnly: true });
+  const items = volumeActionItems(x), soon = forecastFor(`volume:${x.name}`);
+  const full = soon || x.filesystem?.used_pct >= 90;
+  const main = items.find(i => i.label === "Rebuild now") || (full && items.find(i => i.label === "Expand volume")) || items.find(i => i.label === "Open snapshots");
+  return actionBar([main, ...items.filter(i => i !== main)], { shown: 1, label: `More actions for ${volumeTitle(x)}` });
 }
 window.volumeRebuild = async name => {
   try {
@@ -130,32 +106,14 @@ function forecastFor(key) {
   return row && row.days_left !== null && row.days_left <= (f.show_days || 60) ? row : null;
 }
 
-function forecastCard(f) {
-  if (!f) return "";
-  const rows = f.rows || [], soon = rows.filter(r => r.days_left !== null && r.days_left <= (f.show_days || 60));
-  const pool = rows.find(r => r.kind === "pool");
-  const collecting = !rows.some(r => r.days >= (f.min_days || 7));
-  const line = r => `<div class="forecast-row">
-      ${UI.chip(`Full ${forecastWhen(r.days_left)}`, forecastTone(r.days_left, f.warn_days))}
-      <span class="forecast-name"><b>${esc(r.kind === "pool" ? "All Longhorn storage" : r.label)}</b><span class="dim xs">${esc(r.kind === "volume" ? `${r.namespace} · volume` : r.kind === "disk" ? "disk" : "every host")} · ${esc(r.pct)}% full · +${(r.per_day / 1024 ** 3).toFixed(1)} GiB a day · by ${esc(forecastDate(r.full_on))}</span></span></div>`;
-  return `<div class="card flat forecast-card"><div class="between"><div><div class="ctitle">Filling up</div>
-      <div class="csub">Based on how each volume, disk and the whole pool grew over the last 30 days</div></div></div>
-    ${collecting ? `<div class="dim small forecast-empty">Collecting daily usage. Forecasts start after ${f.min_days || 7} days of measurements.</div>`
-      : soon.length ? `<div class="forecast-list">${soon.map(line).join("")}</div>`
-      : `<div class="dim small forecast-empty">Nothing is forecast to fill in the next ${f.show_days || 60} days${pool ? ` · all Longhorn storage ${pool.days_left !== null ? `fills ${esc(forecastWhen(pool.days_left))}` : `is ${esc(pool.why || "steady")}`}` : ""}.</div>`}</div>`;
-}
-
 function volumeUsageCell(x) {
   const fs = x.filesystem;
-  const soon = forecastFor(`volume:${x.name}`);
   const known = fs && Number.isFinite(fs.used_gb) && Number.isFinite(fs.capacity_gb)
     && Number.isFinite(fs.used_pct) && fs.used_pct >= 0 && fs.used_pct <= 100
     && fs.capacity_gb > 0 && fs.used_gb >= 0 && fs.used_gb <= fs.capacity_gb;
-  return `<div class="volusage-body">${known
-    ? `<div class="volusage-line" data-tip="Space used by files in the volume. The file system can be slightly smaller than the volume size.">${meter(fs.used_pct)}<span class="mono">${esc(fs.used_gb)} / ${esc(fs.capacity_gb)} GiB files</span></div>`
-    : `<span class="dim xs" data-tip="No recent measurement is available. Detached volumes and some shared or raw volumes do not report how much space their files use.">Filesystem usage unavailable</span>`}
-    ${soon ? `<span class="forecast-tag">${UI.chip(`Full ${forecastWhen(soon.days_left)}`, forecastTone(soon.days_left), { tip: `Growing by about ${(soon.per_day / 1024 ** 3).toFixed(1)} GiB a day. At that rate it is full by ${forecastDate(soon.full_on)}.` })}</span>` : ""}
-    <span class="dim xs mono volsizes"><span data-tip="The size the volume was created with. This is not the disk space it uses.">${esc(x.size_gb)} GiB provisioned</span> · <span data-tip="The disk space Longhorn uses for one copy, including snapshots and space not yet given back. It can be larger than the volume size.">${esc(x.actual_gb ?? "—")} GiB Longhorn footprint ${tip("Longhorn includes snapshots and allocated blocks, not just current files. Inspect snapshots before choosing any cleanup; deleting them removes recovery points.")}</span></span></div>`;
+  return `<div class="volusage-body" data-card="volume-usage|${esc(volumeKey(x))}">${known
+    ? `<div class="volusage-line">${meter(fs.used_pct)}<span class="mono">${esc(fs.used_gb)} / ${esc(fs.capacity_gb)} GiB</span></div>`
+    : `<span class="dim xs">Not measured</span>`}</div>`;
 }
 
 /* While anything rebuilds or restores, re-read the volumes every 4 s and
@@ -178,10 +136,11 @@ function volumeProgressWatch() {
       if (!row) continue;
       const health = row.querySelector("td.volhealth"), usage = row.querySelector("td.volusage");
       if (health) {
-        health.innerHTML = volumeHealthCell(x);
-        health.classList.toggle("hasreason", !!(volumeReason(x) || volumeBusy(x)));
+        health.innerHTML = `<div class="volstate" data-card="volume-health|${esc(volumeKey(x))}">${volumeHealthCell(x)}</div>`;
       }
       if (usage) usage.innerHTML = volumeUsageCell(x);
+      const copies = row.querySelector("td.volcopies");
+      if (copies) copies.innerHTML = volumeCopyDots(x);
       // Rebuild now comes and goes with the copies; an open ⋯ is left alone.
       const actions = row.querySelector("td.volactions");
       if (actions && !actions.querySelector("details[open]")) actions.innerHTML = volumeActions(x);
@@ -292,7 +251,9 @@ function storagePaint(v, parts, missed) {
   const rows = v.filter(x => (!q || x.name.includes(q) || (x.node || "").includes(q) ||
     (x.pvc_name || "").includes(q) || (x.attached_to || "").toLowerCase().includes(q))
     && (!onlySpare || spare.includes(x)));
-  paint(`${UI.pageHeader(`Volumes`, `${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage${onlySpare ? ` · <a class="linkish" onclick="STATE.volSpare=false;viewStorage()">showing ${spare.length} unused · show all</a>` : ""}`, `${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
+  if (has("st")) STATE.data.storageTotals = st;
+  paint(`${UI.pageHeader(`Volumes`, `${volumeSummary(v, has("st") ? st : null, { q, spare: onlySpare ? 0 : spare.length })}${onlySpare
+      ? ` <button type="button" class="linkish sum-link" onclick="STATE.volSpare=false;viewStorage()">Showing the ${spare.length} unused. Show all volumes.</button>` : ""}`, `${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
           tip: "Volumes that no app, VM or job uses, and volumes kept after their claim was deleted. These are the ones to review when freeing space." } : null,
         { label: "Rebalance copies…", icon: "layers", run: "volumeRebalance()", need: "operator", tip: "Move volume copies so that hosts hold similar amounts. Nothing restarts." },
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "The storage classes new volumes are created from, in Settings › Hardware and storage." }])}
@@ -300,9 +261,7 @@ function storagePaint(v, parts, missed) {
   ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
   ${!has("st") ? summaryLine("volumes", [`<span class="dim small"><span class="spin2"></span> Reading the totals…</span>`])
   : st ? summaryLine("volumes", [
-      `<b>${st.avail_gb} GiB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GiB</b> provisioned`,
-      `${UI.chip(`${st.healthy} healthy`, "ok")}${st.degraded ? ` ${UI.chip(`${st.degraded} degraded`, "warn")}` : ""}${st.faulted ? ` ${UI.chip(`${st.faulted} faulted`, "bad")}` : ""}`,
-      `${st.attached} of ${st.volumes} attached`],
+      `<span class="storagebar" data-card="storage|pool">${meter(st.used_pct)}<span><b>${st.used_gb ?? Math.max(0, st.cap_gb - st.avail_gb)} GiB</b> used of ${st.cap_gb} GiB · ${st.provisioned_gb} GiB provisioned</span></span>`],
     `<div class="grid g4 statgrid">
     <div class="card flat"><div class="ctitle">Free space</div>
       <div class="bignum" style="margin-top:8px">${st.avail_gb}<span class="unit">GiB</span></div>
@@ -320,23 +279,21 @@ function storagePaint(v, parts, missed) {
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
     ${lhCapacityCard(cap, st)}
   </div>`, "Per host") : ""}
-  ${has("forecast") ? forecastCard(forecast) : `<div class="card flat forecast-card"><div class="ctitle">Filling up</div>${partReading("the forecast")}</div>`}
+  ${has("forecast") ? volumeAttention(v, forecast, allOldCopies) : ""}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
-   <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
-   </tr></thead><tbody>${rows.map(x => `<tr data-vol="${esc(x.name)}"${clusterAttr(x)}>
-     <td class="volname"><div class="volname-content"><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b> ${clusterTag(x)}
-       <span class="dim xs mono">${esc(x.namespace || "")}${x.node ? ` · ${esc(x.node.replace("harvester-", ""))}` : ""}</span>
-       ${volumeCopiesLine(x)}</div></td>
-     <td data-label="Attached to">${volumeUseCell(x)}${x.pod_status ? `<span class="dim xs"> · ${esc(x.pod_status)}</span>` : ""}</td>
-     <td data-label="Health" class="volhealth${volumeReason(x) || volumeBusy(x) ? " hasreason" : ""}">${volumeHealthCell(x)}</td>
-     <td data-label="Mode">${UI.chip((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "), "neutral")}
-       ${UI.chip(`×${x.replicas}`, +x.replicas === 1 || (x.copies?.length && x.copies.length < +x.replicas) ? "warn" : "neutral", { tip: volumeCopiesTip(x) })} ${UI.chip(x.engine === "v2" ? "V2" : "V1", x.engine === "v2" ? "info" : "neutral", { tip: x.engine === "v2" ? "Longhorn's V2 data engine (SPDK)." : "Longhorn's V1 data engine, the default." })}</td>
-     <td data-label="Usage" class="volusage">${volumeUsageCell(x)}</td>
-     <td data-label="Last used" class="small dim">${x.state === "attached" ? UI.chip("in use", "neutral") : esc(fmtAgo(x.last_used_secs))}</td>
+   <th>Volume</th><th>Used by</th><th>State</th><th>Copies</th><th>Files</th><th data-nosort>Actions</th>
+   </tr></thead><tbody>${rows.map(x => { const problem = volumeProblem(x); return `<tr data-vol="${esc(x.name)}" class="volrow${problem ? ` vol-problem ${problem.tone}` : ""}"${clusterAttr(x)}>
+     <td class="volname" data-sort="${esc(volumeTitle(x))}"><div class="volname-content"><button type="button" class="vol-open" data-card="volume|${esc(volumeKey(x))}" aria-label="Open details for ${esc(volumeTitle(x))}"
+       onclick="openDetails('volume',${jsq(volumeKey(x))})"><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b></button> ${clusterTag(x)}
+       <span class="dim xs">${esc(x.namespace || "")} · ${esc(x.size_gb)} GiB</span></div></td>
+     <td data-label="Used by">${volumeUseCell(x)}</td>
+     <td data-label="State" class="volhealth" data-sort="${problem ? (problem.tone === "bad" ? 0 : 1) : 2}"><div class="volstate" data-card="volume-health|${esc(volumeKey(x))}">${volumeHealthCell(x)}</div></td>
+     <td data-label="Copies" class="volcopies" data-sort="${(x.copies || []).filter(c => c.healthy).length}">${volumeCopyDots(x)}</td>
+     <td data-label="Files" class="volusage" data-sort="${x.filesystem?.used_pct ?? ""}">${volumeUsageCell(x)}</td>
      <td class="volactions" data-actions>${volumeActions(x)}</td>
-      </tr>`).join("") || `<tr><td colspan=7 class="empty">No volumes to show.</td></tr>`}
+      </tr>`; }).join("") || `<tr><td colspan=6 class="empty">No volumes to show.</td></tr>`}
    </tbody></table></div></div>
-  ${oldCopies.length ? `<div class="sec">Old copies ${tip("The original of a volume that was moved to another storage class, kept in case the new copy has a problem. Remove each one once its app works with the new copy.")}</div>
+  ${oldCopies.length ? `<div class="sec" id="volOldCopies">Old copies ${tip("The original of a volume that was moved to another storage class, kept in case the new copy has a problem. Remove each one once its app works with the new copy.")}</div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Was</th><th>Class</th><th>Size</th><th></th></tr></thead><tbody>
     ${oldCopies.map(o => `<tr><td><b>${esc(o.was)}</b><div class="dim xs mono">${esc(o.pv)}</div></td><td>${esc(o.storage_class)}</td><td class="mono">${esc(o.size)}</td>
       <td data-actions>${actionBar([{ label: "Remove old copy", run: `reclassRemoveOld(${jsq(o.pv)})`, need: "admin", danger: true }])}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
@@ -966,9 +923,9 @@ const attachedWorkloads = volume => volume.attached
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  volumeReason, volumeUse, volumeCopiesLine, volumeCopiesTip, volumeUseCell, volumeBusy, volumeProgressBar,
-  volumeHealthCell, volumeShortCell, volumeActions, forecastWhen, forecastDate, forecastTone, forecastFor,
-  forecastCard, volumeUsageCell, volumeProgressPoll, volumeProgressWatch, shareGuestWindowsNote, otherVolumesHtml,
+  volumeUse, volumeCopiesTip, volumeUseCell, volumeBusy, volumeProgressBar,
+  volumeHealthCell, volumeActionItems, volumeActions, forecastWhen, forecastDate, forecastTone, forecastFor,
+  volumeUsageCell, volumeProgressPoll, volumeProgressWatch, shareGuestWindowsNote, otherVolumesHtml,
   storageLoad, partReading, viewStorage, storagePaint, volumeDeleteConfirmationValid, releasedBesideCurrent,
   volumeDeleteTarget, v2Summary, V2_HOW, v2Mark, v2Item, storageClassesPaint, homesteadClassLine, storageClassCard,
   storageClassTags, fileSize, monacoBase, monacoLoading, monacoLanguage, loadMonaco, monacoTheme, mountEditor,

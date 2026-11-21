@@ -65,3 +65,22 @@ test("with no builder for its kind, or a builder that fails, there is no card an
   assert.equal(c.cardFor(element(c, "broken|x")), "");
   assert.equal(c.cardTarget(element(c, null)), null);
 });
+
+test("a card shown for an app on a linked cluster carries that cluster, so its link goes there", () => {
+  const c = load();
+  const made = { dataset: {}, style: {}, setAttribute() {}, addEventListener() {}, offsetWidth: 300, offsetHeight: 120 };
+  c.document.createElement = () => made;
+  c.document.body = { appendChild() {} };
+  c.innerWidth = 1440; c.innerHeight = 900;
+  c.HOVER_CARDS.app = () => "<b>card</b>";
+  const row = { dataset: { cluster: "secondary-example" } };
+  const owner = element(c, "app|x");
+  const closest = owner.closest;
+  owner.closest = sel => sel === "[data-cluster]" ? row : closest(sel);
+  Object.assign(owner, { setAttribute() {}, removeAttribute() {}, getAttribute: () => "", textContent: "x", getBoundingClientRect: () => ({ left: 10, top: 10, bottom: 30 }) });
+  assert.equal(c.showCard(owner), true);
+  assert.equal(made.dataset.cluster, "secondary-example");
+  owner.closest = closest;
+  c.showCard(owner);
+  assert.equal(made.dataset.cluster, undefined, "one on this cluster leaves it off");
+});

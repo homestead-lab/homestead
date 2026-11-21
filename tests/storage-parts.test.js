@@ -8,7 +8,7 @@ const STORAGE = require("./helpers/storage-source");
 
 const WEB = path.join(__dirname, "..", "web");
 // The order the sections had in views-storage.js.
-const PARTS = ["flow", "volumes", "shares", "events", "allocation", "disks", "copies", "reclass"].map(p => `views-storage-${p}.js`);
+const PARTS = ["flow", "volumes", "volume-details", "shares", "events", "allocation", "disks", "copies", "reclass"].map(p => `views-storage-${p}.js`);
 const tags = [...fs.readFileSync(path.join(WEB, "index.html"), "utf8").matchAll(/<script src="\/js\/([^"?]+)\?v=/g)].map(m => m[1]);
 const text = name => fs.readFileSync(path.join(WEB, "js", name), "utf8");
 

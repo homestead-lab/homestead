@@ -42,8 +42,9 @@ try {
     if ([1440, 390].includes(width)) await page.screenshot({ path: `release-assets/layout-checks/volume-layout-${width}.png`, fullPage: true });
     console.log(`Volume layout ${width}px: aligned, no horizontal page overflow`);
   }
-  assert.equal(await page.locator(".volusage").filter({ hasText: "27.8 GiB Longhorn footprint" }).count(), 1);
-  assert.ok(await page.locator(".volusage").filter({ hasText: "Filesystem usage unavailable" }).count() > 0);
+  // The footprint and the forecast are in the usage cell's hover card.
+  assert.match(await page.evaluate(() => HOVER_CARDS["volume-usage"]("pvc-demo-frigate")), /27\.8 GiB, snapshots included/);
+  assert.ok(await page.locator(".volusage").filter({ hasText: "Not measured" }).count() > 0);
   await page.evaluate(() => lhSnaps("pvc-demo-frigate", "frigate-config"));
   await page.locator(".snapshot-timeline").waitFor();
   for (const width of [1440, 390, 320]) {

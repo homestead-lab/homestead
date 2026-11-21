@@ -1133,14 +1133,42 @@ html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[
 /* Keep desktop td elements in table layout. Flex only their contents, so
    multi-line names, usage and health reasons share the same row boundaries. */
 .voltable .volname-content{display:flex;flex-direction:column;gap:3px;min-width:0}
-.vol-copies{overflow-wrap:anywhere}.vol-copies .warn{color:var(--med)}
+/* Volumes (design.md "Resource list"): the name opens the details sidebar, a
+   problem colours the row's edge and says why, copies are dots. */
+.voltable .vol-open{padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.voltable .vol-open:hover b{text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--mut)}
+.voltable .vol-open:focus-visible{border-radius:6px}
+.voltable .volstate{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+.vol-state{font-size:12.5px}
+.vol-reason{color:var(--mut);max-width:340px;overflow-wrap:anywhere;white-space:normal}
+.voltable tr.vol-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+.voltable tr.vol-problem.warn>td:first-child{box-shadow:inset 3px 0 0 var(--med)}
+.copydots{display:inline-flex;gap:4px;align-items:center;padding:3px 0}
+.copydot{width:9px;height:9px;border-radius:50%;background:var(--ok)}
+.copydot.warn{background:var(--med)}
+.copydot.missing{background:transparent;box-shadow:inset 0 0 0 1.5px var(--med)}
+.copydot.unknown{background:var(--mut)}
+/* The page's space as one bar, its figures in its hover card. */
+.storagebar{display:inline-flex;align-items:center;gap:10px;min-width:0}
+.storagebar .meter{width:180px;flex:0 0 auto}
+@media (max-width:560px){.sumitem:has(.storagebar){flex:1 1 100%;min-width:0;white-space:normal}.storagebar{flex-wrap:wrap;width:100%}.storagebar .meter{width:100%}}
+/* A page's one notice: what needs a person, a line each with its button. */
+.attention-list{margin-bottom:14px;display:grid;gap:2px}
+.attention-list .ctitle{margin-bottom:6px}
+.attention-item{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;gap:6px 10px;padding:7px 0;border-top:1px solid var(--line)}
+.attention-item:first-of-type{border-top:0}
+.attention-text{min-width:0}
+.attention-dot{width:8px;height:8px;border-radius:50%;background:var(--low)}
+.attention-item.warn .attention-dot{background:var(--med)}.attention-item.bad .attention-dot{background:var(--crit)}
+@media (max-width:560px){.attention-item{grid-template-columns:8px minmax(0,1fr);align-items:start}.attention-dot{margin-top:6px}.attention-item>.btn{grid-column:2;justify-self:start}}
+.details-icon{display:grid;place-items:center;width:34px;height:34px;flex:0 0 34px;border-radius:10px;background:var(--surf2);color:var(--mut)}
+.details-icon .btnicon{width:17px;height:17px}
 .voltable .volname b{line-height:1.3;overflow-wrap:anywhere}
-.voltable .volname .mono{font-size:10px;line-height:1.3}
 .voltable .volusage{min-width:150px}
 .voltable .volusage-body{display:flex;flex-direction:column;align-items:stretch;gap:3px;flex:1;min-width:0}
 .voltable .volusage-line{display:flex;align-items:center;gap:8px;min-width:0}
 .voltable .volusage .meter{flex:1}
-.voltable .volusage .mono{font-size:10px;white-space:normal;overflow-wrap:anywhere}
+.voltable .volusage .mono{font-size:10px;white-space:nowrap}
 .voltable td{vertical-align:middle}
 .voltable .volactions{width:1%;white-space:nowrap}
 .snapshot-timeline{position:relative;display:flex;flex-direction:column;gap:14px;padding:12px 0}
@@ -1695,9 +1723,9 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .movecard.blocked:hover{transform:none;box-shadow:none;border-color:var(--line)}
 @media(max-width:560px){.movegrid,.smart-threshold-values{grid-template-columns:1fr}}
 
-/* Narrower than this the seven columns cannot fit. Rather than a card with a
+/* Narrower than this the six columns cannot fit. Rather than a card with a
    heading per line, each volume folds into three: what it is and what can be
-   done to it, then its state as chips, then how full it is. No side scroll. */
+   done to it, then its state, copies and users, then how full it is. No side scroll. */
 @media(max-width:1080px){
   .voltable{overflow:visible}
   .voltable table,.voltable tbody,.voltable tr{display:block;width:100%}
@@ -1715,13 +1743,16 @@ html[data-theme="light"] .compose-editor{background:#fff}
   /* A flex item of its own, full width and no height: it ends the first line
      so the name keeps the actions company and nothing else joins them. */
   .voltable tr::after{content:"";flex:1 1 100%;order:2;height:0}
-  .voltable td[data-label="Health"]{order:3}
-  .voltable td[data-label="Mode"]{order:4}
-  .voltable td[data-label="Last used"]{order:5}
-  .voltable td[data-label="Attached to"]{order:6;flex:0 1 auto;flex-wrap:wrap}
-  /* Why a volume is unhealthy is a sentence, so it takes a line of its own
+  .voltable td[data-label="State"]{order:3}
+  .voltable td[data-label="Copies"]{order:4}
+  .voltable td[data-label="Used by"]{order:5;flex:0 1 auto;flex-wrap:wrap}
+  /* Why a volume has a problem is a sentence, so it takes a line of its own
      rather than stretching the one the chips sit on. */
-  .voltable td.hasreason{flex:1 1 100%;flex-wrap:wrap}
+  .voltable tr.vol-problem td.volhealth{flex:1 1 100%;flex-wrap:wrap}
+  .voltable .volstate{flex-wrap:wrap}
+  .voltable tr.vol-problem>td:first-child{box-shadow:none}
+  .voltable tr.vol-problem.bad{box-shadow:inset 3px 0 0 var(--crit)}
+  .voltable tr.vol-problem.warn{box-shadow:inset 3px 0 0 var(--med)}
   .voltable .volusage{order:7;flex:1 1 100%;min-width:0}
   .voltable .volusage .mono{flex:0 0 auto}
   .voltable .volume-reason{flex:1 1 100%;max-width:none;margin:0}
@@ -3884,11 +3915,6 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
   background:var(--surf2);color:var(--tx);box-shadow:0 10px 30px rgba(0,0,0,.45);font-size:13.5px;max-width:calc(100vw - 32px)}
 
 /* Filling up: the storage forecast on Volumes (views-storage-volumes.js). */
-.forecast-card{margin-bottom:14px}.forecast-list{display:grid;gap:8px;margin-top:10px}
-.forecast-row{display:flex;align-items:center;gap:12px;min-width:0}.forecast-row .ui-chip{flex:none}
-.forecast-name{display:grid;min-width:0}.forecast-name b,.forecast-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.forecast-empty{margin-top:8px}.forecast-tag{justify-self:start;align-self:flex-start;width:max-content;max-width:100%}
-@media (max-width:560px){.forecast-row{align-items:flex-start;flex-direction:column;gap:4px}.forecast-name span{white-space:normal}}
 
 /* Change history (changes.js). */
 .history-list{display:grid;gap:10px;max-height:min(60vh,560px);overflow:auto}
@@ -4155,6 +4181,8 @@ button.a2port{font-family:inherit;line-height:inherit}
 .details-tabs button{border:0;background:transparent;color:var(--mut);font:inherit;font-weight:600;padding:6px 14px;border-radius:10px;cursor:pointer}
 .details-tabs button.on{background:var(--tx);color:#000}
 .details-tab{display:flex;flex-direction:column;gap:14px;min-width:0}
+/* A narrow sidebar lets its three buttons and ⋯ take a second line rather than run off it. */
+.details-actions .actionbar{flex-wrap:wrap;row-gap:6px}
 .details-tab .wl-detail-more{margin:0;grid-template-columns:minmax(0,1fr)}
 .details-tab .workloadtree{margin:0}
 .details-tab .ui-facts .waccess,.details-tab .ui-facts .row{gap:6px;flex-wrap:wrap}

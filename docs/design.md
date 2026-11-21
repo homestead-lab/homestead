@@ -235,6 +235,14 @@ instead. `.about-grid` markup gets the same icons in `paint()` and
 adds a pattern to `FACT_ICONS` and a line to `tests/fact-icons.test.js`
 rather than falling back to the generic icon.
 
+**The attention list.** When something on a page needs a person, one card
+under the summary line lists it, a line each: a sentence naming it, a short
+reason, and the button that deals with it, such as "frigate-config is full in
+about 11 days" with Expand volume. It is the page's one notice, it replaces
+separate panels such as Filling up, and a page with nothing to do shows none.
+Volumes lists filling volumes and disks, volumes short of a copy, volumes no
+app uses and old copies (`volumeAttention()`).
+
 **Hover cards.** A status, a figure or a name that has more to say than a
 tooltip shows a card: a title and its chip, three or four facts with their
 icons, a small chart (`UI.spark`) or uptime strip (`UI.strip`) where the trend

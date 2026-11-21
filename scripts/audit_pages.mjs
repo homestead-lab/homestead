@@ -55,6 +55,7 @@ const PAGES = [
   ["helm", "helm"],
   ["shares", "shares"],
   ["volumes", "storage"],
+  ["volumes-details", "storage", "document.querySelector('.vol-open')?.click()"],
   ["image-cache", "images"],
   ["data-protection", "protect"],
   ["data-protection-filtered", "protect", "protectFilter({show:'never'},true)"],
