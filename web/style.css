@@ -4125,6 +4125,21 @@ button.a2port{font-family:inherit;line-height:inherit}
 .week-clashes{margin:6px 0}
 .week-clashes li{overflow-wrap:anywhere}
 .week-summary .ui-help{margin-top:4px}
+/* One bar (design.md): on a computer the page's title, its tabs and its main
+   actions share the top bar; the breadcrumb goes, and the cluster switch moves
+   under the brand. A phone keeps its own layout. */
+.pagebar{display:none}
+@media (min-width:901px){
+  #crumb{display:none}
+  .topleft>div:not(.pagebar){display:flex;align-items:center}
+  .pagebar:not([hidden]){display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 auto}
+  .pagebar .pagetabs{margin:0}
+  .pagebar .page-actions{margin-left:auto;flex-wrap:nowrap}
+  .searchwrap{width:230px;flex:0 0 230px}
+  .searchwrap .search{min-width:0;width:100%}
+  .whoami .nm,.whoami .rolechip{display:none}
+  .fleet-slot:not(:empty){margin-top:6px}
+}
 /* The details sidebar (design.md): everything about one row, at the right,
    over the list; a sheet from the bottom on a phone. */
 .details-panel{width:min(500px,94vw);display:flex;flex-direction:column;overflow:hidden;z-index:95;background:rgba(15,15,17,.97)}

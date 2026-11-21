@@ -41,7 +41,12 @@ function routeParamsForView(v, extra = {}) {
 
 function renderBreadcrumb(v, detail = "") {
   const host = $("#crumb");
-  host.innerHTML = (window.fleetCrumb ? fleetCrumb() : "") + HomesteadRouter.breadcrumbs(v, detail).map((item, index) => {
+  // The cluster switch is shown under the brand, where it stays visible now
+  // that a computer shows no breadcrumb (design.md "One bar").
+  const slot = $("#fleetSlot");
+  const fleet = window.fleetCrumb ? fleetCrumb() : "";
+  if (slot) slot.innerHTML = fleet.replace(/<span class="crumbsep"[^>]*>\/<\/span>\s*$/, "");
+  host.innerHTML = fleet + HomesteadRouter.breadcrumbs(v, detail).map((item, index) => {
     const sep = index ? '<span class="crumbsep" aria-hidden="true">/</span>' : "";
     if (item.current) return sep + `<span aria-current="page">${esc(item.label)}</span>`;
     // A section, or a detail with no page behind it, is text rather than a link.
