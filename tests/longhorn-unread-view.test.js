@@ -11,10 +11,10 @@ for (const f of ["web/js/ui.js", ...require("./helpers/storage-source").files(),
 
 test("a volume whose copies Longhorn couldn't read says copies unknown, not one copy", () => {
   const x = { name: "pvc-1", replicas: 2, copies: null };
-  assert.match(context.volumeCopiesLine(x), /copies unknown/);
+  assert.match(context.volumeCopyDots(x), />Unknown</);
   assert.match(context.volumeCopiesTip(x), /could not be read/);
   assert.doesNotMatch(context.volumeCopiesTip(x), /^2 copies$/);
-  assert.equal(context.volumeCopiesLine({ ...x, copies: [] }), "");
+  assert.match(context.volumeCopyDots({ ...x, copies: [] }), /aria-label="2 copies"/, "no copies listed yet is not a missing copy");
 });
 
 test("an unknown verdict that says why shows the reason on the pill, on every page", () => {

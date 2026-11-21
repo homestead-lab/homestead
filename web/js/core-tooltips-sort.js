@@ -91,6 +91,9 @@ function showCard(owner) {
     document.body.appendChild(el);
   }
   cardOwner = owner;
+  // A link in the card is about its element's cluster, as a click in its row is (fleet.js).
+  const cluster = owner.closest("[data-cluster]")?.dataset.cluster;
+  if (cluster) el.dataset.cluster = cluster; else delete el.dataset.cluster;
   owner.setAttribute("aria-describedby", "uiCard");
   el.setAttribute("aria-label", owner.getAttribute("aria-label") || owner.textContent.trim().slice(0, 80) || "Details");
   el.innerHTML = html;

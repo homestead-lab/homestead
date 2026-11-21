@@ -64,14 +64,14 @@ test("each part is drawn when its own read returns", async () => {
   await settle();
   answer("/api/volumes"); await settle();
   answer("/api/storage"); await settle();
-  assert.match(last(), /<b>321 GiB<\/b> free of 400/);
+  assert.match(last(), /321 GiB of 400 GiB is free/);
   assert.doesNotMatch(last(), /old-data/);
   answer("/api/volumes/old-copies"); await settle();
   assert.match(last(), /old-data/);
   for (const p of ["/api/storage/classes", "/api/storage/v2", "/api/longhorn/capacity", "/api/storage/forecast", "/api/volumes/other"]) answer(p);
   await done;
   assert.match(last(), /scratch-cache/);
-  assert.match(last(), /Filling up/);
+  assert.match(last(), /Needs attention[\s\S]*1 old copy is<\/b>|Needs attention[\s\S]*1 old copy is kept/, "the old copy is in the attention list");
   assert.doesNotMatch(last(), /Reading the/);
 });
 
