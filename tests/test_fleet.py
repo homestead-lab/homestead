@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import socket
+import ssl
 import sys
 import threading
 import time
@@ -648,6 +649,204 @@ class MemberAnswerBoundTests(unittest.TestCase):
             view = a.fleet.summary()
         self.assertLess(time.monotonic() - started, 0.55, "joined one after another")
         self.assertEqual(3, len(view["members"]))
+
+
+class MemberCallDeadlineTests(unittest.TestCase):
+    """urllib's timeout is per wait on the socket: a member that sent its TLS
+    handshake, status line, headers or refusal a byte at a time held the call
+    (the Fleet page, a link or a remove) for as long as it kept sending. A real
+    local socket trickles here, as in the Uptime tests (#1018)."""
+
+    def far_end(self, speak):
+        """A port whose every connection is handed to speak(conn, stop)."""
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+        self.addCleanup(listener.close)
+
+        def run(conn):
+            try:
+                speak(conn, stop)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        def accept():
+            while not stop.is_set():
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return
+                threading.Thread(target=run, args=(conn,), daemon=True).start()
+        threading.Thread(target=accept, daemon=True).start()
+        return listener.getsockname()[1]
+
+    def within_the_deadline(self, ask):
+        """What ask() returned or raised, asserting it ended by the 0.5 s
+        deadline; on a worker thread, so a call that keeps reading fails the
+        test instead of hanging the run."""
+        outcome = []
+
+        def run():
+            try:
+                outcome.append(ask())
+            except Exception as error:      # noqa: BLE001 - the test reads what came out
+                outcome.append(error)
+        started = time.monotonic()
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(5)
+        self.assertFalse(worker.is_alive(), "the call is still reading")
+        self.assertLess(time.monotonic() - started, 1.5, "the deadline is 0.5 s")
+        return outcome[0]
+
+    def ends_by_the_deadline(self, speak, scheme="http", method="GET", said="no answer within 0.5 seconds",
+                             refused=False):
+        fleet = fresh_module("fleet_deadline")
+        url = f"{scheme}://127.0.0.1:{self.far_end(speak)}"
+        outcome = self.within_the_deadline(lambda: fleet._json(
+            url, method, "/api/fleet/state", {} if method == "POST" else None, timeout=0.5))
+        self.assertIsInstance(outcome, ValueError if refused else fleet.Unreachable)
+        self.assertEqual(said, str(outcome))
+
+    def test_a_member_that_accepts_and_never_answers_ends_by_the_deadline(self):
+        self.ends_by_the_deadline(lambda conn, stop: stop.wait(10))
+
+    def test_a_member_that_trickles_its_status_line_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            for byte in b"HTTP/1.1 200 OK\r\n" * 50:
+                if stop.wait(0.1):
+                    return
+                conn.sendall(bytes([byte]))
+        self.ends_by_the_deadline(speak)
+
+    def test_a_member_that_trickles_its_headers_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.1):
+                conn.sendall(b"X")
+        self.ends_by_the_deadline(speak, method="POST")
+
+    def test_a_redirect_to_a_far_end_that_trickles_its_headers_ends_by_the_deadline(self):
+        """The connection a followed redirect makes is watched like the first one."""
+        def slow(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.1):
+                conn.sendall(b"X")
+        there = self.far_end(slow)
+
+        def moved(conn, stop):
+            conn.recv(4096)
+            conn.sendall(f"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{there}/api/fleet/state\r\n"
+                         "Content-Length: 0\r\nConnection: close\r\n\r\n".encode())
+        self.ends_by_the_deadline(moved)
+
+    def trickled_refusal(self, status):
+        def speak(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 " + status + b"\r\nContent-Type: application/json\r\n"
+                         b"Content-Length: 4000\r\n\r\n{\"error\": \"")
+            while not stop.wait(0.1):
+                conn.sendall(b"x")
+        return speak
+
+    def test_a_refusal_whose_reason_trickles_ends_by_the_deadline_and_stays_a_refusal(self):
+        # Its status line arrived: the member answered, so a refused sign-in
+        # does not read as a member out of reach. The cut reason is dropped.
+        self.ends_by_the_deadline(self.trickled_refusal(b"403 Forbidden"), said="HTTP 403", refused=True)
+
+    def test_a_failure_whose_reason_trickles_ends_by_the_deadline_as_not_answering(self):
+        self.ends_by_the_deadline(self.trickled_refusal(b"503 Service Unavailable"), said="HTTP 503")
+
+    def test_a_tls_member_that_trickles_its_handshake_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)                       # the ClientHello
+            # A 16 KiB handshake record opening a ServerHello, then a byte at a time.
+            conn.sendall(b"\x16\x03\x03\x40\x00" + b"\x02\x00\x3f\xfc")
+            while not stop.wait(0.1):
+                conn.sendall(b"\x00")
+        self.ends_by_the_deadline(speak, scheme="https")
+
+    def test_a_tls_member_that_trickles_its_headers_after_the_handshake_ends_by_the_deadline(self):
+        """Every real member is https: the watchdog must hold the TLS socket,
+        which takes the descriptor over from the plain one when it wraps it.
+        (Python already caps the handshake itself; the headers it does not.)"""
+        import tempfile
+        from test_real_answers import _certificate
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        cert, key = _certificate(folder.name)
+        server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server.load_cert_chain(cert, key)
+        shaken = threading.Event()
+
+        def speak(conn, stop):
+            with server.wrap_socket(conn, server_side=True) as tls:
+                shaken.set()
+                tls.recv(4096)
+                tls.sendall(b"HTTP/1.1 200 OK\r\n")
+                while not stop.wait(0.1):
+                    tls.sendall(b"X")
+        made = ssl.create_default_context
+        with mock.patch.object(ssl, "create_default_context", lambda *a, **k: made(cafile=cert)):
+            self.ends_by_the_deadline(speak, scheme="https")
+        self.assertTrue(shaken.is_set(), "the handshake finished: the headers are what trickled")
+
+    def test_a_call_leaves_no_watchdog_running(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+        fleet = fresh_module("fleet_tidy")
+        before = set(threading.enumerate())
+        self.assertEqual({}, fleet._json(f"http://127.0.0.1:{self.far_end(speak)}", "GET", "/api/fleet/hello",
+                                         timeout=30)[0])
+        timers = [t for t in threading.enumerate() if t not in before and isinstance(t, threading.Timer)]
+        for timer in timers:
+            timer.join(1)
+        self.assertEqual([], [t for t in timers if t.is_alive()], "a 30 s watchdog outlived its call")
+
+    def test_a_member_that_answers_in_time_is_read_whole(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            for part in (b"HTTP/1.1 200 OK\r\n", b"Content-Type: application/json\r\n",
+                         b"Content-Length: 11\r\n\r\n", b'{"ok":true}'):
+                conn.sendall(part)
+                stop.wait(0.05)
+        fleet = fresh_module("fleet_in_time")
+        payload, response = fleet._json(f"http://127.0.0.1:{self.far_end(speak)}", "GET", "/api/fleet/hello",
+                                        timeout=2)
+        self.assertEqual({"ok": True}, payload)
+        self.assertEqual("application/json", response.headers.get("Content-Type"))
+
+    def test_a_refusal_in_time_still_gives_its_reason(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            body = b'{"error": "wrong password"}'
+            conn.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n"
+                         b"Content-Length: %d\r\n\r\n%s" % (len(body), body))
+        fleet = fresh_module("fleet_refusal")
+        with self.assertRaises(ValueError) as caught:
+            fleet._json(f"http://127.0.0.1:{self.far_end(speak)}", "GET", "/api/fleet", timeout=2)
+        self.assertEqual("wrong password", str(caught.exception))
+
+    def test_a_call_to_a_member_that_runs_out_of_time_names_it(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.1):
+                conn.sendall(b"X")
+        fleet = fresh_module("fleet_call")
+        target = {"id": "m-1", "name": "shed", "url": f"http://127.0.0.1:{self.far_end(speak)}"}
+        with mock.patch.object(fleet, "sign", return_value={}):
+            outcome = self.within_the_deadline(lambda: fleet.call(target, "GET", "/api/fleet/hello", timeout=0.5))
+        self.assertIsInstance(outcome, fleet.Unreachable)
+        self.assertEqual("shed: no answer within 0.5 seconds", str(outcome))
 
 
 class SummaryStragglerTests(unittest.TestCase):

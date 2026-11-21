@@ -47,6 +47,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, wait
 import time
 
+from homestead_fetch import Cut
 import homestead_outage as OUTAGE
 import homestead_shared as SHARED
 
@@ -323,7 +324,7 @@ def probe(t, timeout=TIMEOUT):
         except OSError as e:
             return {"ok": False, "ms": None, "code": None, "error": _why(e)}
         connected = int((time.monotonic() - started) * 1000)
-        cut = _Cut(raw, deadline)
+        cut = Cut(raw, deadline)
         sock = raw
         if t["scheme"] == "https":
             context = ssl.create_default_context()
@@ -370,52 +371,6 @@ def _host(host, port, scheme):
     """The Host header: the port only when it is not the scheme's own, as
     HTTPSConnection would send it (the request goes out on our own socket)."""
     return host if int(port) == {"http": 80, "https": 443}.get(scheme) else f"{host}:{port}"
-
-
-class _Cut:
-    """Shuts the probe's socket at deadline (time.monotonic()), whatever it
-    is waiting for: http.client's timeout is per wait on the socket, so an
-    answer that trickles in (a TLS handshake, a status line, then up to 100
-    headers of 64 KB) kept a probe, and its thread, going for as long as the
-    far end liked. It holds the socket itself, not conn.sock, which is set
-    late; under TLS, use() hands it the wrapping socket, which owns the
-    descriptor from then on."""
-
-    def __init__(self, sock, deadline):
-        self.fired = threading.Event()
-        self._lock = threading.Lock()
-        self._sock = sock
-        self._timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._fire)
-        self._timer.daemon = True
-        self._timer.start()
-
-    def _shut(self):
-        try:
-            # The plain socket's own shutdown: under TLS it ends the read too.
-            socket.socket.shutdown(self._sock, socket.SHUT_RDWR)
-        except OSError:
-            pass
-
-    def _fire(self):
-        with self._lock:
-            self.fired.set()
-            self._shut()
-
-    def use(self, sock):
-        with self._lock:
-            self._sock = sock
-            if self.fired.is_set():     # it fired while the socket changed hands
-                self._shut()
-
-    def cancel(self):
-        self._timer.cancel()
-
-    def close(self):
-        with self._lock:
-            try:
-                self._sock.close()
-            except OSError:
-                pass
 
 
 def _hour(now):
