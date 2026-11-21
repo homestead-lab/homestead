@@ -29,7 +29,7 @@ test("a VM's Configure VIP / ports button names the VM's namespace",async()=>{
    as one facts panel; conditions in UI.more; the shared section tabs; a Close footer. */
 const shown={...detail,ip:"192.0.2.60",ips:["192.0.2.60","192.0.2.61"],
   conditions:[{type:"Ready",status:"True",reason:"",message:""}]};
-const facts=html=>[...(html.match(/<dl class="ui-facts">[\s\S]*?<\/dl>/)||[""])[0].matchAll(/<dt>([^<]*)<\/dt><dd>([\s\S]*?)<\/dd>/g)].map(m=>[m[1],m[2]]);
+const facts=html=>[...(html.match(/<dl class="ui-facts">[\s\S]*?<\/dl>/)||[""])[0].matchAll(/<dt>(?:<svg[^>]*><use[^>]*\/><\/svg>)?([^<]*)<\/dt><dd>([\s\S]*?)<\/dd>/g)].map(m=>[m[1],m[2]]);
 test("a VM's dialog leads with its address and host, then its figures, as one facts panel",async()=>{
   const t=open(shown);await t.ctx.vmOpen("lab","guest");
   const pairs=facts(t.body.innerHTML);
