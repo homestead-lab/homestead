@@ -828,8 +828,6 @@ class CatalogueTests(unittest.TestCase):
                          "/api/operations/vm-recovery/remove", "/api/statefulset/restart-elsewhere",
                          "/api/restore-swap", "/api/volumes/previous/swap-back"),
                         "recovery after a failure is a person's judgement; restore_backup restores a backup"),
-        "/api/restore-tests/run": "a test restore runs on the restore-test schedule an admin set; a held tool "
-                                  "for it is on the wrap-up list",
         **dict.fromkeys(("/api/image-updates/channel", "/api/restore-tests/settings", "/api/weekly-trim/settings",
                          "/api/volumes/previous/settings", "/api/portal", "/api/homestead/data/tidy",
                          "/api/setup/https-check", "/api/setup/opened", "/api/welcome/done"),

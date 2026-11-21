@@ -305,8 +305,10 @@ an empty one. A copy of an app that runs privileged runs privileged too, and its
 result says so.
 
 **Data Protection › Restore tests** lists every app with Longhorn volumes, what a
-test would restore and its last result. **Test now** runs one (admin). **Test each
-app every 30 days** - off until you turn it on - tests the app longest untested,
+test would restore and its last result. **Test now** runs one (admin); an AI
+agent can ask for one with `run_restore_test`, and an administrator approves it,
+or it starts at once for a key an administrator set to act without approval.
+**Test each app every 30 days** - off until you turn it on - tests the app longest untested,
 one at a time, outside the maintenance window, and only when Longhorn has room
 for the restored volumes.
 

@@ -39,6 +39,7 @@ import homestead_auth as AUTH
 import homestead_changes as CHANGES
 import homestead_env_secrets as ENVSEC
 import homestead_host_access as HOSTACCESS
+import homestead_restore_test as RESTORE_TEST
 import homestead_routes as ROUTER
 
 READ, CHANGE, DESTRUCTIVE = "read", "change", "destructive"
@@ -526,6 +527,38 @@ def _plan_restore(args, ctx):
             {"backup": backup, "namespace": ns, "name": name})
 
 
+def _plan_restore_test(args, ctx):
+    """Test now, for an app Data protection's list offers it for: one with a
+    volume it can restore, and while no other test runs (of any app, as
+    run_now checks). The route itself takes any app; the tool reaches no
+    further than the page's button."""
+    ns, name = _name(args.get("namespace"), "namespace"), _name(args.get("name"), "name")
+    apps = call("GET", "/api/restore-tests", **_as(ctx)).get("apps") or []
+    found = next((a for a in apps if a.get("ns") == ns and a.get("name") == name), None)
+    if found is None:
+        raise ToolError(f"{ns}/{name} is not an app Data protection lists for restore tests: those are apps "
+                        "with Longhorn volumes, other than Homestead's own and the platform's")
+    if not found.get("restores"):
+        why = "; ".join(f"{w.get('claim')}: {w.get('why')}" for w in found.get("without") or [])
+        raise ToolError(f"{ns}/{name} has no volume a restore test can restore ({why or 'no completed backup'})")
+    jobs = call("GET", "/api/operations", **_as(ctx))
+    jobs = jobs.get("operations", []) if isinstance(jobs, dict) else jobs or []
+    if any(isinstance(j, dict) and j.get("kind") == RESTORE_TEST.KIND
+           and j.get("status") not in ("succeeded", "failed", "cancelled") for j in jobs):
+        raise ToolError("A restore test is already running. Only one runs at a time.")
+    dep = _bound["kget"](f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    summary = {"action": f"Run a restore test of {ns}/{name}",
+               "test": "Restores the newest backup of each volume into new volumes in the app's namespace, starts a "
+                       "fenced copy of the app on them, checks it answers, then removes everything the test made",
+               "restores": [r.get("claim") for r in found["restores"]],
+               "new_volumes_gb": round(sum(float(r.get("size_gb") or 0) for r in found["restores"]), 1),
+               "skipped": [f"{w.get('claim')}: {w.get('why')}" for w in found.get("without") or []],
+               "changes": "No app's data and no backup; the result is recorded on the app"}
+    if RESTORE_TEST.privileged(dep):
+        summary["privileged"] = "The app runs a privileged container, so its copy runs privileged too"
+    return summary, {"ns": ns, "name": name}
+
+
 def _plan_reclass(args, ctx):
     body = {"namespace": _name(args.get("namespace"), "namespace"), "claim": _name(args.get("name"), "volume name"),
             "target": _name(args.get("storage_class"), "storage class")}
@@ -906,6 +939,13 @@ TOOLS = [
          "Asks to delete a backup from the backup target. A person must approve it in Homestead.",
          {"backup": S}, ["backup"], plan=_plan_delete_backup, execute=_route("POST", "/api/lh/backup/delete"),
          role="admin"),
+    Tool("run_restore_test", "Run a restore test", "storage:manage", DESTRUCTIVE,
+         "Asks to check that an app's backups restore, as Test now on Data protection does: the newest backup of "
+         "each volume is restored into new volumes of the same size in the app's namespace, a fenced copy of the "
+         "app starts on them, and everything the test made is removed. No app's data and no backup changes; the "
+         "result is recorded on the app. One test runs at a time. A person must approve it in Homestead.",
+         {"namespace": NS, "name": {"type": "string", "description": "The app's name"}}, ["namespace", "name"],
+         plan=_plan_restore_test, execute=_route("POST", "/api/restore-tests/run"), role="admin"),
     Tool("change_storage_class", "Change a volume's storage class", "storage:manage", DESTRUCTIVE,
          "Asks to move a volume's data to another storage class; what uses it stops while it copies. A person "
          "must approve it in Homestead.", {"namespace": NS, "name": NAME_ARG, "storage_class": S},
