@@ -24,7 +24,7 @@ test("the labels a details panel uses get the icon for what they are", () => {
     Host: "node", CPU: "chip", "Guest OS": "vm", "Live migration": "move", "Run strategy": "power", Kernel: "layers",
     Access: "link", Image: "layers", Volumes: "disk", Uptime: "pulse", State: "pulse", "Last snapshot": "snapshot",
     "Last backup": "shield", Created: "clock", Hardware: "chip", "Windows path": "link", Temperature: "thermo",
-    "Applied by": "user", Apps: "box", Network: "network", Ports: "port",
+    "Applied by": "user", Apps: "box", Network: "network", Ports: "port", "Web check": "pulse", Checked: "clock",
   };
   for (const [label, icon] of Object.entries(expect)) assert.equal(UI.factIcon(label), icon, label);
 });
