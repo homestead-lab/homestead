@@ -278,6 +278,16 @@ test("reviewChanged names only what the person did not see", () => {
   assert.match(t.ctx.reviewChanged(base, {...base, capacity_token:""}), /could not be checked again/);
 });
 
+test("a warning whose live figures moved is not a new warning (immich-stack, Nov 2026)", () => {
+  const t = setup();
+  const review = (...warnings) => ({capacity_token:"x", capacity:{blocked:false, warnings, candidates:[]},
+    images:[{container:"redis", after:"r@d"}, {container:"immich-db", after:"p@d"}]});
+  const before = review("projected RAM reaches 89.2% (warning at 88%)");
+  assert.equal(t.ctx.reviewChanged(before, review("projected RAM reaches 89.4% (warning at 88%)")), "");
+  assert.match(t.ctx.reviewChanged(before, review("projected RAM reaches 89.4% (warning at 88%)", "less than 6.3 GiB host reserve remains")),
+    /^A new warning: less than 6\.3 GiB host reserve remains\.$/);
+});
+
 test("a stopped queue counts each app once and offers Skip only on the failure that stopped it", async () => {
   const t = setup({failApply: body => ["app", "other"].includes(body.name) ? "Placement or memory needs a fresh review" : ""});
   await t.ctx.reviewImageActions([{ns:"lab",name:"app"},{ns:"lab",name:"other"},{ns:"lab",name:"third"}]);
