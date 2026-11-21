@@ -92,7 +92,7 @@ try {
     return d ? [...(d.shell || d).querySelectorAll(".actionmenu-pop button")].map(b => b.textContent.trim()) : null;
   }, MENU);
   const before = await items();
-  assert.ok(before?.includes("Stop") && !before.includes("Start"), `frigate's menu offers Stop: ${JSON.stringify(before)}`);
+  assert.ok(before?.includes("Stop app") && !before.includes("Start app"), `frigate's menu offers Stop app: ${JSON.stringify(before)}`);
   await page.locator(`${MENU} > summary`).click();
   await page.locator("details.actionmenu-portal[open]").waitFor({ state: "attached" });
   // Closing the menu puts it back in its row, a change the page watcher would see and so make the
@@ -109,12 +109,12 @@ try {
   });
   assert.deepEqual(stopped, { watcher: true, hashForgotten: true },
     "the page has a paint watcher to stop, and the paint that left the open menu behind forgot its hash");
-  assert.ok((await items()).includes("Stop"), "the open menu is left as it was");
+  assert.ok((await items()).includes("Stop app"), "the open menu is left as it was");
   await page.keyboard.press("Escape");
   await page.locator("details.actionmenu-portal").waitFor({ state: "detached" });
   for (let tick = 0; tick < 2; tick++) await page.evaluate(() => refresh(true));
   const after = await items();
-  assert.ok(after?.includes("Start") && !after.includes("Stop"), `once closed, frigate's menu offers Start, not Stop: ${JSON.stringify(after)}`);
+  assert.ok(after?.includes("Start app") && !after.includes("Stop app"), `once closed, frigate's menu offers Start app, not Stop app: ${JSON.stringify(after)}`);
   assert.deepEqual(errors, []);
   console.log("failed icon asked for once over 3 refreshes; loaded icon kept; keyed rows keep node and focus");
 } finally { await browser.close(); }

@@ -506,7 +506,6 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 }
 /* Pills and tags left are buttons and links (pillbtn, tagbtn, linkish) and a few
    special shapes; every status chip is UI.chip (#543). */
-.pill.crit{background:linear-gradient(135deg,#ff4d4f,#ff2d55);color:#fff;box-shadow:0 3px 14px rgba(255,77,79,.35)}
 .pill.low{background:rgba(255,255,255,.08);color:#d2d2da;border:1px solid var(--line2)}
 /* warn and info were used across the app with no style, so they read as bare text. */
 .pill{white-space:nowrap}
@@ -1534,7 +1533,7 @@ th.sortable[aria-sort="descending"]::after{content:" ↓";color:var(--tx)}
    says why under its chip (design.md "Resource list"). */
 .wltable .wl-open{display:flex;align-items:center;gap:9px;min-width:0;max-width:100%;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .wltable .wl-open:hover b{text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--mut)}
-.wltable .wl-open:focus-visible{outline:2px solid var(--low);outline-offset:2px;border-radius:6px}
+.wltable .wl-open:focus-visible{border-radius:6px}
 .wltable .wl-hardware{display:inline-flex;gap:4px;vertical-align:middle;margin-left:4px}
 .wltable .wl-hardware .ui-chip{height:auto;padding:1px 6px;font-size:10px}
 .wltable .wl-state{font-size:12.5px}
@@ -3008,7 +3007,8 @@ html[data-theme="light"] .settings-nav button.on{background:rgba(0,0,0,.06)}
     font:650 13px "Inter Tight",sans-serif;padding:10px 12px;margin-bottom:12px;cursor:pointer}
 }
 /* Containers: the count and the group chips share the line under the tabs. */
-.phead>div:first-child:has(.wgroup-bar){display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;column-gap:16px;row-gap:8px;min-width:0}
+/* The summary wraps beside the group chips rather than pushing them off the page. */
+.phead>div:first-child:has(.wgroup-bar){display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:16px;row-gap:8px;min-width:0}
 .phead>div:first-child:has(.wgroup-bar)>.pagetabs{grid-column:1/-1;justify-self:start;margin-bottom:2px}
 .phead .wgroup-bar{margin:0;justify-self:start;min-width:0}
 /* A header's actions stay on one line beside its title on the desktop. */

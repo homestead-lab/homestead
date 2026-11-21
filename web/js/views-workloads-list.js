@@ -65,7 +65,7 @@ function workloadSummary(rows, { q = "", group = "", updateCount = 0, updateErro
     shown.length ? `${shown.join(", ")}${more}.` : "",
     stopped && running.length ? `${plural(stopped, "app is", "apps are")} stopped.` : "",
     updateCount ? `<button type="button" class="linkish sum-link" onclick="imageUpdateCenter()">${updateCount === 1 ? "An update is" : "Updates are"} ready for ${plural(updateCount, "app", "apps")}.</button>` : "",
-    updateErrors ? `<button type="button" class="linkish sum-link sum-bad" onclick="imageUpdateCenter()" data-tip="Every other image was compared with its registry">${plural(updateErrors, "image", "images")} could not be checked.</button>` : "",
+    updateErrors ? `<button type="button" class="linkish sum-link sum-bad sum-checks" onclick="imageUpdateCenter()" data-tip="Every other image was compared with its registry">${plural(updateErrors, "image", "images")} could not be checked.</button>` : "",
     unchecked ? `<span data-tip="Stopped or still starting, so not yet compared with their registries. They are marked ? in the list.">${plural(unchecked, "image has", "images have")} not been checked yet.</span>` : current ? "Every image is current." : "",
   ].filter(Boolean).join(" ");
 }

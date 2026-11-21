@@ -136,12 +136,14 @@ async function audit([label, width, height, mobile], items) {
       if (after) { await page.evaluate(after); await page.waitForTimeout(900); }
       await page.evaluate(() => window.scrollTo(0, 0));
       const metrics = await page.evaluate(() => {
-        const root = document.querySelector("#views");
+        // The page, and the details sidebar when one is open over it.
+        const roots = [document.querySelector("#views"), document.querySelector("#detailsPanel.open")].filter(Boolean), root = roots[0];
+        const all = (selector) => roots.flatMap((r) => [...r.querySelectorAll(selector)]);
         const vw = window.innerWidth;
         // Inside a container that scrolls sideways on purpose, running wide is fine.
-        const scrolls = (e) => { for (let p = e.parentElement; p && p !== root; p = p.parentElement) {
+        const scrolls = (e) => { for (let p = e.parentElement; p && !roots.includes(p); p = p.parentElement) {
           const o = getComputedStyle(p).overflowX; if (o === "auto" || o === "scroll" || o === "hidden") return true; } return false; };
-        const visible = [...root.querySelectorAll("*")].filter((e) => e.offsetParent && e.getBoundingClientRect().width > 0);
+        const visible = all("*").filter((e) => e.offsetParent && e.getBoundingClientRect().width > 0);
         const wide = visible.filter((e) => e.getBoundingClientRect().right > vw + 1 && !scrolls(e))
           .map((e) => `${e.tagName.toLowerCase()}.${[...e.classList].slice(0, 2).join(".")}`);
         const texts = visible.filter((e) => [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()));
@@ -157,19 +159,19 @@ async function audit([label, width, height, mobile], items) {
           return r.width < 90 && lines >= 3 && e.textContent.trim().length > 12;
         }).map((e) => `${e.tagName.toLowerCase()}.${[...e.classList].slice(0, 2).join(".")} "${e.textContent.trim().slice(0, 30)}"`);
         // A field with no name: a screen reader says "edit text" and nothing more.
-        const unnamed = [...root.querySelectorAll("input:not([type=hidden]), select, textarea")].filter((e) => e.checkVisibility()
+        const unnamed = all("input:not([type=hidden]), select, textarea").filter((e) => e.checkVisibility()
           && !(e.getAttribute("aria-label") || "").trim() && !(e.getAttribute("title") || "").trim()
           && ![...(e.labels || [])].some((l) => l.textContent.trim())
           && !(e.getAttribute("aria-labelledby") || "").split(/\s+/).some((id) => document.getElementById(id)?.textContent.trim()))
           .map((e) => e.id ? `#${e.id}` : `${e.tagName.toLowerCase()}${e.name ? `[name=${e.name}]` : ""}.${[...e.classList].slice(0, 2).join(".")}`);
         // Where each pod runs, and an image's name and tag, are never cut (#873).
         const cut = (e) => e.scrollWidth > e.clientWidth + 1 || e.getBoundingClientRect().right > e.parentElement.getBoundingClientRect().right + 1;
-        const hostEls = [...root.querySelectorAll(".tree-pod-head .tree-node")].filter((e) => e.checkVisibility());
-        const clipped = [...hostEls, ...[...root.querySelectorAll(".tree-image-name")].filter((e) => e.checkVisibility())]
+        const hostEls = all(".tree-pod-head .tree-node").filter((e) => e.checkVisibility());
+        const clipped = [...hostEls, ...all(".tree-image-name").filter((e) => e.checkVisibility())]
           .filter(cut).map((e) => `${e.className} "${e.textContent.trim().slice(0, 40)}"`);
         return {
           // The most hosts one pod list spans: one app with pods on several hosts.
-          hosts: Math.max(0, ...[...root.querySelectorAll(".workloadtree[open]")].map((tree) => new Set([...tree.querySelectorAll(".tree-pod-head .tree-node")].map((e) => e.textContent.trim())).size)),
+          hosts: Math.max(0, ...all(".workloadtree[open]").map((tree) => new Set([...tree.querySelectorAll(".tree-pod-head .tree-node")].map((e) => e.textContent.trim())).size)),
           clipped: [...new Set(clipped)].slice(0, 6),
           unnamed: [...new Set(unnamed)].slice(0, 8),
           title: document.querySelector("#views .phead h1, #views .phead h2, #views .phead")?.textContent.trim().split("\n")[0].slice(0, 40),
