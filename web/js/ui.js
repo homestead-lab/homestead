@@ -244,7 +244,7 @@ const UI = (() => {
     [/\bvms?\b|machine/i, "vm"],
     [/host|node|server|placement/i, "node"],
     [/image|version|release|chart|kubernetes|harvester|homestead/i, "layers"],
-    [/uptime|state|status|health|ready|running/i, "pulse"],
+    [/uptime|state|status|health|ready|running|\bcheck\b|probe|monitor/i, "pulse"],
     [/schedule|when|time|last|next|ago|date|created|expires|since|updated|taken|tried|checked/i, "clock"],
     [/user|owner|account|role|\bby\b|guests?/i, "user"],
     [/apps?\b|workload|container|pod|service/i, "box"],
@@ -259,6 +259,35 @@ const UI = (() => {
   /* [[label, valueHtml, icon?], ...] - values are HTML so they can carry chips. */
   const facts = pairs => `<dl class="ui-facts">${pairs.filter(Boolean).map(([label, valueHtml, chosen]) =>
     `<div><dt>${factIconSvg(label, chosen)}${text(label)}</dt><dd>${valueHtml}</dd></div>`).join("")}</dl>`;
+  /* A hover card (design.md "Hover cards"): what a hover over a status, a
+     figure or a name shows. A title and its chip, a few facts with their
+     icons, a small chart or strip where the trend matters, and one link to
+     the next step. Built when the pointer arrives (cardFor), never per row. */
+  const card = ({ title, chipHtml = "", rows = [], chartHtml = "", link = null } = {}) =>
+    `<div class="ui-card-head"><b>${text(title)}</b>${chipHtml}</div>`
+    + (chartHtml ? `<div class="ui-card-chart">${chartHtml}</div>` : "")
+    + (rows.length ? `<dl class="ui-card-rows">${rows.filter(Boolean).map(([label, valueHtml, chosen]) =>
+      `<div><dt>${factIconSvg(label, chosen)}${text(label)}</dt><dd>${valueHtml}</dd></div>`).join("")}</dl>` : "")
+    + (link ? `<div class="ui-card-link"><button type="button" class="linkish" onclick="${text(link.onclick || "")}">${text(link.label)} ›</button></div>` : "");
+  /* A small trend for a card: values over time, the last one marked; a dashed
+     projection and a dashed limit line when given. */
+  const spark = (values, { project = null, limit = null, label = "" } = {}) => {
+    const vals = (values || []).map(Number).filter(Number.isFinite);
+    if (vals.length < 2) return "";
+    const w = 290, h = 54, n = vals.length + (project === null ? 0 : 6);
+    const max = Math.max(...vals, project ?? 0, limit ?? 0) * 1.08 || 1;
+    const x = i => (i / (n - 1)) * w, y = v => h - 4 - (v / max) * (h - 8);
+    const line = vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+    const last = vals.length - 1;
+    return `<svg class="ui-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${text(label)}">`
+      + (limit === null ? "" : `<line class="limit" x1="0" x2="${w}" y1="${y(limit).toFixed(1)}" y2="${y(limit).toFixed(1)}"/>`)
+      + `<path class="area" d="${line}L${x(last).toFixed(1)},${h}L0,${h}Z"/><path class="line" d="${line}"/>`
+      + (project === null ? "" : `<path class="project" d="M${x(last).toFixed(1)},${y(vals[last]).toFixed(1)}L${w},${y(project).toFixed(1)}"/>`)
+      + `<circle cx="${x(last).toFixed(1)}" cy="${y(vals[last]).toFixed(1)}" r="3"/></svg>`;
+  };
+  /* Days in a row, each up, warn, down, maint or unknown: the uptime strip a card shows. */
+  const strip = (days, label = "") => `<div class="uptime-strip mini ui-card-strip" role="img" aria-label="${text(label)}">${(days || []).map(d =>
+    `<i class="${{ up: "uptime-ok", warn: "uptime-warn", down: "uptime-bad", maint: "uptime-maint" }[d] || ""}"></i>`).join("")}</div>`;
   /* A page's .about-grid items (<div><span>label</span><b>value</b></div>)
      get the same icons as UI.facts, added to the markup before it is painted. */
   const withFactIcons = html => {
@@ -835,7 +864,7 @@ const UI = (() => {
   const openDialog = (title, spec, { wide = false, context = "", child = false } = {}) =>
     (child && typeof childModal === "function" ? childModal : modal)(title, dialog(spec), wide, context);
 
-  return { factIcon, withFactIcons, dialog, openDialog, head: subjectHtml, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, checklist, steps, progress, meter, table, more, ack,
+  return { factIcon, withFactIcons, card, spark, strip, dialog, openDialog, head: subjectHtml, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, checklist, steps, progress, meter, table, more, ack,
     fields, field, typedConfirm, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,

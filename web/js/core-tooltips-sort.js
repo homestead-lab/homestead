@@ -45,29 +45,118 @@ function showTooltip(owner) {
   bubble.style.left = Math.round(left) + "px";
   bubble.style.top = Math.round(Math.max(margin, top)) + "px";
 }
+/* ---------------- hover cards ---------------- */
+// design.md "Hover cards": an element marked data-card="kind|key" shows a card
+// that HOVER_CARDS[kind](key, element) builds, when the pointer rests on it,
+// when it takes keyboard focus, or when it is tapped on a phone. The card is
+// built only then, never for every row, and stays while the pointer is over it
+// so its link can be clicked. With no builder, or nothing built, the element's
+// plain tooltip (data-tip) is shown instead.
+const HOVER_CARDS = {};
+const CARD_DELAY = 350;
+const CARD_LINGER = 220;
+let cardOwner = null;
+let cardTimer = 0;
+let cardHideTimer = 0;
+function cardTarget(node) {
+  const owner = node instanceof Element ? node.closest("[data-card]") : null;
+  return owner && HOVER_CARDS[String(owner.dataset.card).split("|")[0]] ? owner : null;
+}
+function cardFor(owner) {
+  const [kind, ...key] = String(owner?.dataset.card || "").split("|");
+  try { return HOVER_CARDS[kind] ? HOVER_CARDS[kind](key.join("|"), owner) || "" : ""; } catch (e) { return ""; }
+}
+function hideCard(owner) {
+  if (owner && owner !== cardOwner) return;
+  clearTimeout(cardTimer); clearTimeout(cardHideTimer);
+  const el = $("#uiCard");
+  if (el) el.hidden = true;
+  if (cardOwner) cardOwner.removeAttribute("aria-describedby");
+  cardOwner = null;
+}
+function lingerCard() { clearTimeout(cardHideTimer); cardHideTimer = setTimeout(() => hideCard(), CARD_LINGER); }
+function showCard(owner) {
+  clearTimeout(cardTimer); clearTimeout(cardHideTimer);
+  const html = cardFor(owner);
+  if (!html) { showTooltip(owner); return false; }
+  hideTooltip();
+  let el = $("#uiCard");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "uiCard";
+    el.className = "uicard";
+    el.setAttribute("role", "dialog");
+    el.addEventListener("pointerenter", () => clearTimeout(cardHideTimer));
+    el.addEventListener("pointerleave", lingerCard);
+    document.body.appendChild(el);
+  }
+  cardOwner = owner;
+  owner.setAttribute("aria-describedby", "uiCard");
+  el.setAttribute("aria-label", owner.getAttribute("aria-label") || owner.textContent.trim().slice(0, 80) || "Details");
+  el.innerHTML = html;
+  el.hidden = false;
+  // Under the element where there is room, above it where there is not.
+  const rect = owner.getBoundingClientRect(), gap = 8, margin = 10;
+  const width = el.offsetWidth, height = el.offsetHeight;
+  const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin));
+  const below = rect.bottom + gap;
+  const top = below + height <= window.innerHeight - margin ? below : Math.max(margin, rect.top - height - gap);
+  el.style.left = Math.round(left) + "px";
+  el.style.top = Math.round(top) + "px";
+  return true;
+}
 // A repaint or a new page can remove the element a tooltip belongs to, and no
 // browser then says the pointer left it; Firefox does not say focus left it
 // either. So the tooltip goes as soon as anything notices its element is gone (#834).
 function dropOrphanTooltip() {
   if (tooltipOwner && !tooltipOwner.isConnected) hideTooltip();
+  if (cardOwner && !cardOwner.isConnected) hideCard();
 }
 window.dropOrphanTooltip = dropOrphanTooltip;
+window.HOVER_CARDS = HOVER_CARDS;
+window.showCard = showCard;
+window.hideCard = hideCard;
 document.addEventListener("pointerover", e => {
   dropOrphanTooltip();
+  const card = cardTarget(e.target);
+  if (card) {
+    if (card === cardOwner) { clearTimeout(cardHideTimer); return; }
+    if (!card.contains(e.relatedTarget)) { clearTimeout(cardTimer); cardTimer = setTimeout(() => card.isConnected && showCard(card), e.pointerType === "touch" ? 0 : CARD_DELAY); }
+    return;
+  }
   const owner = tooltipTarget(e.target);
   if (owner && !owner.contains(e.relatedTarget)) showTooltip(owner);
 });
 document.addEventListener("pointermove", dropOrphanTooltip, { passive: true });
 document.addEventListener("pointerout", e => {
   dropOrphanTooltip();
+  const card = cardTarget(e.target);
+  if (card && !card.contains(e.relatedTarget)) {
+    clearTimeout(cardTimer);
+    if (card === cardOwner && !$("#uiCard")?.contains(e.relatedTarget)) lingerCard();
+  }
   if (tooltipOwner && tooltipOwner.contains(e.target) && !tooltipOwner.contains(e.relatedTarget)) hideTooltip(tooltipOwner);
 });
-document.addEventListener("focusin", e => showTooltip(tooltipTarget(e.target)));
+// A tap on a phone opens a card at once; a tap anywhere else closes it.
+document.addEventListener("pointerdown", e => {
+  const inside = $("#uiCard")?.contains(e.target);
+  const card = cardTarget(e.target);
+  if (e.pointerType === "touch" && card && card !== cardOwner) showCard(card);
+  else if (cardOwner && !inside && card !== cardOwner) hideCard();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape" && cardOwner) hideCard(); });
+document.addEventListener("focusin", e => {
+  if ($("#uiCard")?.contains(e.target)) { clearTimeout(cardHideTimer); return; }
+  const card = cardTarget(e.target);
+  if (card) { showCard(card); return; }
+  showTooltip(tooltipTarget(e.target));
+});
 document.addEventListener("focusout", e => {
+  if (cardOwner && (cardOwner.contains(e.target) || $("#uiCard")?.contains(e.target))) lingerCard();
   if (tooltipOwner && tooltipOwner.contains(e.target)) hideTooltip(tooltipOwner);
 });
-window.addEventListener("scroll", () => hideTooltip(), true);
-window.addEventListener("resize", () => hideTooltip());
+window.addEventListener("scroll", () => { hideTooltip(); hideCard(); }, true);
+window.addEventListener("resize", () => { hideTooltip(); hideCard(); });
 
 const ACTION_ICONS = [
   [/^logs?\b/, "log"], [/^console\b/, "console"], [/^edit\b/, "edit"], [/^(move|migrate)\b/, "move"],
@@ -264,7 +353,8 @@ document.addEventListener("click", event => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  tooltipOwner, tooltipTarget, hideTooltip, showTooltip, dropOrphanTooltip, ACTION_ICONS, enhanceActions,
+  tooltipOwner, tooltipTarget, hideTooltip, showTooltip, HOVER_CARDS, CARD_DELAY, CARD_LINGER, cardOwner, cardTimer, cardHideTimer,
+  cardTarget, cardFor, hideCard, lingerCard, showCard, dropOrphanTooltip, ACTION_ICONS, enhanceActions,
   labelStackTables, SORT_UNITS, sortState, sortValue, sortRows, firstDataRow, sortBody, sortBar, saveSort,
   sortTables
 };
