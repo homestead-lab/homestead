@@ -241,7 +241,22 @@ def commit_prepared(prepared):
     result = U.ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _history({"at": now, "action": prepared["action"], "namespace": ns, "deployment": name,
               "before": prepared["before"], "after": {c["name"]: c["image"] for c in _pod_containers(result)}})
-    return progress(ns, name, result)
+    state = progress(ns, name, result)
+    if prepared["action"] == "update":
+        state["spare_pulls"] = _refresh_spares(prepared, result)
+    return state
+def _refresh_spares(prepared, result):
+    """The nodes keeping the old image as a spare copy get the new one too
+    (homestead_image_cache.refresh_spares). The update is already written,
+    so a pull that cannot start is logged and the update stands."""
+    import homestead_image_cache as IMAGES  # imports homestead_imports, which imports this module
+    after = {c["name"]: c.get("image", "") for c in _pod_containers(result)}
+    changes = {old: after[name] for name, old in prepared["before"].items() if after.get(name) and after[name] != old}
+    try:
+        return IMAGES.refresh_spares(changes, U.kget)
+    except Exception as error:
+        print(f"spare image copies were not refreshed: {error}", flush=True)
+        return []
 def apply_update(ns, name):
     return commit_prepared(prepare_update(ns, name))
 def rollback(ns, name):
