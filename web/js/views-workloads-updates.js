@@ -383,8 +383,11 @@ function reviewChanged(reviewed, fresh) {
     const now = (fresh.images || []).map(i => shortImage(i.after)).join(", ");
     return `Its new image is now ${now || "different"}.`;
   }
-  const seen = new Set(updateConcerns(reviewed.capacity || {}));
-  const added = updateConcerns(fresh.capacity).filter(text => !seen.has(text));
+  // A warning's live figures move between two reviews ("projected RAM
+  // reaches 89.2%" then 89.4%), so it is the same warning when only they do.
+  const kind = text => text.replace(/\d+(?:\.\d+)?/g, "#");
+  const seen = new Set(updateConcerns(reviewed.capacity || {}).map(kind));
+  const added = updateConcerns(fresh.capacity).filter(text => !seen.has(kind(text)));
   return added.length ? `A new warning: ${added.map(text => text.replace(/\.$/, "")).join("; ")}.` : "";
 }
 
