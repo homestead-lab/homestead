@@ -18,7 +18,8 @@ try{for(const theme of ['dark','light']){
  }
  await page.getByRole('button',{name:'Save layout',exact:true}).click();await page.getByRole('button',{name:'Edit dashboard',exact:true}).waitFor();
  await page.waitForFunction(()=>document.querySelectorAll('[data-widget="containers"] tbody tr').length===12);
- await page.addStyleTag({content:'#toast,#bottombar,header.top{visibility:hidden!important}'});
+ // The top bar is hidden for the pictures, but its page actions (Edit dashboard, since one bar) stay usable.
+ await page.addStyleTag({content:'#toast,#bottombar,header.top{visibility:hidden!important}#pagebar{visibility:visible!important}'});
  for(const [id,count] of [['containers',12],['vms',8]]){
   const card=page.locator(`[data-widget="${id}"]`),scroll=card.locator('.dashboard-resource-scroll');
   assert.equal(await card.locator('tbody tr').count(),count);assert.ok((await card.boundingBox()).height<=260,'short cards stay shallow');

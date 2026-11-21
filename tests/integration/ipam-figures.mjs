@@ -13,7 +13,8 @@ try{for(const width of [1440,390]){
  assert.equal(await pane.locator('.ui-stats .ui-stat').count(),4,'four figures, as UI.stats');
  assert.equal(await pane.locator('.ui-stats .btn').count(),0,'no action buttons inside the figures');
  assert.equal(await pane.locator('.ui-stats [style*="font-size"]').count(),0,'no hand-set figure sizes');
- const head=page.locator('.phead .page-actions').last();
+ // On a computer the header's actions are in the top bar (one bar); on a phone, on the page.
+ const head=page.locator('#pagebar .page-actions:visible, #views .phead .page-actions:visible').last();
  assert.equal(await head.getByRole('button',{name:'Scan now'}).count(),1,'Scan now is in the page header');
  if(width===390){
   const rows=await head.evaluate(el=>{const tops=new Set([...el.children].filter(c=>c.offsetParent).map(c=>Math.round(c.getBoundingClientRect().top)));return tops.size;});
