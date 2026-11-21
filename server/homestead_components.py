@@ -32,6 +32,7 @@ import urllib.error
 import urllib.parse
 
 import homestead_cache as CACHE
+import homestead_cordon as CORDON
 import homestead_fetch as FETCH
 import homestead_forced as FORCED
 import homestead_helm as HELM
@@ -751,6 +752,19 @@ def _cordoned_by_upgrade(node, rows):
                for start, end, running, _step, _at in rows)
 
 
+def _cordoned_by_person(node):
+    """Whether a person pressed Cordon host on this host at or after its
+    cordon began (CORDON.PERSON_CORDON against the taint's time, less
+    CORDON_CLOCK_SKEW): they made this cordon, or took it over. A taint with
+    no time leaves nothing to tell an old record from: it counts."""
+    taken = _when(((node.get("metadata") or {}).get("annotations") or {}).get(CORDON.PERSON_CORDON))
+    if taken is None:
+        return False
+    added = next((_when(t.get("timeAdded")) for t in (node.get("spec") or {}).get("taints") or []
+                  if t.get("key") == UNSCHEDULABLE_TAINT), None)
+    return added is None or taken >= added - CORDON_CLOCK_SKEW
+
+
 def _newest_upgrade_pod():
     """When the newest pod of our Plans was made (epoch seconds), or 0."""
     newest = 0
@@ -862,6 +876,11 @@ def _claim(item, save, runs=None):
         for _ in range(WRITE_ATTEMPTS):
             node = _node(name)
             if node is None or not (node.get("spec") or {}).get("unschedulable"):
+                break
+            if _cordoned_by_person(node):
+                # Theirs now, even if this job marked it in an earlier round.
+                claimed.pop(name, None)
+                skipped[name] = "a person cordoned it on the Hosts page"
                 break
             meta = node["metadata"]
             mark = (meta.get("annotations") or {}).get(CORDON_MARK)

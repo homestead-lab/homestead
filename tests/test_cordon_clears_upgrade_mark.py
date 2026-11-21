@@ -2,6 +2,7 @@
 cluster upgrade: they clear its mark (homestead.io/upgrade-cordon) in the
 same patch, so the upgrade's end never undoes a person's own cordon (#1070)."""
 import sys
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ import homestead_node_actions as NODE_ACTIONS
 from fakes.kube import Kube
 
 MARK = "homestead.io/upgrade-cordon"
+PERSON = "homestead.io/person-cordon"
 
 
 def node(**annotations):
@@ -69,8 +71,9 @@ class CordonClearsEveryJobMarkTests(unittest.TestCase):
     def check(self, cordon):
         route = L.ROUTES[("POST", "/api/node/cordon")][1]
         route(SimpleNamespace(body={"node": "node-1", "cordon": cordon}, query={}))
-        self.assertEqual({"other": "kept", "homestead.io/maintenance": "m-1"}, self.annotations(),
-                         "only the job marks go")
+        kept = {k: v for k, v in self.annotations().items() if k != PERSON}
+        self.assertEqual({"other": "kept", "homestead.io/maintenance": "m-1"}, kept, "only the job marks go")
+        self.assertEqual(cordon, PERSON in self.annotations(), "a person's Cordon is recorded, Uncordon removes it")
         self.assertEqual(cordon, bool(self.kube.object("/api/v1/nodes/node-1")["spec"].get("unschedulable")))
         self.assertEqual(1, len(self.kube.writes), "one patch: the cordon and the marks together")
 
@@ -79,6 +82,32 @@ class CordonClearsEveryJobMarkTests(unittest.TestCase):
 
     def test_uncordon_clears_every_job_mark(self):
         self.check(False)
+
+
+class PersonCordonRecordTests(unittest.TestCase):
+    """A person's Cordon on the Hosts page records when (homestead.io/person-cordon),
+    so a cluster upgrade's end leaves that cordon alone; any uncordon through
+    Homestead removes the record, and a job's own cordon leaves it as it is."""
+    def setUp(self):
+        self.kube = self.enterContext(Kube(node(**{PERSON: "2026-01-01T00:00:00Z"})))
+        self.enterContext(mock.patch.object(L, "ksend", K.ksend))
+        self.enterContext(mock.patch.object(L, "_bust", lambda *keys: None))
+
+    def record(self):
+        return (self.kube.object("/api/v1/nodes/node-1")["metadata"].get("annotations") or {}).get(PERSON)
+
+    def test_a_persons_cordon_records_when(self):
+        before = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        L.ROUTES[("POST", "/api/node/cordon")][1](SimpleNamespace(body={"node": "node-1", "cordon": True}, query={}))
+        self.assertGreaterEqual(self.record(), before)
+
+    def test_a_jobs_uncordon_removes_the_record(self):
+        NODE_ACTIONS.set_cordon("node-1", False)
+        self.assertIsNone(self.record())
+
+    def test_a_jobs_cordon_leaves_the_record(self):
+        NODE_ACTIONS.set_cordon("node-1", True)
+        self.assertEqual("2026-01-01T00:00:00Z", self.record())
 
 
 if __name__ == "__main__":
