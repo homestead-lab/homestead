@@ -254,7 +254,7 @@
   <aside class="side">
     <div class="brand">
       <img class="brandmark" src="/assets/homestead-mark.svg?v=2.9.1-dev.3" alt="">
-      <div><div class="bname">Homestead</div><div class="bver" data-version="2.9.1-dev.3">v2.9.1-dev.3</div></div>
+      <div><div class="bname">Homestead</div><div class="bver" data-version="2.9.1-dev.3">v2.9.1-dev.3</div><div id="fleetSlot" class="fleet-slot"></div></div>
     </div>
     <nav id="nav">
       <div class="navlbl">Overview</div>
@@ -289,13 +289,15 @@
       <div>
         <nav class="crumb" id="crumb" aria-label="Breadcrumb">Dashboard</nav>
         <h1 id="title">Dashboard</h1>
-      </div></div>
+      </div>
+      <!-- The page's tabs and main actions, beside its title (core-paint liftPageBar). -->
+      <div class="pagebar" id="pagebar" hidden></div></div>
       <div class="topright">
         <button class="iconbtn only-sm" id="refresh" type="button" title="Refresh this page" aria-label="Refresh this page"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button>
         <button type="button" class="iconbtn only-sm" id="searchbtn" title="Search" aria-label="Search"><svg aria-hidden="true"><use href="#i-search"/></svg></button>
         <div class="searchwrap" id="searchwrap">
           <span class="sicon"><svg width="14" height="14"><use href="#i-search"/></svg></span>
-          <input id="globalSearch" class="search" placeholder="Search apps, VMs, nodes, pages…" aria-label="Search" role="combobox" aria-controls="searchResults" aria-autocomplete="list" aria-expanded="false" autocomplete="off">
+          <input id="globalSearch" class="search" placeholder="Search apps, VMs and hosts" aria-label="Search" role="combobox" aria-controls="searchResults" aria-autocomplete="list" aria-expanded="false" autocomplete="off">
           <div id="searchResults" class="searchresults hidden" role="listbox" aria-label="Search results"></div>
         </div>
         <!-- Everything that wants attention, in one place: Homestead's own
