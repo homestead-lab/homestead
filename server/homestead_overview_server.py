@@ -24,6 +24,7 @@ import homestead_cache as CACHE
 import homestead_changes as CHANGES
 import homestead_cluster as CLUSTER
 import homestead_diagnostics as DIAGNOSTICS
+import homestead_env_secrets as ENVSEC
 import homestead_disks as DISKS
 import homestead_expiry as EXPIRY
 import homestead_forecast as FORECAST
@@ -178,6 +179,8 @@ def change_undo_plan(body):
     entry = CHANGES.kept_before(ns, name, str(body.get("id") or ""))
     current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     proposed, rows = CHANGES.undo_plan(current, entry)
+    # A value a later save deleted from the app's Secret cannot come back with them (#1395).
+    ENVSEC.refuse_missing(ns, current, proposed, kget)
     missing = sorted({(v.get("persistentVolumeClaim") or {}).get("claimName")
                       for v in proposed["spec"]["template"]["spec"].get("volumes") or []
                       if (v.get("persistentVolumeClaim") or {}).get("claimName")}
