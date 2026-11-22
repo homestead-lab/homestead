@@ -1442,6 +1442,37 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
   .crumb{display:none}
 }
 
+/* A phone's top bar (design.md "One bar", core-paint phoneBar): the title
+   is the page, or its family's name over a picker of its pages; ＋ is the
+   page's main button. The cluster switch is in the menu and the breadcrumb
+   goes; refresh and the setup guide's button stay. */
+.phone-primary{display:none}
+@media(max-width:560px){
+  #crumb{display:none!important}
+  .topleft,.topleft>div:not(.pagebar){min-width:0}
+  .phone-primary:not([hidden]){display:grid;width:38px;height:38px;border-radius:50%;background:var(--tx);color:var(--bg);border-color:var(--tx)}
+  .phone-primary svg{width:19px;height:19px;stroke-width:2.4}
+  #title{display:block;min-width:0;font-size:19px;line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  body.title-picks #title{display:flex;flex-direction:column}
+  .title-family{font-size:11.5px;font-weight:550;color:var(--mut);letter-spacing:0}
+  .title-pick{position:relative;display:inline-flex;align-items:center;gap:4px;max-width:100%}
+  .title-pick select{appearance:none;-webkit-appearance:none;margin:0;padding:0 18px 0 0;border:0;background:transparent;color:var(--tx);font:inherit;font-weight:700;min-height:0;width:auto;max-width:100%;text-overflow:ellipsis;cursor:pointer;field-sizing:content}
+  .title-pick svg{position:absolute;right:0;width:14px;height:14px;color:var(--mut);pointer-events:none}
+  /* The picker in the title replaces the page's tab strip; ＋ replaces its main button. */
+  body.title-picks .phead>div:first-child>.pagetabs{display:none}
+  body.phone-plus .phead .page-actions>button.btn.pri,body.phone-plus .collection-mobile-toolbar>button.btn.pri{display:none}
+  /* The summary line with ⋯ beside it, when ⋯ is all the header has left
+     (its main button is ＋). A header with more keeps its own layout. */
+  .phead:has(>.page-actions:not(:has(>:not(.actionmenu,button.btn.pri,.scanprogress)))){display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;column-gap:12px}
+  /* body: ahead of the collection page's own phone rules further down. */
+  body .collection-mobile-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:10px}
+  body .collection-mobile-head>.collection-mobile-summary{grid-column:1;grid-row:1;margin:0}
+  body .collection-mobile-head>.collection-mobile-toolbar{grid-column:2;grid-row:1}
+  body .collection-mobile-toolbar .wl-group-select{flex:0 1 auto;width:auto;max-width:44vw}
+  body .collection-mobile-toolbar .list-options-label{display:none}
+  body .collection-mobile-toolbar .list-options>summary.btn{width:44px;justify-content:center;padding:8px!important}
+}
+
 /* temperatures */
 .t-ok{color:var(--ok)} .t-warm{color:var(--med)} .t-hot{color:var(--crit)}
 .bignum.t-hot,.midnum.t-hot{color:var(--crit)}

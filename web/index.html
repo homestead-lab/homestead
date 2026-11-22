@@ -192,6 +192,7 @@
     <symbol id="i-list" viewBox="0 0 24 24"><path d="M8.5 6.5h11M8.5 12h11M8.5 17.5h11"/><circle cx="4.6" cy="6.5" r="1.2"/><circle cx="4.6" cy="12" r="1.2"/><circle cx="4.6" cy="17.5" r="1.2"/></symbol>
     <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M3 7h4m4 0h10M3 17h10m4 0h4"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></symbol>
     <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-add" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.6"/><path d="M15.6 15.6 20.5 20.5"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20.3 12a8.3 8.3 0 1 1-2.6-6"/><path d="M20.3 4v5.2h-5.2"/></symbol>
     <symbol id="i-vm" viewBox="0 0 24 24"><rect x="2.6" y="4.2" width="18.8" height="12.4" rx="2"/><path d="M8.5 20.4h7M12 16.6v3.8"/><rect x="7" y="8" width="10" height="4.8" rx="1"/></symbol>
@@ -306,6 +307,8 @@
              update, container updates, and image checks that failed. -->
         <!-- The guide stays available after setup, including outside the demo. -->
         <button class="iconbtn setupbtn hidden" id="setupbtn" type="button" title="Setup guide" aria-label="Open the setup guide"><svg aria-hidden="true"><use href="#i-guide"/></svg></button>
+        <!-- On a phone, the page's main button (Deploy, Create volume) as ＋ (core-paint phoneBar). -->
+        <button type="button" class="iconbtn phone-primary" id="phonePrimary" hidden><svg aria-hidden="true"><use href="#i-add"/></svg></button>
         <details class="actionmenu bellmenu" id="bell"><summary class="iconbtn" title="Nothing needs you" aria-label="Notifications">
           <svg><use href="#i-bell"/></svg><span id="bellCount" class="hidden">0</span><b id="bellErrors" class="hidden"></b></summary>
           <div class="actionmenu-pop bellpop" id="bellPop"><div class="bell-empty">Nothing needs you</div></div></details>

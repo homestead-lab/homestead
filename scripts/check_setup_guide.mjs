@@ -53,7 +53,8 @@ try {
     await page.getByRole("button", { name: "Return to setup", exact: true }).waitFor();
     assert.match(await page.locator("#setupReturn").innerText(), /LAN networks/);
     // The header's buttons are in the top bar on a computer (one bar), on the page on a phone.
-    await page.locator("#pagebar, #views .phead").getByRole("button", { name: /LAN network/ }).click();
+    // The page's main button: in the top bar on a computer, ＋ in it on a phone.
+    await page.locator("#pagebar, #views .phead, .topright").getByRole("button", { name: /LAN network/ }).locator("visible=true").first().click();
     await page.getByText("New LAN network", { exact: true }).waitFor();
     await page.evaluate(() => closeModal());
     await page.reload({ waitUntil: "networkidle" });

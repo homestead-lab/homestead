@@ -83,13 +83,17 @@ column headings are the one small upper-case label.
    stays on the page: the subtitle becomes the page's one toolbar line, with
    the list's controls on its right - Containers' group picker ("Group: All
    groups · 6"), a count pill, a search field. Containers' cards or rows is a
-   choice in ⋯ rather than a switch on that line. A phone keeps the header on
-   the page.
-   On a phone, Containers and Virtual machines keep their page tabs above one
-   compact toolbar. Containers has a group picker, Options and Deploy; Virtual
-   machines has an All VMs scope label, Options and New VM. The page's
-   summary line is below them: on Containers, the same sentence a computer
-   shows; on Virtual machines, the count and running state.
+   choice in ⋯ rather than a switch on that line.
+   **A phone** has its own one bar (`syncPhoneBar`): the menu, the page's
+   title, then search, ＋, the bell and the account. A page with tabs is
+   titled by its family's name over a picker of its pages ("Containers" over
+   "Running ▾"), which replaces the tab strip. ＋ does the page's main button
+   (Deploy, Create volume, New VM) for whoever may use it, and the page's own
+   copy of that button is hidden. The cluster switch is in the menu;
+   refresh and the setup guide's button stay, and a long title ends in "…".
+   On the page, the summary
+   line keeps the list's controls on its right: Containers' group picker and
+   Options, Virtual machines' All VMs scope and Options, ⋯ elsewhere.
    `listOptions()` puts sorting, layout and platform visibility inside the
    standard action menu; preferences never add permanent toolbar rows. With
    no groups, a plain scope label replaces the picker.

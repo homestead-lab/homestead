@@ -78,6 +78,8 @@ function pageTabs(view) {
     `<a href="${esc(HomesteadRouter.urlFor(id))}" class="${id === view ? "on" : ""}"${id === view ? ' aria-current="page"' : ""} onclick="event.preventDefault();go(${jsq(id)})">${esc(label)}</a>`).join("")}</nav>` : "";
 }
 function paint(html) {
+  // The top bar follows the page once it is drawn: its title picker and its ＋.
+  Promise.resolve().then(syncPhoneBar);
   const host = V();
   const watcher = paintWatcher(host);
   // Changes since the last paint that the watcher has not been told of yet.
@@ -135,6 +137,59 @@ function paint(html) {
     if (focused && (!now || now === document.body) && host.contains(focused)) focused.focus({ preventScroll: true });
   }
 }
+/* A phone's top bar (design.md "One bar"): the menu, the page's title - with
+   a picker of its family's pages when it has tabs, its family's name above
+   it - then search, ＋ for the page's main button, the bell and the account.
+   The page keeps its summary line and the list's own controls. */
+function phoneBar() {
+  return typeof matchMedia === "function" && matchMedia("(max-width: 560px)").matches && !!document.getElementById("phonePrimary");
+}
+function phoneTitle(view, phone) {
+  const h1 = document.getElementById("title");
+  if (!h1) return false;
+  const tabs = phone && window.HomesteadRouter ? HomesteadRouter.tabsFor(view) : [];
+  const picker = h1.querySelector(".title-pick");
+  // The page's own title, as app.js set it; a picker keeps it aside.
+  const plain = picker ? h1.dataset.plain || "" : h1.textContent;
+  if (tabs.length < 2) {
+    if (picker) h1.textContent = plain;
+    return false;
+  }
+  const family = HomesteadRouter.ROUTES[HomesteadRouter.navView(view)]?.label || plain;
+  const sig = `${view}|${family}`;
+  if (picker && h1.dataset.pickSig === sig) return true;
+  h1.dataset.plain = plain;
+  h1.dataset.pickSig = sig;
+  h1.innerHTML = `<span class="title-family">${esc(family)}</span><span class="title-pick"><select aria-label="${esc(family)} pages" onchange="go(this.value)">`
+    + tabs.map(([id, label]) => `<option value="${esc(id)}"${id === view ? " selected" : ""}>${esc(label)}</option>`).join("")
+    + `</select><svg aria-hidden="true"><use href="#i-chevron-down"/></svg></span>`;
+  return true;
+}
+/* ＋ does what the page's main button does, and is offered to whoever may. */
+function phonePrimary(phone) {
+  const plus = document.getElementById("phonePrimary");
+  if (!plus) return false;
+  const main = phone ? V()?.querySelector(".phead .page-actions>button.btn.pri") : null;
+  plus.hidden = !main;
+  if (!main) return false;
+  // The same name as the button it stands for, so it is announced (and found) as that button.
+  const name = main.getAttribute("aria-label") || main.textContent.trim();
+  plus.setAttribute("aria-label", name);
+  plus.title = name.replace(/^[＋+]\s*/, "");
+  if (main.dataset.need) plus.dataset.need = main.dataset.need; else delete plus.dataset.need;
+  plus.disabled = main.disabled;
+  plus.onclick = () => main.click();
+  return true;
+}
+function syncPhoneBar() {
+  // Tests paint into a document with no body or top bar: nothing to follow.
+  if (typeof document === "undefined" || !document.body?.classList || typeof document.getElementById !== "function") return;
+  const phone = phoneBar();
+  document.body.classList.toggle("title-picks", phoneTitle(STATE.view, phone));
+  document.body.classList.toggle("phone-plus", phonePrimary(phone));
+  if (window.applyRole) window.applyRole();
+}
+if (typeof matchMedia === "function") matchMedia("(max-width: 560px)").addEventListener?.("change", syncPhoneBar);
 const PAGE_HEAD = /<div class="phead">\s*/;
 /* One bar: a computer-wide window shows the page's tabs and actions in the top bar. */
 function oneBar() {
@@ -333,6 +388,6 @@ function resetPaint() { const h = V(); delete h.dataset.painted; delete h.datase
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
   PAGE_SNAPSHOT, PAGE_SNAPSHOT_KEEP, keepSnapshot, snapshotKey, pagePlaceholder, pageSkeleton, filterBar, pageTabs,
-  paint, PAGE_HEAD, oneBar, pageActionsSpan, VOID_TAG, topLevelElements, splitPageActions, liftPageBar, paintWatcher, paintSignature, iconRetryDue, mkeyOf, morphNode, morphKeyed, morph, syncAttrs,
+  paint, phoneBar, phoneTitle, phonePrimary, syncPhoneBar, PAGE_HEAD, oneBar, pageActionsSpan, VOID_TAG, topLevelElements, splitPageActions, liftPageBar, paintWatcher, paintSignature, iconRetryDue, mkeyOf, morphNode, morphKeyed, morph, syncAttrs,
   resetPaint
 };

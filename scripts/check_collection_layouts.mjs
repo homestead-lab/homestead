@@ -139,11 +139,16 @@ try {
 
     if(width<=560) {
       const header=page.locator('.collection-mobile-head'), toolbar=header.locator('.collection-mobile-toolbar');
-      assert.equal(await page.locator('.containers-page .pagetabs>a:visible').count(),5);
+      // The top bar's title picks the family's pages; ＋ is Deploy (design.md "One bar").
+      assert.equal(await page.locator('.containers-page .pagetabs>a:visible').count(),0,'the title picker replaces the tab strip');
+      assert.equal(await page.locator('#title .title-pick option').count(),5);
+      assert.equal(await page.locator('#phonePrimary').getAttribute('aria-label'),'＋ Deploy');
       assert.equal(await page.locator('.containers-page>.phead>.row').isVisible(),false);
       assert.equal(await page.locator('.containers-page>.sortbar').count(),0,'sorting lives inside Options');
-      const bounds=await toolbar.locator(':scope>*').evaluateAll(items=>items.map(e=>e.getBoundingClientRect()));
-      assert.ok(bounds.every(b=>Math.abs(b.y-bounds[0].y)<2),'group, Options and Deploy share one row');
+      const bounds=await toolbar.locator(':scope>*').evaluateAll(items=>items.filter(e=>e.checkVisibility()).map(e=>e.getBoundingClientRect()));
+      assert.ok(bounds.length>=2&&bounds.every(b=>Math.abs(b.y-bounds[0].y)<2),'group and Options share one row');
+      const summaryBox=await header.locator('.collection-mobile-summary').boundingBox(), toolbarBox=await toolbar.boundingBox();
+      assert.ok(toolbarBox.x>=summaryBox.x+summaryBox.width-1,'the summary line has the group picker and Options on its right');
       const picker=header.getByRole('combobox',{name:'Container group'});
       const home=await picker.locator('option').filter({hasText:'Home'}).getAttribute('value');
       const all=await picker.locator('option').filter({hasText:'All groups'}).getAttribute('value');
@@ -236,11 +241,13 @@ try {
     if(width<=560) {
       const header=page.locator('.vms-page .collection-mobile-head');
       const toolbar=header.locator('.collection-mobile-toolbar');
-      assert.equal(await page.locator('.vms-page .pagetabs>a:visible').count(),2);
+      assert.equal(await page.locator('.vms-page .pagetabs>a:visible').count(),0,'the title picker replaces the tab strip');
+      assert.equal(await page.locator('#title .title-pick option').count(),2);
+      assert.equal(await page.locator('#phonePrimary').getAttribute('aria-label'),'＋ New VM');
       assert.equal(await page.locator('.vms-page>.phead>.row').isVisible(),false);
       assert.equal(await page.locator('.vms-page>.sortbar').count(),0);
-      const bounds=await toolbar.locator(':scope>*').evaluateAll(items=>items.map(e=>e.getBoundingClientRect()));
-      assert.ok(bounds.every(b=>Math.abs(b.y+b.height/2-bounds[0].y-bounds[0].height/2)<2),'VM scope, Options and New VM align on one row');
+      const bounds=await toolbar.locator(':scope>*').evaluateAll(items=>items.filter(e=>e.checkVisibility()).map(e=>e.getBoundingClientRect()));
+      assert.ok(bounds.length>=2&&bounds.every(b=>Math.abs(b.y+b.height/2-bounds[0].y-bounds[0].height/2)<2),'VM scope and Options align on one row');
       const vmCount=await page.locator('.vm-table tbody tr').count();
       assert.match(await header.locator('.collection-mobile-summary').textContent(),new RegExp(`${vmCount} VMs? · \\d+ running`));
       await header.getByLabel('List options',{exact:true}).click();
@@ -282,10 +289,11 @@ try {
         await menu.waitFor({state:'hidden'});
         await page.waitForFunction(()=>!document.querySelector('.vms-page .list-options').open&&!document.querySelector('.vms-page .list-options').shell);
       }
-      await header.getByRole('button',{name:'＋ New VM',exact:true}).click();
+      // ＋ in the top bar is New VM on a phone.
+      await page.locator('#phonePrimary').click();
       assert.equal(await page.evaluate(()=>window.__vmToolbarCalls.at(-1)),'vmNew');
       await page.evaluate(()=>{ROLE='viewer';paintWho()});
-      assert.equal(await header.getByRole('button',{name:'＋ New VM',exact:true}).count(),0,'viewer cannot create a VM');
+      assert.equal(await page.locator('#phonePrimary').isVisible(),false,'viewer cannot create a VM');
       await header.getByLabel('List options',{exact:true}).focus();
       await page.keyboard.press('Enter');
       await menu.waitFor();
