@@ -65,7 +65,7 @@ test("Architecture and Virtual machines carry it in their subtitles (#928)", () 
   const storage = require("./helpers/storage-source")();
   const vms = fs.readFileSync("web/js/views-vms.js", "utf8");
   assert.match(between(storage, "async function viewFlow", "\n}\n"), /metricsNotice\(\[answer\]\)/);
-  assert.match(between(vms, "Virtual machines`, `${vms.length}", "\n"), /metricsNotice\(vms\)/);
+  assert.match(between(vms, "Virtual machines`, `${summary}", "\n"), /metricsNotice\(vms\)/);
 });
 
 test("the balance plan says when it works from old figures (#928)", () => {

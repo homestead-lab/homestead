@@ -6,11 +6,12 @@ function open(detail) {
   const ctx={console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
     document:{addEventListener(){}},STATE:{data:{}},$:key=>key==="#mbody" ? body : null,$$:()=>[],
     esc:v=>String(v).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll('"',"&quot;"),
-    toast(){},refresh(){},modal(){},icon:()=>"",
+    toast(){},refresh(){},modal(){},icon:()=>"",DETAIL_KINDS:{},HOVER_CARDS:{},
     api:async path=>{assert.match(path,/^\/api\/vm\?/);return detail;}};
   ctx.window=ctx;vm.createContext(ctx);require("./helpers/load-ui")(ctx);
   ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>ctx.esc(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
+  vm.runInContext(fs.readFileSync("web/js/views-vms-details.js","utf8"),ctx);
   return {ctx,body};
 }
 const detail={ns:"lab",name:"guest",status:"Running",run_strategy:"Always",node:"node-a",actions:[],
@@ -78,12 +79,47 @@ test("a VM's Network tab leads with Configure VIP / ports as its own action, not
   assert.match(pane[1],/class="ui-lead/,"the explanation is a lead");
   assert.ok(pane[1].indexOf("Configure VIP / ports")<pane[1].indexOf("<table"),"the action comes before the table");
 });
-/* #543: a chip with a tip is a Tab stop, so a VM row's status chip takes one only when there is a problem to say. */
-test("a VM row's status chip is a Tab stop only when it has a problem to explain",()=>{
+/* The one-bar row (Nov 2026 mockup): a healthy VM's state is quiet words, a VM in
+   trouble a chip and the reason under it, with a coloured edge; no chip to tab to. */
+test("a VM row says its state in words, and a problem as a chip with its reason",()=>{
   const t=open(detail);
   Object.assign(t.ctx,{clusterAttr:()=>"",clusterTag:()=>"",answerTag:()=>"",scheduleTag:()=>"",vmAvatar:()=>"",vmAddress:()=>"",vmActions:()=>""});
   const row=v=>vm.runInContext("vmTable",t.ctx)([{ns:"lab",name:"guest",node:"node-a",ips:[],...v}]);
-  const chip=html=>(html.match(/<span class="ui-chip [^"]*"[^>]*>(Running|Stopped)<\/span>/)||[""])[0];
-  assert.match(chip(row({status:"Running"})),/^<span class="ui-chip ok">/,"a healthy VM's chip is plain");
-  assert.match(chip(row({status:"Stopped",problem:"the disk is missing"})),/tabindex="0"[^>]*data-tip="the disk is missing"/);
+  assert.match(row({status:"Running",running:true}),/<span class="vm-state dim">Running<\/span>/);
+  assert.match(row({status:"Stopped"}),/<span class="vm-state dim">Shut down<\/span>/,"stopped is said as the guest would");
+  const sick=row({status:"ErrorUnschedulable",problem:"0/3 nodes are available"});
+  assert.match(sick,/class="clickable vm-problem bad"/);
+  assert.match(sick,/<span class="ui-chip bad slim">Cannot start<\/span><div class="ui-reason under xs">0\/3 nodes are available\.<\/div>/);
+  assert.match(sick,/openDetails\('vm',&quot;lab\/guest&quot;\)/,"the row opens the details sidebar");
+});
+
+test("the VM summary counts the running ones, links each in trouble and names those shut down",()=>{
+  const t=open(detail);
+  t.ctx.STATE.platform={harvester:true};
+  const vms=[{ns:"a",name:"web",status:"Running",running:true},{ns:"a",name:"win11",status:"Stopped"},{ns:"a",name:"lab",status:"Stopped"},
+    {ns:"a",name:"bad",status:"ErrorUnschedulable",problem:"no room"}];
+  const line=t.ctx.vmSummary(vms);
+  assert.match(line,/^<span class="sum-wide"><b>1 of 4 VMs is running\.<\/b> <button type="button" class="linkish sum-link sum-bad" onclick="openDetails\('vm',&quot;a\/bad&quot;\)">bad cannot start<\/button>/);
+  assert.match(line,/<span class="sum-note">win11 and lab are shut down\.<\/span><\/span>/);
+  assert.match(line,/<span class="sum-narrow"><b>1 of 4 VMs is running\.<\/b> <button[^>]*>bad cannot start<\/button><\/span>$/,"a phone leaves out the names");
+  assert.match(t.ctx.vmSummary([vms[0]]),/<b>The VM is running\.<\/b>/);
+});
+
+test("a VM's labelled action fits its state, and its sidebar has the mockup's tabs",()=>{
+  const t=open(detail);
+  t.ctx.FLEET={view:null};
+  const main=v=>t.ctx.vmMainAction({ns:"a",name:"x",...v})?.label;
+  assert.equal(main({status:"Running",running:true,actions:["console","stop","restart"]}),"Open console");
+  assert.equal(main({status:"Stopped",actions:["start"]}),"Start VM");
+  assert.equal(main({status:"ErrorUnschedulable",problem:"no room",actions:["stop"]}),"Edit settings","its settings keep it off");
+  t.ctx.STATE.data.vms=[{ns:"a",name:"x",status:"Running",running:true,actions:["console","restart","stop"],cores:2,memory:"4Gi",node:"node-a",ips:["192.0.2.60"],network:"default/vlan1",
+    usage:{mem:2.9*1024**3,mem_pct:72,cpu_pct:23,read_bps:184320,write_bps:1677722}}];
+  const kind=vm.runInContext("DETAIL_KINDS.vm",t.ctx);
+  assert.deepEqual([...kind.tabs.map(x=>x.label)],["Overview","Disks","Activity","Settings"]);
+  assert.deepEqual([...kind.actions("a/x").slice(0,3).map(i=>i.label)],["Open console","Restart VM","Edit settings"]);
+  const overview=kind.tabs[0].html("a/x");
+  assert.match(overview,/<dt>Address<\/dt><dd><span class="mono">192\.0\.2\.60<\/span><div class="dim xs">default\/vlan1<\/div>/);
+  assert.match(overview,/<dt>Size<\/dt><dd>2 vCPUs, 4 GiB memory<\/dd>/);
+  assert.match(overview,/<dt>Memory<\/dt><dd>2\.9 GiB of 4 GiB used<\/dd>/);
+  assert.match(overview,/<dt>Disk activity<\/dt><dd>180 KiB\/s read, 1\.6 MiB\/s written<\/dd>/);
 });
