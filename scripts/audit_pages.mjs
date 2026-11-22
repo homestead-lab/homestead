@@ -35,7 +35,7 @@ const PAGES = [
   ["containers-details", "workloads", "setViewLayout('containers','renderWorkloads','rows');document.querySelector('.wl-open')?.click()"],
   // Every card's pod list open (#873): an app with a pod on each host.
   ["containers-card-pods", "workloads", "setViewLayout('containers','renderWorkloads','cards');document.querySelectorAll('.wcard .workloadtree').forEach((d) => { d.open = true; })"],
-  ["containers-details-pods", "workloads", "setViewLayout('containers','renderWorkloads','rows');document.querySelector('.wl-row[data-row-key*=\"edge-tunnel\"] .wl-open')?.click();document.querySelectorAll('#detailsPanel .workloadtree').forEach((d) => { d.open = true; })"],
+  ["containers-details-pods", "workloads", "setViewLayout('containers','renderWorkloads','rows');document.querySelector('.wl-row[data-row-key*=\"edge-tunnel\"] .wl-open')?.click();detailsTab('settings');document.querySelectorAll('#detailsPanel .workloadtree').forEach((d) => { d.open = true; })"],
   // Every linked cluster at once.
   ["containers-all", "workloads", "localStorage.setItem('homestead.fleet.mode','all');viewWorkloads()"],
   ["vms-all", "vms", "localStorage.setItem('homestead.fleet.mode','all');viewVMs()"],
