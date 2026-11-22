@@ -24,47 +24,118 @@ function workloadDetailNotice(w, update) {
   return parts.join("");
 }
 
+/* The sidebar's reads (detailsData): the app's log, its change history and
+   the cluster's recent events. `keep`, so leaving the page does not cancel them. */
+const workloadPod = w => w.pods?.[0]?.name || "";
+const workloadLogRead = w => () => api(`/api/logs?ns=${encodeURIComponent(w.ns)}&pod=${encodeURIComponent(workloadPod(w))}&tail=200`, { keep: true });
+const workloadChangesRead = w => () => api(`/api/changes?ns=${encodeURIComponent(w.ns)}&name=${encodeURIComponent(w.name)}`, { keep: true });
+const workloadLogSlot = (w, lines) => detailsSlot(detailsData("logs", workloadLogRead(w)),
+  text => String(text || "").trim() ? UI.logTail(text, lines) : '<p class="dim small">It has not written anything to its log yet.</p>',
+  { reading: "Reading its log…", failed: "Its log could not be read" });
+
+/* Its address in words: 192.0.2.209 port 8000, the main one first. A port
+   with no address of its own keeps the usual port chips. */
+function workloadAddressWords(w) {
+  const ports = (w.ports || []).filter(p => p.ip);
+  if (!ports.length) return `<span class="waccess">${accessPorts(w.ports)}</span>`;
+  const sorted = [...ports].sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0));
+  return sorted.slice(0, 2).map(p => `<button type="button" class="linkish details-address" title="Open ${esc(svcUrl(p.ip, p.port))}" onclick="openSvc(${jsq(p.ip)},${p.port})">`
+    + `<span class="mono">${esc(p.ip)}</span> <span class="dim">port</span> <span class="mono">${esc(p.port)}</span></button>`).join("<br>")
+    + (sorted.length > 2 ? `<div class="dim xs">and ${sorted.length - 2} more in Settings</div>` : "");
+}
+
+/* Overview (the mockup): what is wrong first, the last lines of its log when
+   it is in trouble, then its address, host, memory and uptime. */
 function workloadOverview(key) {
   const w = workloadByKey(key);
   if (!w) return "";
+  const update = workloadUpdateOf(w), off = w.desired === 0, problem = workloadProblem(w), a = answerOf(w);
+  const tail = problem && !off && workloadPod(w) && !remoteRow(w) ? UI.section("Last lines of its log", workloadLogSlot(w, 3)) : "";
+  return workloadDetailNotice(w, update) + tail
+    + UI.facts([
+      ["Address", workloadAddressWords(w)],
+      ["Host", esc(workloadHost(w))],
+      !off && ["Memory", esc(workloadMemory(w.mem_mb))],
+      a && a.state !== "off" && a.uptime_30d !== null && a.uptime_30d !== undefined ? ["Uptime", esc(`${answerShare(a.uptime_30d)} over 30 days`)]
+        : !off && ["Running for", esc(w.uptime ? fmtUp(w.uptime) : "Starting")],
+    ], { icons: false });
+}
+
+/* Logs: its last 200 lines, and the full log viewer to follow it live. */
+function workloadLogsTab(key) {
+  const w = workloadByKey(key);
+  if (!w) return "";
+  if (!workloadPod(w)) return `<p class="dim small">${w.desired === 0 ? "It is stopped, so it is not writing a log." : "No copy of it is running yet, so there is no log to show."}</p>`;
+  return workloadLogSlot(w, 0)
+    + `<div class="details-foot">${actionBar([{ label: "Open full logs", run: `wlLogs(${jsq(w.ns)},${jsq(workloadPod(w))},${jsq(w.name)})` },
+      { label: "Search logs", run: `logSearch(${jsq(w.ns)},${jsq(w.name)})` }], { shown: 2 })}</div>`;
+}
+
+/* Activity: its web check over the last day, the changes made to it and
+   what Kubernetes said about it lately. */
+function workloadActivityTab(key) {
+  const w = workloadByKey(key);
+  if (!w) return "";
+  const local = !remoteRow(w);
+  const changes = local ? detailsData("changes", workloadChangesRead(w)) : { data: { entries: [] } };
+  const events = detailsData("events", clusterEventsRead);
+  const mine = e => (!e.ns || e.ns === w.ns) && (e.obj === w.name || String(e.obj || "").startsWith(`${w.name}-`));
+  const rows = [
+    ...(changes.data?.entries || []).map(e => ({ at: e.at, title: `Changed ${e.changes.map(c => c.field).join(", ")}`,
+      detail: e.source === "outside" ? "Outside Homestead" : e.by ? `By ${UI.who(e.by)}` : "By Homestead" })),
+    ...(events.data?.events || []).filter(mine).map(e => ({ at: e.time, title: eventWords(e.reason), detail: reasonSentence(e.msg), tone: e.type === "Warning" ? "warn" : "" })),
+  ];
+  const reading = changes.loading && events.loading;
+  return (answerOf(w) ? answerCardRow(w) : "")
+    + (changes.error ? UI.callout("warn", "Its change history could not be read", esc(changes.error)) : "")
+    + (events.error ? UI.callout("warn", "The cluster's events could not be read", esc(events.error)) : "")
+    + (reading ? detailsSlot({ loading: true }, () => "", { reading: "Reading what happened…" }) : UI.activity(rows, { empty: "Nothing has been recorded for this app lately." }))
+    + (local ? `<div class="details-foot">${actionBar([{ label: "Open change history", run: `wlHistory(${jsq(w.ns)},${jsq(w.name)})`, tip: "Every change, with Undo." }], { shown: 1 })}</div>` : "");
+}
+
+/* Settings: what it runs and how, and the changes that can be made to it. */
+function workloadSettingsTab(key) {
+  const w = workloadByKey(key);
+  if (!w) return "";
   const update = workloadUpdateOf(w), off = w.desired === 0;
-  const answer = answerOf(w);
   const volumes = (w.claims || []).length && !remoteRow(w) ? `<span class="row">${w.claims.map(claim =>
     `<button type="button" class="tag info linkish" title="Open ${esc(claim)} in Volumes" onclick="closeDetails();openWorkloadVolume(${jsq(claim)})">${esc(claim)}</button>`).join("")}</span>` : "";
   const hardware = hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []));
   const released = workloadReleasedRow(w, true);
   const more = [released ? `<div class="wl-detail-released"><span>Old volumes</span>${released}</div>` : "", gitopsDetail(w), startsAfterFact(w)].filter(Boolean).join("");
-  return workloadDetailNotice(w, update)
-    + UI.facts([
-      ["State", `${workloadStateChip(w)} <span class="dim xs">${w.ready} of ${w.desired} ready</span>`],
-      ["Address", `<span class="waccess">${accessPorts(w.ports)}</span>`, "link"],
-      ["Host", esc(workloadHost(w)), "node"],
-      !off && ["CPU", `<span class="mono">${workloadCpuPercent(w.cpu)}</span>`, "chip"],
-      !off && ["Memory", `<span class="mono">${workloadMemory(w.mem_mb)}</span>`, "memory"],
-      ["Image", `<span class="mono small">${(w.images || []).map(esc).join("<br>") || "—"}</span>`, "box"],
-      hardware && ["Hardware", hardware, "chip"],
-      volumes && ["Volumes", volumes, "disk"],
-      !off && ["Running for", esc(w.uptime ? fmtUp(w.uptime) : "Starting"), "clock"],
-      ["Updates", autoUpdateTag(w) || updateOwnerPill(update) || "Manual", "update"],
-      w.prefers && ["Placement", preferTag(w), "node"],
-      ["Namespace", esc(w.ns), "list"],
-    ])
-    + (answer ? answerCardRow(w) : "")
+  const change = (workloadMenuItems(w, update, off) || []).filter(i => ["Edit settings", "Move app…"].includes(i.label));
+  return UI.facts([
+    ["Image", `<span class="mono small">${(w.images || []).map(esc).join("<br>") || "—"}</span>`, "box"],
+    ["Copies ready", esc(`${w.ready} of ${w.desired}`), "layers"],
+    ["Address", `<span class="waccess">${accessPorts(w.ports)}</span>`, "link"],
+    !off && ["CPU", `<span class="mono">${workloadCpuPercent(w.cpu)}</span>`, "chip"],
+    ["Updates", autoUpdateTag(w) || updateOwnerPill(update) || "Manual", "update"],
+    w.prefers && ["Placement", preferTag(w), "node"],
+    hardware && ["Hardware", hardware, "chip"],
+    volumes && ["Volumes", volumes, "disk"],
+    ["Namespace", esc(w.ns), "list"],
+  ])
     + (more ? UI.withFactIcons(`<div class="about-grid wl-detail-more">${more}</div>`) : "")
-    + workloadHierarchy(w, { wide: true });
+    + workloadHierarchy(w, { wide: true })
+    + (change.length ? `<div class="details-foot">${actionBar(change.map(i => ({ ...i, plain: true })), { shown: 2 })}</div>` : "");
 }
 
 if (typeof DETAIL_KINDS === "object") DETAIL_KINDS.app = {
   head: key => {
     const w = workloadByKey(key);
-    return w && { title: w.name, sub: [w.group, w.ns, workloadHost(w)].filter(Boolean).join(" · "), iconHtml: appAvatar(w.name, w.icon),
+    return w && { title: w.name, sub: [w.group || "Ungrouped", w.ns, workloadHost(w)].join(" · "), iconHtml: appAvatar(w.name, w.icon),
       cluster: w.site && typeof fleetAll === "function" && fleetAll() ? w.site.id : "" };
   },
   actions: key => {
     const w = workloadByKey(key);
     return w ? workloadDetailActions(w, workloadUpdateOf(w), w.desired === 0) : [];
   },
-  tabs: [{ id: "overview", label: "Overview", html: workloadOverview }],
+  tabs: [
+    { id: "overview", label: "Overview", html: workloadOverview },
+    { id: "logs", label: "Logs", html: workloadLogsTab, when: key => !remoteRow(workloadByKey(key)) },
+    { id: "activity", label: "Activity", html: workloadActivityTab },
+    { id: "settings", label: "Settings", html: workloadSettingsTab },
+  ],
 };
 
 /* The status's card: how it is, the last day of checks, and its next step. */
@@ -112,5 +183,6 @@ if (typeof HOVER_CARDS === "object") HOVER_CARDS.app = key => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  workloadByKey, workloadUpdateOf, workloadHost, workloadStateChip, workloadDetailNotice, workloadOverview,
+  workloadByKey, workloadUpdateOf, workloadHost, workloadStateChip, workloadDetailNotice, workloadPod, workloadLogRead, workloadChangesRead, workloadLogSlot,
+  workloadAddressWords, workloadOverview, workloadLogsTab, workloadActivityTab, workloadSettingsTab,
 };

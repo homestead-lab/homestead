@@ -41,8 +41,8 @@ test("collapsed rows keep failure and update signals, remote rows omit local upd
 test("detail values and identity controls escape hostile names and image references",()=>{
   const c=context(),a=workload(null,'<img src=x onerror="bad()">');a.images=['<script>bad()</script>'];
   vm.runInContext(`STATE.data.wl=${JSON.stringify([a])}`,c);
-  for(const html of [c.workloadTableRows([a]),c.workloadOverview(c.workloadRowKey(a))])assert.doesNotMatch(html,/<img src=x|<script>bad/);
-  assert.match(c.workloadOverview(c.workloadRowKey(a)),/&lt;script&gt;bad\(\)&lt;\/script&gt;/);
+  for(const html of [c.workloadTableRows([a]),c.workloadOverview(c.workloadRowKey(a)),c.workloadSettingsTab(c.workloadRowKey(a))])assert.doesNotMatch(html,/<img src=x|<script>bad/);
+  assert.match(c.workloadSettingsTab(c.workloadRowKey(a)),/&lt;script&gt;bad\(\)&lt;\/script&gt;/);
 });
 test("node comparison keeps one scrollable matrix and selection across refresh",()=>{
   const c=context(),nodes=Array.from({length:6},(_,i)=>({name:`compute-host-${i+1}`,status:"Ready",cpu_pct:0,cpu_cap:4,mem_pct:20,mem_used_gb:2,mem_cap_gb:10,workloads:[],disks:[]}));
@@ -95,7 +95,7 @@ test("a card shows the image's name and tag with the full reference on hover; a 
   assert.match(card,/>home-assistant:2026.10.1</);
   assert.doesNotMatch(c.workloadTableRows([a]),/home-assistant:2026/);
   vm.runInContext(`STATE.data.wl=${JSON.stringify([a])}`,c);
-  assert.match(c.workloadOverview(c.workloadRowKey(a)),/ghcr.io\/home-assistant\/home-assistant:2026.10.1/);
+  assert.match(c.workloadSettingsTab(c.workloadRowKey(a)),/ghcr.io\/home-assistant\/home-assistant:2026.10.1/);
 });
 
 /* The Containers page in the one-bar design (Nov 2026): a summary line, rows
@@ -134,13 +134,17 @@ test("a row's labelled action fits the app: its update, its logs when in trouble
   vm.runInContext('STATE.data.imageUpdateMap={"apps/web":{available:true,images:[{}]}}',c);
   assert.equal(first(web),"Update image");
 });
-test("the row's ⋯ menu is grouped, and the sidebar offers every other action after the row's",()=>{
+test("the row's ⋯ menu is grouped; the sidebar's buttons are the main action, Restart and Open app, then every other action",()=>{
   const c=context(),w=workload();
   const row=c.workloadRowActions(w,null,false);
   assert.match(row,/actionmenu-group[^>]*>Use<[\s\S]*actionmenu-group[^>]*>Change<[\s\S]*actionmenu-group[^>]*>Remove<[\s\S]*Delete app…/);
   assert.doesNotMatch(row,/>Monitoring<|>History</,"the rest is in the details sidebar");
   const all=c.workloadDetailActions(w,null,false),labels=all.map(i=>i.label);
-  assert.deepEqual([...labels.slice(0,3)],["Open logs","Open console","Diagnostics"]);
+  assert.deepEqual([...labels.slice(0,3)],["Open logs","Restart app","Open console"],"with no address, the logs lead and Restart follows");
+  const web={...w,ports:[{port:8000,ip:"192.0.2.20",primary:true}]};
+  assert.deepEqual([...c.workloadDetailActions(web,null,false).slice(0,3).map(i=>i.label)],["Open app","Restart app","Open logs"]);
+  assert.deepEqual([...c.workloadDetailActions({...web,ready:0},null,false).slice(0,3).map(i=>i.label)],["Open logs","Restart app","Open app"],"an app in trouble: the mockup's order");
+  assert.deepEqual([...c.workloadDetailActions({...web,desired:0,ready:0},null,true).slice(0,2).map(i=>i.label)],["Start app","Open app"]);
   assert.ok(labels.includes("Monitoring")&&labels.includes("History"));
   assert.equal(new Set(all.map(i=>i.run)).size,all.length,"no action twice");
   assert.equal(all.find(i=>i.label==="Monitoring").group,"More");
@@ -152,10 +156,17 @@ test("an app's sidebar and hover cards are built from the list the page read",()
   vm.runInContext(`STATE.data.wl=${JSON.stringify([w])}`,c);
   const key=c.workloadRowKey(w);
   assert.equal(c.DETAIL_KINDS.app.head(key).title,"paperless");
-  assert.equal(c.DETAIL_KINDS.app.head(key).sub,"apps · host-a");
+  assert.equal(c.DETAIL_KINDS.app.head(key).sub,"Ungrouped · apps · host-a");
+  assert.deepEqual([...c.DETAIL_KINDS.app.tabs.map(t=>t.label)],["Overview","Logs","Activity","Settings"]);
+  // Overview (the mockup): the address in words, the host, memory and how long it has run, as tiles without icons.
   const overview=c.DETAIL_KINDS.app.tabs[0].html(key);
-  for(const label of ["State","Address","Host","Memory","Image","Volumes","Updates"])assert.match(overview,new RegExp(`</svg>${label}</dt>`),`${label} has its icon`);
-  assert.match(overview,/openWorkloadVolume\(&quot;paperless-data&quot;\)/);
+  assert.match(overview,/<dl class="ui-facts plain"><div><dt>Address<\/dt><dd><button[^>]*openSvc\(&quot;192.0.2.20&quot;,8000\)[^>]*><span class="mono">192.0.2.20<\/span> <span class="dim">port<\/span> <span class="mono">8000<\/span><\/button>/);
+  for(const label of ["Host","Memory","Running for"])assert.match(overview,new RegExp(`<dt>${label}</dt>`),label);
+  assert.doesNotMatch(overview,/Last lines of its log/,"a healthy app shows no log");
+  // Settings: what it runs, with the icons.
+  const settings=c.workloadSettingsTab(key);
+  for(const label of ["Image","Copies ready","Volumes","Updates","Namespace"])assert.match(settings,new RegExp(`</svg>${label}</dt>`),`${label} has its icon`);
+  assert.match(settings,/openWorkloadVolume\(&quot;paperless-data&quot;\)/);
   assert.match(c.HOVER_CARDS["app-status"](key),/<b>paperless is running<\/b>[\s\S]*Copies ready[\s\S]*1 of 1[\s\S]*Open details ›/);
   assert.match(c.HOVER_CARDS.app(key),/<b>paperless<\/b>[\s\S]*Image[\s\S]*image:stable[\s\S]*Open details ›/);
   assert.equal(c.DETAIL_KINDS.app.head('["","apps","gone"]'),null,"an app that is gone has nothing to show");

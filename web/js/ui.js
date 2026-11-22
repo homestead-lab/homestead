@@ -256,9 +256,33 @@ const UI = (() => {
   ];
   const factIcon = (label, chosen = "") => chosen || (FACT_ICONS.find(([re]) => re.test(String(label || ""))) || [0, "info"])[1];
   const factIconSvg = (label, chosen = "") => `<svg class="ui-fact-icon" aria-hidden="true"><use href="#i-${factIcon(label, chosen)}"/></svg>`;
-  /* [[label, valueHtml, icon?], ...] - values are HTML so they can carry chips. */
-  const facts = pairs => `<dl class="ui-facts">${pairs.filter(Boolean).map(([label, valueHtml, chosen]) =>
-    `<div><dt>${factIconSvg(label, chosen)}${text(label)}</dt><dd>${valueHtml}</dd></div>`).join("")}</dl>`;
+  /* [[label, valueHtml, icon?], ...] - values are HTML so they can carry chips.
+     icons: false leaves the icons out, for the few tiles under a details
+     sidebar's section heading, where the heading already says what they are. */
+  const facts = (pairs, { icons = true } = {}) => `<dl class="ui-facts${icons ? "" : " plain"}">${pairs.filter(Boolean).map(([label, valueHtml, chosen]) =>
+    `<div><dt>${icons ? factIconSvg(label, chosen) : ""}${text(label)}</dt><dd>${valueHtml}</dd></div>`).join("")}</dl>`;
+
+  /* What happened to something, newest first: [{ at, title, detail?, tone? }].
+     at is a date, ISO text or epoch seconds or milliseconds; the title and
+     detail are plain text. */
+  const activity = (rows, { empty = "Nothing has been recorded yet." } = {}) => {
+    const when = v => typeof asDate === "function" ? asDate(v) : null;
+    const sorted = (rows || []).filter(Boolean).map(r => ({ ...r, when: when(r.at) }))
+      .sort((a, b) => (b.when?.getTime() || 0) - (a.when?.getTime() || 0));
+    return sorted.length ? `<ol class="ui-activity">${sorted.map(r => `<li${r.tone ? ` class="${tone(r.tone)}"` : ""}><i aria-hidden="true"></i>`
+      + `<div><b>${text(r.title)}</b>${r.detail ? `<span>${text(r.detail)}</span>` : ""}</div>`
+      + `${r.when ? `<time datetime="${r.when.toISOString()}">${text(typeof fmtAt === "function" ? fmtAt(r.when) : r.when.toISOString())}</time>` : ""}</li>`).join("")}</ol>`
+      : `<div class="ui-empty">${text(empty)}</div>`;
+  };
+
+  /* A log's last lines as the log shows them, each Kubernetes timestamp cut
+     to the local time of day: [09:41:58] gunicorn: worker timeout. */
+  const logTail = (raw, lines = 0) => {
+    const all = String(raw || "").replace(/\s+$/, "").split(/\r?\n/);
+    const clock = at => (typeof fmtLogClock === "function" && fmtLogClock(at)) || at;
+    const shown = (lines ? all.slice(-lines) : all).map(line => line.replace(/^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z) /, (_, at) => `[${clock(at)}] `));
+    return `<pre class="ui-log">${text(shown.join(String.fromCharCode(10)))}</pre>`;
+  };
   /* A hover card (design.md "Hover cards"): what a hover over a status, a
      figure or a name shows. A title and its chip, a few facts with their
      icons, a small chart or strip where the trend matters, and one link to
@@ -864,7 +888,7 @@ const UI = (() => {
   const openDialog = (title, spec, { wide = false, context = "", child = false } = {}) =>
     (child && typeof childModal === "function" ? childModal : modal)(title, dialog(spec), wide, context);
 
-  return { factIcon, withFactIcons, card, spark, strip, dialog, openDialog, head: subjectHtml, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, checklist, steps, progress, meter, table, more, ack,
+  return { factIcon, withFactIcons, card, spark, strip, dialog, openDialog, head: subjectHtml, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, activity, logTail, checklist, steps, progress, meter, table, more, ack,
     fields, field, typedConfirm, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
