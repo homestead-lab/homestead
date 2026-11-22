@@ -1462,8 +1462,11 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
   body.title-picks .phead>div:first-child>.pagetabs{display:none}
   body.phone-plus .phead .page-actions>button.btn.pri,body.phone-plus .collection-mobile-toolbar>button.btn.pri{display:none}
   /* The summary line with ⋯ beside it, when ⋯ is all the header has left
-     (its main button is ＋). A header with more keeps its own layout. */
-  .phead:has(>.page-actions:not(:has(>:not(.actionmenu,button.btn.pri,.scanprogress)))){display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;column-gap:12px}
+     (its main button is ＋; syncPhoneBar marks it). A header with more keeps its own layout. */
+  .phead.phone-slim{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;column-gap:12px}
+  /* Room for the title beside refresh, search, the guide, ＋, the bell and the account. */
+  .topright{gap:4px}
+  body.title-picks #title .title-pick{font-size:17px}
   /* body: ahead of the collection page's own phone rules further down. */
   body .collection-mobile-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:10px}
   body .collection-mobile-head>.collection-mobile-summary{grid-column:1;grid-row:1;margin:0}
@@ -2209,6 +2212,15 @@ div.ipam-line.dim{display:block}
 .vm-host{margin-left:auto;color:var(--tx)}
 .vm-host::before{content:"on ";color:var(--dim)}
 .vm-table .vm-addr{flex-wrap:nowrap}
+/* Data protection's volumes and schedules (views-protect-volumes.js): a coloured edge for what needs a person. */
+.protect-table tr.protect-problem.bad>td:first-child,.schedules-table tr.protect-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+.protect-table tr.protect-problem.warn>td:first-child,.schedules-table tr.protect-problem.warn>td:first-child{box-shadow:inset 3px 0 0 var(--med)}
+.protect-table tr{cursor:pointer}
+.protect-open{padding:0;color:var(--tx);font-weight:650;text-align:left}
+.protect-kept{display:flex;align-items:center;gap:12px;margin-top:14px;padding:12px 16px}
+.protect-kept>div{flex:1 1 auto;min-width:0;font-size:13px}
+.protect-kept-dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:var(--low)}
+.protect-foot{margin:12px 0 0}
 /* A VM in trouble colours its row's edge, as an app's does; its name opens the details sidebar. */
 .vm-table tr.vm-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
 .vm-table tr.vm-problem.warn>td:first-child{box-shadow:inset 3px 0 0 var(--med)}

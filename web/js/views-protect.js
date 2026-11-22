@@ -126,8 +126,25 @@ window.objectStoreRemove = async () => {
    afresh; a load overtaken by a newer one fills nothing. */
 let protectLoad = { id: 0, token: null, parts: {} };
 
+/* The summary line again, once the restore tests it names are read. */
+function protectLinePaint() {
+  const line = document.querySelector("#views .phead > div:first-child > p");
+  if (line && STATE.data.lh && protectSection() === "volumes") line.innerHTML = protectSummary(STATE.data.lh, { q: PROTECT_FILTER.q });
+}
+
+/* The page's sections (Nov 2026 mockup), each a tab in the top bar
+   (router.js TABS.protect): whether each volume can be restored, the
+   schedules, the restore tests, and where backups go with the groups and
+   housekeeping. One loader draws whichever is open. */
+const PROTECT_SECTIONS = { protect: "volumes", "protect-schedules": "schedules", "protect-tests": "tests", "protect-settings": "settings" };
+const protectSection = () => PROTECT_SECTIONS[STATE.view] || "volumes";
+
 async function viewProtect() {
   if (platformLacks("longhorn", "Data protection")) return;
+  // Links from before the sections still land where they meant.
+  const hash = typeof location === "object" ? location.hash || "" : "";
+  if (STATE.view === "protect" && (hash === "#housekeeping" || hash === "#restore-tests")) return go(hash === "#housekeeping" ? "protect-settings" : "protect-tests");
+  const section = protectSection();
   const token = window.NAV_TOKEN;
   const kept = protectLoad.token === token ? protectLoad.parts : {};
   const load = protectLoad = { id: protectLoad.id + 1, token, parts: { ...kept } };
@@ -149,155 +166,80 @@ async function viewProtect() {
     STATE.data[key === "objects" ? "objectStore" : "lhBackupVolumes"] = answer;
     if (drawn) show(drawn);
   });
+  // Where each part is shown depends on the section: Volumes says where
+  // backups go under its list and what was kept after a deletion; Settings
+  // shows the backup storage and every backup on the target.
+  const top = ({ d, tgt }) => section === "settings" ? protectStorage(d, load.parts.objects, tgt) : protectTop(d, load.parts.objects, tgt);
+  const backupsPart = ({ tgt }) => section === "settings" ? protectBackups(load.parts.backups, tgt) : protectKept(load.parts.backups);
   const parts = [
     // Unread is not "not deployed": that would offer to set it up again (#620).
-    part("objects", api("/api/objectstore").catch(e => ({ unread: e.message })),
-      ({ d, tgt, cover }) => fill("protect-top", protectTop(d, load.parts.objects, tgt, cover))),
+    part("objects", api("/api/objectstore").catch(e => ({ unread: e.message })), drawnNow => fill("protect-top", top(drawnNow))),
     // Unread is not "no backups on the target yet" (#620).
-    part("backups", api("/api/lh/backupvolumes").catch(e => ({ unread: e.message })),
-      ({ tgt }) => fill("protect-backups", protectBackups(load.parts.backups, tgt))),
+    part("backups", api("/api/lh/backupvolumes").catch(e => ({ unread: e.message })), drawnNow => fill("protect-backups", backupsPart(drawnNow))),
   ];
   const d = await api("/api/lh/overview");
   if (!current()) return;
   STATE.data.lh = d;
   protectFilterRead();
   const tgt = d.target || {};
-  const cover = d.total ? Math.round(d.protected / d.total * 100) : 0;
-
-  paint(`${UI.pageHeader(`Data protection`, `Snapshot and backup schedules, groups and backups for ${d.total} volume${d.total === 1 ? "" : "s"}`, `
-        ${moreMenu([{ label: "Backup target", icon: "shield", run: "lhTarget()", need: "admin" }, { label: "Plans", icon: "clock", run: "lhPlans()", need: "operator" }])}
-        <button class="btn pri" data-need="operator" onclick="lhJob()">＋ New job</button>
-      `)}
-
-  <div id="protect-top">${protectTop(d, load.parts.objects, tgt, cover)}</div>
-${protectBody(d, tgt, load.parts.backups)}`);
-  drawn = { d, tgt, cover };
-  loadWeeklyTrim();
-  protectVolumesPaint();
-  loadRestoreTests();
-  loadPreviousVolumes();
-  window.loadFsFreeze?.();
+  const actions = `${moreMenu([{ label: "Backup target", icon: "shield", run: "lhTarget()", need: "admin" }, { label: "Plans", icon: "clock", run: "lhPlans()", need: "operator" },
+      { label: "New group", icon: "plus", run: "lhGroup()", need: "operator" }])}
+    <button class="btn pri" data-need="operator" onclick="lhJob()">＋ New schedule</button>`;
+  const shown = { d, tgt };
+  paint(`${UI.pageHeader(`Data protection`, protectLine(section, d), actions)}${protectSectionBody(section, d, tgt, top(shown), backupsPart(shown))}`);
+  drawn = shown;
+  if (section === "volumes") { protectVolumesPaint(); loadRestoreTests(); loadPreviousVolumes(); }
+  if (section === "tests") loadRestoreTests();
+  if (section === "settings") { loadWeeklyTrim(); loadPreviousVolumes(); window.loadFsFreeze?.(); }
   // Settled when every part is on the page, as before, for whoever waits on it.
   await Promise.all(parts);
 }
 
-/* Backup storage, the summary line and the three cards behind it. `objects`
-   is undefined while backup storage is still being read. */
-function protectTop(d, objects, tgt, cover) {
-  const reading = objects === undefined;
-  objects = objects || {};
-  // Jobs that could not be read leave coverage unknown, not 0% (#620, #927).
-  const unread = d.jobs_unread;
-  return `${unread ? UI.callout("warn", "Longhorn's snapshot and backup schedules could not be read", `<p>${esc(unread)}</p>
-    <p>Coverage, the schedules and This week's clashes are shown when they can be read. Reload to try again.</p>`) : ""}
-  ${reading || objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
-  ${summaryLine("protect", [
-      unread ? `${UI.chip("coverage unknown", "warn")} ${d.total} volumes`
-        : `${UI.chip(`${cover}% covered`, cover === 100 ? "ok" : cover ? "warn" : "bad")} ${d.protected} of ${d.total} volumes`,
-      reading ? `Backup storage <span class="dim small">reading…</span>`
-        : objects.deployed ? `Backup storage ${UI.chip(objects.ready ? "serving" : "starting", objects.ready ? "ok" : "warn")}`
-        : objects.unread ? `Backup storage ${UI.chip("unknown", "warn", { tip: "It could not be read. " + objects.unread })}` : "",
-      tgt.configured ? `Target ${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}` : UI.chip("no backup target", "warn"),
-      unread ? "" : `${d.backed_up ?? 0} backed up off the cluster`],
-    `${objects.deployed ? objectStoreCard(objects, tgt) : ""}
-  <div class="grid g3" style="margin-bottom:18px">
-    <div class="card flat">
-      <div class="ctitle">Coverage</div><div class="csub">Volumes with a snapshot or backup schedule</div>
-      ${unread ? `<div class="ui-help" style="margin-top:12px">Not known, because the schedules could not be read.</div>` : `
-      <div class="row" style="margin-top:12px;gap:18px;align-items:flex-end">
-        <div class="bignum">${cover}<span class="unit">%</span></div>
-        <div class="csub" style="padding-bottom:6px">${d.protected} of ${d.total} protected ·
-          ${d.backed_up ?? 0} backed up off the cluster</div>
-      </div>
-      ${meter(cover, 'style="margin-top:12px"')}`}
-      ${d.unprotected.length ? `<div style="margin-top:12px">
-        <button type="button" class="linkish dim xs pf-jump" onclick="protectFilter({show:'uncovered'},true)">NOT COVERED · show all ${d.unprotected.length}</button>
-        <div class="pf-chips">${d.unprotected.slice(0, 6).map(name => {
-          const v = d.volumes.find(x => (x.pvc || x.name) === name);
-          return v ? `<button type="button" class="tag warn tagbtn" data-need="operator" data-tip="Protect ${esc(name)}" onclick="lhAssign(${jsq(v.name)},${jsq(name)})">${esc(name)}</button>`
-            : UI.chip(name, "warn");
-        }).join("")}
-        ${d.unprotected.length > 6 ? `<button type="button" class="tag tagbtn" data-tip="Show every volume without a schedule" onclick="protectFilter({show:'uncovered'},true)">+${d.unprotected.length - 6}</button>` : ""}</div></div>` : ""}
-    </div>
-
-    <div class="card flat">
-      <div class="ctitle">Backup target</div><div class="csub">Storage outside the cluster that receives backups</div>
-      ${tgt.configured ? `
-        <div class="drow"><div class="dl">URL</div><div class="dv mono small">${esc(tgt.url)}</div></div>
-        <div class="drow"><div class="dl">Status</div><div class="dv">
-          ${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}</div></div>
-        ${tgt.reason ? `<div class="dim xs" style="margin-top:8px">${esc(tgt.reason)}</div>` : ""}
-        ${tgt.secret_missing ? `${UI.callout("warn", { html: `Its keys are missing.` }, `The Secret ${esc(tgt.secret)} is not in longhorn-system, so backups cannot sign in to the target.
-          <button class="btn sm" data-need="admin" onclick="lhTarget()">Enter the keys</button>`, { attrs: 'style="margin-top:10px"' })}` : ""}`
-      : `<div class="note" style="margin-top:12px"><b>No backup target.</b> Snapshots work without one,
-         because they are stored on the volume. <b>Backups need a destination</b>, such as an NFS share or an S3 bucket.
-         Until one is set up, backup schedules fail.</div>`}
-    </div>
-
-    <div class="card flat">
-      <div class="between"><div><div class="ctitle">Groups</div><div class="csub">A job protects every volume in its groups</div></div>
-        <button class="btn sm" data-need="operator" onclick="lhGroup()">＋ Group</button></div>
-      <div style="margin-top:12px">${d.groups.map(g => {
-        const n = d.volumes.filter(v => v.groups.includes(g)).length;
-        return `<span class="pf-group"><button type="button" class="tag tagbtn ${g === "default" ? "info" : ""}" aria-pressed="${PROTECT_FILTER.group === g}"
-          data-tip="Show the volumes in ${esc(g)}" onclick="protectFilter({group:${jsq(g)}},true)">${esc(g)} · ${n}</button><button type="button" class="pf-edit"
-          data-need="operator" aria-label="Edit ${esc(g)}" data-tip="Edit ${esc(g)}" onclick="lhGroup(${jsq(g)})">${icon("edit")}</button></span>`;
-      }).join("")}</div>
-      <div class="dim xs" style="margin-top:12px">Longhorn puts every volume without a group in
-        <span class="mono">default</span>. Put volumes in a group to give them a schedule of their own.</div>
-    </div>
-  </div>
-`)}`;
+/* The header's line for each section. */
+function protectLine(section, d) {
+  if (section === "volumes") return protectSummary(d, { q: PROTECT_FILTER.q });
+  if (section === "schedules") return d.jobs_unread ? "<b>The schedules could not be read.</b>" : `<b>${d.jobs.length} schedule${d.jobs.length === 1 ? "" : "s"}.</b> A volume follows the schedules of its groups.`;
+  if (section === "tests") return "Each test restores an app's newest backups into a copy, checks that it starts, and removes it.";
+  return "Where backups go, the groups that decide which schedules each volume follows, and housekeeping.";
 }
 
-function protectBody(d, tgt, backupVolumes) {
-  return `
-  <div id="restore-tests" class="restore-tests">${restoreTestsSection()}</div>
+/* Each section's body. `top` and `backups` are the parts filled in when their reads return. */
+function protectSectionBody(section, d, tgt, top, backups) {
+  if (section === "schedules") return `${protectClashes(d)}${protectSchedulesTable(d)}
+    <p class="dim small protect-foot">A volume follows the schedules of its groups. A volume in no other group follows default. Groups are managed in Settings on this page.</p>`;
+  if (section === "tests") return `<div id="restore-tests" class="restore-tests">${restoreTestsSection()}</div>`;
+  if (section === "settings") return `<div id="protect-top">${top}</div>
+  ${UI.section("Groups", `<div class="cardlist">${(d.group_rows || []).map(groupCard).join("")}</div>
+    <p class="dim xs">Longhorn puts every volume without a group in <span class="mono">default</span>. Put volumes in a group to give them a schedule of their own.</p>`,
+    '<button class="btn sm" data-need="operator" onclick="lhGroup()">＋ New group</button>')}
+  <div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", '<div class="empty small"><span class="spin2"></span> Reading the weekly trim settings…</div>')}</div>
   <div id="previous-volumes" class="restore-tests"></div>
   <div id="fs-freeze" class="restore-tests"></div>
-
-  <div class="sec">Schedules ${tip("Snapshot and backup schedules. Longhorn calls these recurring jobs.")}</div>
-  ${d.jobs_unread ? `<div class="ui-help">The schedules could not be read, so none are listed. Reload to try again.</div>`
-  : d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
-    <div class="between">
-      <div class="row" style="gap:10px;min-width:0">
-        <div class="av n3" style="font-size:15px">${TASK_ICON[j.task] || "◷"}</div>
-        <div style="min-width:0"><div style="font-weight:680">${esc(j.name)}</div>
-          <div class="dim xs">${esc(j.task)}</div></div>
-      </div>
-      ${UI.chip(`${j.covers} vol`, j.covers ? "ok" : "warn")}
-    </div>
-    <div class="wmeta">
-      <div><div class="dim xs">SCHEDULE</div><div class="small" data-tip="cron ${esc(j.cron)} on the cluster's clock (UTC)">${esc(CRON.describe(j.cron))}</div></div>
-      <div><div class="dim xs">NEXT</div><div>${nextRun(j.cron)}</div></div>
-      <div><div class="dim xs">LAST</div><div>${lastRunText(j)}</div></div>
-      <div><div class="dim xs">KEEPS</div><div class="mono small">${KEEPS(j.task) ? j.retain : "—"}</div></div>
-    </div>
-    <div class="dim xs">${esc(j.desc)} · ${j.groups.length ? `groups ${j.groups.map(g => UI.chip(g, "neutral")).join(" ")}` : "no groups"} · ${j.concurrency} at a time</div>
-    <div class="row wacts">${actionBar([
-      { label: "Run now", icon: "play", run: `lhRun(${jsq(j.name)})`, need: "operator", disabled: j.running },
-      { label: "Edit", icon: "edit", run: `lhJob(${esc(JSON.stringify(j))})`, need: "operator" },
-      { label: "Volumes it covers", icon: "disk", run: `lhCovered(${jsq(j.name)})` },
-      { label: "Delete", icon: "trash", run: `lhJobDel(${jsq(j.name)})`, need: "admin", danger: true }], { label: `More actions for ${j.name}` })}
-    </div></div>`).join("")}</div>`
-  : `<div class="empty">No schedules yet. A protection plan sets up a sensible set of schedules at once:
-     <a onclick="lhPlans()" style="cursor:pointer;text-decoration:underline">choose a plan</a>. A daily snapshot of the <span class="mono">default</span>
-     group is the usual starting point: <a onclick="lhQuickStart()" style="cursor:pointer;text-decoration:underline">set up a daily snapshot</a>.</div>`}
-
-  <div class="sec between"><span>Groups</span>
-    <button class="btn sm" data-need="operator" onclick="lhGroup()">＋ New group</button></div>
-  <div class="cardlist">${(d.group_rows || []).map(groupCard).join("")}</div>
-
-  <div class="sec" id="protect-volumes">Volumes</div>
-  <div class="pf-bar" id="pf_bar"></div>
-  <div class="card flat pad0"><div class="tblwrap"><table data-sort="protect" class="tbl stack"><thead><tr>
-    <th>Volume</th><th>Size</th><th>Health</th><th>Groups</th><th>Protected by</th><th data-nosort>Last backup</th><th></th>
+  ${UI.section("Backups on the target", `<div id="protect-backups">${backups}</div>`)}`;
+  return `<div id="pf_note"></div>
+  <div class="card flat pad0"><div class="tblwrap"><table data-sort="protect" class="tbl stack protect-table"><thead><tr>
+    <th>Volume</th><th>Protection</th><th>Last snapshot</th><th>Last backup</th><th data-nosort>Restore test</th><th data-nosort></th>
   </tr></thead><tbody id="pf_rows"></tbody></table></div></div>
+  <div id="protect-backups">${backups}</div>
+  <div id="protect-top">${top}</div>`;
+}
 
-  <div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", '<div class="empty small"><span class="spin2"></span> Reading the weekly trim settings…</div>')}</div>
-
-  <div class="sec">Backups</div>
-  <div id="protect-backups">${protectBackups(backupVolumes, tgt)}</div>`;
+/* Settings' first part: the backup target and backup storage, as cards. */
+function protectStorage(d, objects, tgt) {
+  const reading = objects === undefined;
+  objects = objects || {};
+  return `${d.jobs_unread ? UI.callout("warn", "Longhorn's snapshot and backup schedules could not be read", esc(d.jobs_unread)) : ""}
+  ${UI.section("Backup target", `<div class="card flat">${tgt.configured ? `
+      <div class="drow"><div class="dl">URL</div><div class="dv mono small">${esc(tgt.url)}</div></div>
+      <div class="drow"><div class="dl">Status</div><div class="dv">${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}</div></div>
+      ${tgt.reason ? `<div class="dim xs" style="margin-top:8px">${esc(tgt.reason)}</div>` : ""}
+      ${tgt.secret_missing ? UI.callout("warn", "Its keys are missing.", `The Secret ${esc(tgt.secret)} is not in longhorn-system, so backups cannot sign in to the target.
+        <button class="btn sm" data-need="admin" onclick="lhTarget()">Enter the keys</button>`) : ""}`
+    : `<div class="note"><b>No backup target.</b> Snapshots work without one, because they are stored on the volume. <b>Backups need a destination</b>, such as an NFS share or an S3 bucket. Until one is set up, backup schedules fail.</div>`}</div>`,
+    '<button class="btn sm" data-need="admin" onclick="lhTarget()">Change</button>')}
+  ${reading ? UI.section("Backup storage", `<div class="empty small">Backup storage <span class="dim small">reading…</span></div>`)
+    : objects.unread ? UI.section("Backup storage", UI.callout("warn", "Backup storage could not be read", esc(objects.unread)))
+    : objectStoreCard(objects, tgt)}`;
 }
 
 /* The backups on the target. `backupVolumes` is undefined while they are still being read. */
@@ -328,6 +270,8 @@ const PROTECT_SHOWS = [
   ["protected", "Protected", v => (v.protected_by || []).length > 0],
   ["never", "Never backed up", v => !v.last_backup_at],
   ["unhealthy", "Unhealthy", v => v.robustness !== "healthy"],
+  // What the summary line names: a volume whose protection needs a person (views-protect-volumes.js).
+  ["attention", "Needing attention", v => !!protectProblem(v)],
 ];
 
 function protectMatches(v, f = PROTECT_FILTER) {
@@ -353,55 +297,6 @@ function protectFilterWrite() {
     history.replaceState(history.state, "", url);
   } catch (e) { /* the filter still applies */ }
 }
-
-function protectVolumeRow(v) {
-  return `<tr>
-    <td><b>${esc(v.pvc || v.name.slice(0, 16))}</b><div class="dim xs mono">${esc(v.namespace)}</div></td>
-    <td class="mono">${v.size_gb} GiB</td>
-    <td>${UI.chip(v.robustness || "?", v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "warn" : "bad")}</td>
-    <td>${v.groups.map(g => UI.chip(g, g === "default" ? "info" : "neutral")).join(" ") || '<span class="dim">—</span>'}</td>
-    <td>${v.protected_by === null ? UI.chip("unknown", "neutral", { tip: "Longhorn's schedules could not be read." })
-      : (v.protected_by || []).map(j => UI.chip(j, "ok")).join(" ")
-      || UI.chip("nothing", "warn", { tip: "No snapshot or backup schedule covers it." })}</td>
-    <td class="small dim">${v.last_backup_at ? fmtWhen(v.last_backup_at)
-      : (v.protected_by || []).length ? UI.chip("never", "warn", { tip: "A job covers it, but no backup of it has been made yet" }) : "never"}</td>
-    <td data-actions>${actionBar([{ label: "Snapshots", run: `lhSnaps(${jsq(v.name)},${jsq(v.pvc || v.name)})` },
-      { label: "Protect", run: `lhAssign(${jsq(v.name)},${jsq(v.pvc || v.name)})`, need: "operator" }])}</td></tr>`;
-}
-
-function protectVolumesPaint() {
-  const d = STATE.data.lh || {}, vols = d.volumes || [], bar = $("#pf_bar"), body = $("#pf_rows");
-  if (!bar || !body) return;
-  const f = PROTECT_FILTER, count = test => vols.filter(v => test(v) && (!f.group || (v.groups || []).includes(f.group))).length;
-  const shown = vols.filter(v => protectMatches(v));
-  const label = (PROTECT_SHOWS.find(s => s[0] === f.show) || PROTECT_SHOWS[0])[1];
-  const narrowed = f.show !== "all" || f.group || f.q;
-  if (!bar.dataset.ready) {
-    bar.dataset.ready = "1";
-    bar.innerHTML = `<div class="pf-shows" role="group" aria-label="Show"></div>
-      <div class="pf-more"><select id="pf_group" aria-label="Group" onchange="protectFilter({group:this.value})"></select>
-        <input id="pf_q" type="search" placeholder="Find a volume" aria-label="Find a volume" oninput="protectFilter({q:this.value})"></div>
-      <div class="pf-showing dim small" aria-live="polite"></div>`;
-  }
-  $(".pf-shows", bar).innerHTML = PROTECT_SHOWS.map(([key, name, test]) =>
-    `<button type="button" class="pf-chip" aria-pressed="${f.show === key}" onclick="protectFilter({show:${jsq(key)}})">${esc(name)} <span class="pf-n">${count(test)}</span></button>`).join("");
-  $("#pf_group").innerHTML = `<option value="">Every group</option>${(d.groups || []).map(g =>
-    `<option value="${esc(g)}"${f.group === g ? " selected" : ""}>${esc(g)}</option>`).join("")}`;
-  if ($("#pf_q").value !== f.q) $("#pf_q").value = f.q;
-  $(".pf-showing", bar).innerHTML = narrowed ? `Showing ${shown.length} of ${vols.length}: ${esc([f.show !== "all" && label, f.group && `group ${f.group}`, f.q && `“${f.q}”`].filter(Boolean).join(" · "))}
-      · <button type="button" class="linkish" onclick="protectFilter({show:'all',group:'',q:''})">Clear</button>` : "";
-  body.innerHTML = shown.length ? shown.map(protectVolumeRow).join("")
-    : `<tr><td colspan="7"><div class="empty small">No volume matches.</div></td></tr>`;
-  if (typeof sortTables === "function") sortTables(body.closest("table").parentElement);
-}
-
-window.protectFilter = (change, jump = false) => {
-  Object.assign(PROTECT_FILTER, change);
-  protectFilterWrite();
-  protectVolumesPaint();
-  document.querySelectorAll(".pf-group > .tagbtn").forEach(b => b.setAttribute("aria-pressed", String(b.textContent.startsWith(`${PROTECT_FILTER.group} ·`) && !!PROTECT_FILTER.group)));
-  if (jump) $("#protect-volumes")?.scrollIntoView({ behavior: "smooth", block: "start" });
-};
 
 /* A group, what is in it and what protects it. */
 function groupCard(g) {
@@ -1150,10 +1045,13 @@ const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(
 
 async function loadRestoreTests() {
   const host = document.getElementById("restore-tests");
-  if (!host) return;
+  const rows = document.getElementById("pf_rows");
+  if (!host && !rows) return;
   // A list that cannot be read is kept as the error, so the next page paint says so too.
   try { STATE.data.restoreTests = await api("/api/restore-tests"); }
   catch (e) { STATE.data.restoreTests = { error: e.message }; }
+  // Volumes: each row's restore test, and a failed one in the summary.
+  if (!host) { protectVolumesPaint(); protectLinePaint(); return; }
   // Morphed in, prepared as the page paint prepares it, so rows that did not change stay put.
   const next = host.cloneNode(false);
   next.innerHTML = restoreTestsSection();
@@ -1169,8 +1067,8 @@ async function loadRestoreTests() {
 // The section as the page paints it: the last list while it is read again,
 // and the placeholder only before the first (#834).
 function restoreTestsSection(d = STATE.data.restoreTests) {
-  if (!d) return `<div class="sec">Restore tests</div><div class="empty small"><span class="spin2"></span> Finding the newest backups of each app…</div>`;
-  if (d.error) return `<div class="sec">Restore tests</div>${UI.callout("warn", "Restore tests could not be listed", esc(d.error))}`;
+  if (!d) return `<div class="empty small"><span class="spin2"></span> Finding the newest backups of each app…</div>`;
+  if (d.error) return `${UI.callout("warn", "Restore tests could not be listed", esc(d.error))}`;
   const row = r => {
     const last = r.last, restores = r.restores.map(x => `${x.claim} · ${x.backup}`).join(", ");
     const result = r.running ? UI.chip("testing now", "info")
@@ -1182,9 +1080,9 @@ function restoreTestsSection(d = STATE.data.restoreTests) {
       <td data-label="Last test">${result}${last && !last.ok ? `<div class="dim xs restore-why">${esc(last.message || "")}</div>` : ""}</td>
       <td data-actions>${r.restores.length && !r.running ? actionBar([{ label: "Test now", icon: "play", run: `restoreTestRun(${jsq(r.ns)},${jsq(r.name)})`, need: "admin" }], { label: `Restore test for ${r.name}` }) : ""}</td></tr>`;
   };
-  return `<div class="between restore-head"><div class="sec">Restore tests</div>
+  // The section is its own tab now: its header says what it is, so no heading of its own.
+  return `<div class="between restore-head"><div class="dim xs" id="rt_off"${d.enabled ? " hidden" : ""}>Off · tests run only when Test now is chosen</div>
       <label class="switch" data-need="admin"><input type="checkbox" id="rt_on" ${d.enabled ? "checked" : ""} onchange="restoreTestsSwitch(this.checked)"> Test each app every ${d.every_days} days</label></div>
-    <div class="dim xs" id="rt_off"${d.enabled ? " hidden" : ""}>Off · tests run only when Test now is chosen</div>
     ${UI.guide("How restore tests work", `<p>A test restores an app's newest backups into new volumes and starts a copy of the app on them. The copy has no network access, and its other volumes are empty, so it cannot change real data. The test checks that the copy starts and responds, then removes everything it created. One test runs at a time, outside the maintenance window, when Longhorn has room.</p>`)}
     ${d.apps.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact restore-table"><thead><tr><th>App</th><th>Restores</th><th>Last test</th><th data-nosort></th></tr></thead>
       <tbody>${d.apps.map(row).join("")}</tbody></table></div></div>` : '<div class="empty small">No app has volumes to test.</div>'}`;
@@ -1258,11 +1156,14 @@ window.restoreIntoStart = async () => {
 const KEEP_CHOICES = [0, 3, 7, 14, 30, 90];
 async function loadPreviousVolumes() {
   const host = document.getElementById("previous-volumes");
-  if (!host) return;
+  const kept = document.getElementById("protect-backups");
+  if (!host && !kept) return;
   let d;
   try { d = await api("/api/volumes/previous"); }
-  catch (e) { host.innerHTML = UI.section("Previous volumes", UI.callout("warn", "Previous volumes could not be listed", esc(e.message))); return; }
+  catch (e) { if (host) host.innerHTML = UI.section("Previous volumes", UI.callout("warn", "Previous volumes could not be listed", esc(e.message))); return; }
   STATE.data.previousVolumes = d;
+  // Volumes: the line of what is kept counts them.
+  if (!host) { if (STATE.data.lhBackupVolumes !== undefined && protectSection() === "volumes") kept.innerHTML = protectKept(STATE.data.lhBackupVolumes, d); return; }
   const choices = KEEP_CHOICES.includes(d.keep_days) ? KEEP_CHOICES : [...KEEP_CHOICES, d.keep_days].sort((a, b) => a - b);
   const choice = `<label class="small" data-need="admin">Keep for <select id="pv_days" onchange="previousKeepDays(this.value)">${choices.map(n =>
     `<option value="${n}" ${n === d.keep_days ? "selected" : ""}>${n ? `${n} days` : "until deleted"}</option>`).join("")}</select></label>`;

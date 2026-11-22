@@ -19,6 +19,9 @@ const VIEWS = {
   storage:   ["storage",   viewStorage,   true],
   images:    ["storage",   viewImages,    false],
   protect:   ["storage",   viewProtect,   true],
+  "protect-schedules": ["storage", viewProtect, true],
+  "protect-tests": ["storage", viewProtect, true],
+  "protect-settings": ["storage", viewProtect, true],
   schedules: ["system",    viewSchedules, true],
   "schedule-week": ["system", () => viewScheduleWeek(), true],
   monitoring: ["workloads", () => viewMonitoring(), true],
@@ -232,7 +235,9 @@ function go(v, options = {}) {
     }
   }
   const [, fn] = VIEWS[v], t = HomesteadRouter.ROUTES[v].label;
-  $("#title").textContent = t;
+  // A page with tabs is titled by its family (Data Protection, Containers); the
+  // highlighted tab says which part is open, and the browser's tab names it.
+  $("#title").textContent = HomesteadRouter.tabsFor(v).length ? HomesteadRouter.ROUTES[HomesteadRouter.navView(v)].label : t;
   renderBreadcrumb(v);
   pageTitle(t);
   if (options.history !== false) {

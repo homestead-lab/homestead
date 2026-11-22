@@ -331,6 +331,19 @@ Open console while a VM runs, Start VM when it is shut down, and Edit settings
 when it cannot start. The summary names the VMs that are shut down. Its
 sidebar's tabs are Overview (address, size, memory, disk activity, host),
 Disks, Activity and Settings; the VM page keeps every other detail.
+Data protection is four sections, each a tab in the top bar: Volumes,
+Schedules, Restore tests and Settings. Volumes' summary says how recent the
+backups are ("No volume has a backup from the last day.") and links each
+volume whose protection needs a person; its columns are Volume, Protection
+in words ("Snapshot every hour, 24 kept"), Last snapshot, Last backup,
+Restore test and actions (Back up now, or Protect volume when nothing
+protects it), then one line for what was kept after a restore or a deletion,
+and where backups are stored. A volume's sidebar shows its problem with the
+fix, the schedules that protect it by group and every restore point, with
+Snapshots, Backups and Restore tests tabs. Schedules is one table - what each
+does, when, which groups and volumes, its last and next run - under the clash
+that needs fixing. Settings holds the backup target, backup storage, the
+groups, housekeeping, previous volumes and consistent snapshots.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
 pause on the name or the state shows a hover card. The page's summary line

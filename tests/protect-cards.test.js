@@ -4,14 +4,16 @@
 // backups are filled into their own places when their reads do.
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
-const src = fs.readFileSync("web/js/views-protect.js", "utf8");
+const src = fs.readFileSync("web/js/views-protect.js", "utf8") + fs.readFileSync("web/js/views-protect-volumes.js", "utf8");
 
 const ANSWERS = {
   "/api/lh/overview": { total: 1, protected: 1, backed_up: 1, unprotected: [], groups: ["default"], group_rows: [],
     target: { configured: true, available: true, url: "s3://backups@example.com/" }, jobs: [],
     volumes: [{ name: "pvc-1", pvc: "paperless-data", namespace: "lab", size_gb: 10, robustness: "healthy", groups: ["default"], protected_by: ["nightly"] }] },
   "/api/objectstore": { deployed: true, ready: true, endpoint: "http://192.0.2.10:9000" },
-  "/api/lh/backupvolumes": [{ name: "pvc-1", pvc: "paperless-data", exists: true, count: 3, last_backup_at: "2026-10-01T02:00:00Z", size_mb: 100 }],
+  // A deleted volume's backups: Volumes says what is kept after a deletion.
+  "/api/lh/backupvolumes": [{ name: "pvc-1", pvc: "paperless-data", exists: true, count: 3, last_backup_at: "2026-10-01T02:00:00Z", size_mb: 100 },
+    { name: "pvc-0", pvc: "paperless-old", exists: false, count: 2, last_backup_at: "2026-09-01T02:00:00Z", size_mb: 50 }],
 };
 const PATHS = Object.keys(ANSWERS);
 
@@ -23,7 +25,7 @@ function page() {
     history: { replaceState() {}, state: null }, STATE: { data: {}, q: "", view: "protect" }, NAV_TOKEN: 1,
     document: { addEventListener() {}, getElementById: id => hosts[id] || null, activeElement: null, querySelector: () => null },
     $: () => null, platformLacks: () => false, paint: html => paints.push(html), moreMenu: () => "", meter: () => "",
-    tip: t => t, icon: () => "", fmtWhen: String, fmtAt: String, bytesText: String, nextRun: () => "", CRON: { describe: String },
+    tip: t => t, icon: () => "", fmtWhen: String, fmtAt: String, fmtDay: String, bytesText: String, nextRun: () => "", CRON: { describe: String },
     enhanceActions() {}, loadAppIcons() {}, applyRole() {}, morph: (a, b) => fills.push([a.id, b.innerHTML]),
     esc: s => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
     api: path => new Promise((resolve, reject) => { reads.push(path); (waiting[path] ||= []).push({ resolve, reject }); }) };
@@ -44,7 +46,7 @@ test("the page is drawn when the overview answers, while the backups are still b
   answer("/api/lh/overview");
   await settle();
   assert.equal(paints.length, 1);
-  assert.match(last(), /paperless-data|Coverage/);
+  assert.match(last(), /backup from the last day/, "the summary line, from the overview alone");
   assert.match(last(), /<div id="protect-backups">[^]*Reading the backups/);
   assert.match(last(), /Backup storage[^<]*<span class="dim[^"]*">reading/);
 });
@@ -58,7 +60,7 @@ test("the backups fill their own section when they answer, without drawing the p
   assert.equal(paints.length, 1);
   const [id, html] = fills.find(([id]) => id === "protect-backups");
   assert.equal(id, "protect-backups");
-  assert.match(html, /data-sort="backupvols"[^]*paperless-data/);
+  assert.match(html, /Kept after a restore or a deletion[^]*backups of the deleted volume paperless-old/);
   answer("/api/objectstore");
   await done;
   const top = fills.find(([id]) => id === "protect-top");
@@ -76,7 +78,7 @@ test("parts that answered before the overview are in the first paint", async () 
   await done;
   assert.equal(paints.length, 1);
   assert.equal(fills.length, 0);
-  assert.match(last(), /data-sort="backupvols"/);
+  assert.match(last(), /Kept after a restore or a deletion/);
   assert.match(last(), /serving/);
 });
 
@@ -99,7 +101,7 @@ test("a refresh keeps the last backups on screen until they are read again", asy
   ctx.viewProtect();
   await settle();
   answer("/api/lh/overview"); await settle();
-  assert.match(last(), /data-sort="backupvols"/);
+  assert.match(last(), /Kept after a restore or a deletion/);
   assert.doesNotMatch(last(), /Reading the backups/);
 });
 

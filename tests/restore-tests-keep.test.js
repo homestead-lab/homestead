@@ -36,9 +36,9 @@ test("Restore tests show the placeholder only before the first list", async () =
   assert.doesNotMatch(html, /Finding the newest backups of each app/);
 });
 
-test("the Data Protection page paints the Restore tests section", () => {
-  const page = between(src, "function protectBody", "function protectBackups");
-  assert.match(page, /<div id="restore-tests" class="restore-tests">\$\{restoreTestsSection\(\)\}<\/div>/);
+test("the Data Protection page paints the Restore tests section in its own tab", () => {
+  const page = between(src, "function protectSectionBody", "function protectStorage");
+  assert.match(page, /if \(section === "tests"\) return `<div id="restore-tests" class="restore-tests">\$\{restoreTestsSection\(\)\}<\/div>`;/);
 });
 
 test("a new list is morphed in, prepared as the page paint prepares it", async () => {
