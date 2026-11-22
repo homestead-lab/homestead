@@ -1444,11 +1444,11 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 
 /* A phone's top bar (design.md "One bar", core-paint phoneBar): the title
    is the page, or its family's name over a picker of its pages; ＋ is the
-   page's main button. Refresh is the pull-down gesture, the cluster switch is
-   in the menu, and the breadcrumb goes. The setup guide's button stays. */
+   page's main button. The cluster switch is in the menu and the breadcrumb
+   goes; refresh and the setup guide's button stay. */
 .phone-primary{display:none}
 @media(max-width:560px){
-  #refresh,#crumb{display:none!important}
+  #crumb{display:none!important}
   .topleft,.topleft>div:not(.pagebar){min-width:0}
   .phone-primary:not([hidden]){display:grid;width:38px;height:38px;border-radius:50%;background:var(--tx);color:var(--bg);border-color:var(--tx)}
   .phone-primary svg{width:19px;height:19px;stroke-width:2.4}
