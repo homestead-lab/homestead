@@ -783,6 +783,26 @@ class CopyJobGoneTests(WithoutTheCopyJob):
         self.assertEqual("failed", self.poll()["status"])
         self.assert_undone(2)
 
+    def test_a_copy_pod_still_ending_after_a_background_delete_keeps_the_app_stopped(self):
+        """kubectl delete job (background): the Job answers 404 at once, and its
+        pod runs on for the grace period, still owned by the gone Job's uid."""
+        job = self.started()
+        self.gone(job)
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {
+            "name": "copy-pod", "namespace": "lab", "labels": {"other": "labels"},  # only the uid finds it
+            "deletionTimestamp": "2026-11-22T00:00:00Z",
+            "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": job["metadata"]["name"],
+                                 "uid": job["metadata"]["uid"], "controller": True}]},
+            "spec": {"volumes": [{"name": "v0", "persistentVolumeClaim": {"claimName": "new"}}]},
+            "status": {"phase": "Running"}})
+        result = self.poll()
+        self.assertEqual("running", result["status"], result["message"])
+        self.assertIn("1 copy pod is still running: copy-pod", result["message"])
+        self.assert_still_held()
+        self.kube.discard("/api/v1/namespaces/lab/pods/copy-pod")
+        self.assertEqual("failed", self.poll()["status"])
+        self.assert_undone(2)
+
     def test_another_pod_on_the_volumes_keeps_it_stopped_with_words(self):
         job = self.started()
         self.gone(job)
