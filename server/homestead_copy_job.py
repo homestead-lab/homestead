@@ -395,6 +395,14 @@ def _deleting(job):
     return job is not None and bool((job.get("metadata") or {}).get("deletionTimestamp"))
 
 
+def _being_deleted(ref, job):
+    finalizers = (job.get("metadata") or {}).get("finalizers") or []
+    held_by = f" Its finalizers: {', '.join(finalizers)}." if finalizers else ""
+    return (f"The copy Job is being deleted, and Kubernetes has not finished.{held_by} Homestead undoes the edit "
+            f"once the Job and its pods are gone. If it stays, check what holds it in Kubernetes. "
+            f"Job: {ref['namespace']}/{ref['job']}.")
+
+
 def _settling(ref):
     """A create with no answer recorded may still be done at the API server."""
     return (ref.get("phase") == "copy_intent" and not ref.get("job_uid") and
@@ -453,11 +461,14 @@ def _without_record(item, job, read, send, ops, admission):
     copy runs, the edit is undone as for a failed copy."""
     ref = item["ref"]
     name = f"{ref['namespace']}/{ref['job']}"
-    if ref["phase"] == "copy_intent" and job is not None:
+    if ref["phase"] in ("copy_intent", "copy_refused") and job is not None:
         # Never taken over by name: waited for, and its result not used.
         ref.update(phase="copy_unowned", unowned_uid=IDENT.identity(job)["uid"])
+        ref.pop("copy_refused", None)  # a Job is there, so it may have written to the new volumes
         ops.checkpoint(item)
-    if ref["phase"] == "copying":
+    if ref["phase"] == "copy_refused":
+        why = ref["refused"]
+    elif ref["phase"] == "copying":
         why = f"The copy Job is gone, so it is not known whether the copy finished. Job: {name}"
     elif ref["phase"] == "copy_unowned":
         why = f"Homestead has no record of creating the copy Job, so its result is not used. Job: {name}"
@@ -495,13 +506,13 @@ def resolve(item, read, send, ops, admission):
     if phase in ("preparing", "release_intent", "recovery_intent"):
         return "running", percent, "A request may be unfinished. Choose Check outcome. Homestead does not send it again."
     try:
-        if phase in ("copy_intent", "copy_unowned", "copying"):
+        if phase in ("copy_intent", "copy_refused", "copy_unowned", "copying"):
             if _settling(ref):
                 return "running", 20, _checking(ref["namespace"], ref["job"])
             job = _read_job(ref, read)  # once per poll
             if _deleting(job):
                 # A foreground delete: the Job stays while its pods go. Its result is not used.
-                return "running", percent or 20, "The copy Job is being deleted. Homestead waits until it and its pods are gone."
+                return "running", percent or 20, _being_deleted(ref, job)
             # Before exclusive(), which fails for good on a copy pod left without its Job.
             if phase != "copying" or job is None:
                 return _without_record(item, job, read, send, ops, admission)
@@ -540,9 +551,11 @@ def resolve(item, read, send, ops, admission):
                 if not (isinstance(error, urllib.error.HTTPError) and error.code in NOT_CREATED):
                     # No answer, or one that does not say no Job was created: read by name later.
                     return "running", 20, _checking(ref["namespace"], job_name)
-                ref.update(job_gone=True, copy_refused=True)
-                return restore(item, read, send, ops, admission,
-                               f"Kubernetes refused to create the copy Job (HTTP {error.code}), so nothing was copied")
+                # Recorded first, so a poll that asks again keeps the reason and does not wait for a create.
+                ref.update(phase="copy_refused", job_gone=True, copy_refused=True,
+                           refused=f"Kubernetes refused to create the copy Job (HTTP {error.code}), so nothing was copied")
+                ops.checkpoint(item)
+                return restore(item, read, send, ops, admission, ref["refused"])
             meta = IDENT.identity(receipt)
             if (meta["namespace"], meta["name"], receipt.get("kind"), receipt.get("apiVersion")) != (ref["namespace"], job_name, "Job", "batch/v1"):
                 raise IDENT.Stopped("Copy Job creation receipt did not match")
@@ -584,7 +597,7 @@ def resolve(item, read, send, ops, admission):
         ref["retain_resources"] = True
         return "failed", percent, str(error)
     except Exception as error:
-        if _passing(error) and ref.get("phase") in ("copy_intent", "copy_unowned", "copying", "restore_intent"):
+        if _passing(error) and ref.get("phase") in ("copy_intent", "copy_refused", "copy_unowned", "copying", "restore_intent"):
             # Asked again on the next poll. Every write here is recorded as an
             # intent first, so asking again only reads, or finds restore_intent.
             raise

@@ -974,13 +974,44 @@ class CopyGoneBlipTests(WithoutTheCopyJob):
         self.kube.fail(JOBS, Crash(), method="POST")
         with self.assertRaises(Crash):
             self.poll()
-        self.assertIn("is checking whether the copy Job", self.poll()["message"])
-        with mock.patch.object(flow, "CREATE_SETTLE", 0):
-            self.kube.fail(f"{JOBS}/{ops.stored()[0]['ref']['job']}", TimeoutError("timed out"), method="GET")
-            self.assertEqual("running", self.poll()["status"])
-            self.assert_still_held()
-            self.poll()
+        with ops.transaction() as tx:  # the wait for a late create has passed
+            tx.items[0]["ref"]["intent_at"] = 0
+            tx.save()
+        self.kube.fail(f"{JOBS}/{ops.stored()[0]['ref']['job']}", TimeoutError("timed out"), method="GET")
+        self.assertEqual("running", self.poll()["status"])  # asked again, not failed for good
+        self.assert_still_held()
+        self.poll()
         self.assert_undone(2)
+
+    def refused_then_passing(self):
+        """The create refused (403), then the record of before cannot be read for a moment."""
+        self.begin()
+        self.kube.fail(JOBS, 403, method="POST")
+        self.kube.fail(self.record_path(), 503, method="GET")
+        self.assertEqual("running", self.poll()["status"])
+        self.assert_still_held()
+
+    def test_a_passing_error_after_a_refused_create_keeps_the_refusal(self):
+        self.refused_then_passing()
+        result = self.poll()
+        self.assertEqual("failed", result["status"])
+        self.assertIn("Kubernetes refused to create the copy Job (HTTP 403)", result["message"])
+        self.assertNotIn("part of the data", result["message"])
+        self.assert_undone(2)
+
+    def test_a_same_name_job_after_a_refused_create_is_waited_for_and_warned_of(self):
+        self.refused_then_passing()
+        name = ops.stored()[0]["ref"]["job"]
+        self.kube.add({"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": name, "namespace": "lab"},
+                       "spec": {"template": {"metadata": {"labels": {}}, "spec": {"containers": []}}}, "status": {"active": 1}})
+        result = self.poll()
+        self.assertEqual("running", result["status"])
+        self.assertIn("its result is not used", result["message"])
+        ref = ops.stored()[0]["ref"]
+        self.assertEqual("copy_unowned", ref["phase"])
+        self.assertNotIn("copy_refused", ref)
+        self.assertIn("The end of the copy was not confirmed", self.plan()["lead"])
+        self.assert_still_held()
 
     def test_a_passing_error_on_the_pod_list_still_ends_in_the_undo(self):
         job = self.started()
@@ -1054,6 +1085,9 @@ class CopyReleaseReviewTests(WithoutTheCopyJob):
                                                   "finalizers": ["foregroundDeletion"]}})
         result = self.poll()
         self.assertEqual("running", result["status"], result["message"])
+        self.assertIn("Kubernetes has not finished", result["message"])
+        self.assertIn("Its finalizers: foregroundDeletion", result["message"])
+        self.assertIn("undoes the edit once the Job and its pods are gone", result["message"])
         self.assert_still_held()
         self.assertFalse(self.plan()["can"])
         self.gone(job)
