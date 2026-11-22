@@ -39,7 +39,7 @@ class CanaryTests(unittest.TestCase):
         keep_bound(self, CANARY)
         self.cluster = Cluster()
         self.alerts = []
-        CANARY.bind(self.cluster.get, lambda: self.alerts)
+        CANARY.bind(self.cluster.get, lambda: self.alerts, lambda: [])
 
     def test_the_least_loaded_host_that_is_not_the_leader_s(self):
         self.assertEqual("b", CANARY.pick(["a", "b", "c"], "c"))
@@ -61,10 +61,11 @@ class CanaryTests(unittest.TestCase):
         self.assertEqual("wait", verdict)
         self.assertIn("follow in 23 h", words)
         self.assertEqual("go", CANARY.watch(soak, now=T + CANARY.SOAK)[0])
-        self.alerts = [{"severity": "info", "since": T + 10, "title": "info"},
-                       {"severity": "degraded", "since": T - 100, "title": "from before"}]
+        self.alerts = [{"id": 1, "phase": "raised", "severity": "degraded", "at": T - 100, "title": "from before"},
+                       {"id": 2, "phase": "raised", "severity": "info", "at": T + 10, "title": "info"},
+                       {"id": 3, "phase": "resolved", "severity": "degraded", "at": T + 20, "title": "Cleared: from before"}]
         self.assertEqual("go", CANARY.watch(soak, now=T + CANARY.SOAK)[0], "info, or raised before the soak")
-        self.alerts.append({"severity": "degraded", "since": T + 50, "title": "Volume web-data is degraded"})
+        self.alerts.append({"id": 4, "phase": "raised", "severity": "degraded", "at": T + 50, "title": "Volume web-data is degraded"})
         verdict, words = CANARY.watch(soak, now=T + 60)
         self.assertEqual(("stop", True), (verdict, "Volume web-data is degraded" in words))
 
