@@ -39,7 +39,8 @@ class CanaryTests(unittest.TestCase):
         keep_bound(self, CANARY)
         self.cluster = Cluster()
         self.alerts = []
-        CANARY.bind(self.cluster.get, lambda: self.alerts, lambda: [])
+        self.held = []
+        CANARY.bind(self.cluster.get, lambda: self.alerts, lambda: self.held)
 
     def test_the_least_loaded_host_that_is_not_the_leader_s(self):
         self.assertEqual("b", CANARY.pick(["a", "b", "c"], "c"))
@@ -68,6 +69,21 @@ class CanaryTests(unittest.TestCase):
         self.alerts.append({"id": 4, "phase": "raised", "severity": "degraded", "at": T + 50, "title": "Volume web-data is degraded"})
         verdict, words = CANARY.watch(soak, now=T + 60)
         self.assertEqual(("stop", True), (verdict, "Volume web-data is degraded" in words))
+
+    def test_at_the_end_of_the_day_a_held_condition_makes_the_others_wait(self):
+        soak = {"name": "b", "since": T}
+        self.held = [{"key": "address:192.0.2.50", "severity": "degraded", "announced": 0, "since": T + 100,
+                      "title": "Service address 192.0.2.50 has no route"},
+                     {"key": "x", "severity": "degraded", "announced": 0, "since": T - 100, "title": "from before"},
+                     {"key": "y", "severity": "info", "announced": 0, "since": T + 100, "title": "info"}]
+        verdict, words = CANARY.watch(soak, now=T + 3600)
+        self.assertEqual(("wait", True), (verdict, "follow in" in words), "during the day: held is not news")
+        verdict, words = CANARY.watch(soak, now=T + CANARY.SOAK)
+        self.assertEqual(("wait", True), (verdict, "Service address 192.0.2.50 has no route" in words))
+        verdict, words = CANARY.watch(soak, now=T + CANARY.SOAK + CANARY.SETTLE)
+        self.assertEqual(("stop", True), (verdict, "neither cleared nor was raised" in words))
+        self.held = self.held[1:]
+        self.assertEqual("go", CANARY.watch(soak, now=T + CANARY.SOAK + 60)[0], "from before the day, or info")
 
 
 class RolloutTests(unittest.TestCase):

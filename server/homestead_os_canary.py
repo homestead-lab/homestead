@@ -13,7 +13,7 @@ run.
 log (#1526). A condition still inside its hold was told to nobody, and one
 Homestead puts right within it (a Service address it records again) is not
 news; at the end of the day the run waits for such a condition to clear or
-be raised.
+be raised, for at most SETTLE.
 
 The checks need nothing from CI, as the spec says: the host is Ready, the
 pods Homestead depends on there (Longhorn's manager, KubeVirt's handler, the
@@ -25,13 +25,14 @@ kget = None
 alerts = None          # () -> the alert log's entries, oldest first (homestead_alerts.log)
 held = None            # () -> the alert store's rows (homestead_alerts.active)
 SOAK = 24 * 3600
+# How long after the day the run waits for a held condition: twice the
+# longest hold a condition asks for (homestead_alerts.JOB_STALLED, 30 min).
+# One that has neither cleared nor been raised by then never settles: its
+# source could not be read, or it keeps coming back within the store's grace.
+SETTLE = 3600
 SERIOUS = ("degraded", "critical")
 # The OS update's own alerts (homestead_os_rollout._alert) never stop it.
 OWN = "os-update-"
-# The newest log entry this process has read, for the soak it read it for:
-# whether entries since fell off the log's end unread. Not bound: a new
-# process (a restart, a leader change) starts without it.
-_seen = {}
 NEEDED = {"longhorn-manager": "Longhorn's manager", "virt-handler": "KubeVirt's handler",
           "homestead-nodeprobe": "the node probe"}
 
@@ -85,49 +86,55 @@ def _log():
     return ALERTS.log(limit=ALERTS.LOG_SIZE, strict=True)["alerts"]
 
 
-def _active():
+def _active(now):
     if held:
         return held()
     import homestead_alerts as ALERTS
-    return ALERTS.active()
+    return ALERTS.active(now=now)
 
 
 def new_alerts(since, entries=None):
-    """Degraded or critical alerts raised, or grown worse, since the soak
-    began, from the alert log: also one that began before the soak, and one
-    raised and cleared between two looks."""
+    """Degraded or critical conditions raised, or grown worse, since the
+    soak began, from the alert log: also one that began before the soak, and
+    one raised and cleared between two looks. Events (a failed job, the OS
+    update's own notices) are not counted, as they were not before #1526.
+    The log keeps whole seconds."""
     return [e for e in (_log() if entries is None else entries)
             if e.get("phase") in ("raised", "worsened") and e.get("severity") in SERIOUS
-            and not str(e.get("key") or "").startswith(OWN) and float(e.get("at") or 0) >= since]
+            and not e.get("event") and not str(e.get("key") or "").startswith(OWN)
+            and int(e.get("at") or 0) >= int(since)]
 
 
 def _complete(canary, entries):
-    """Whether the log still holds every entry since the soak began. With
-    what this process read last for this soak: that entry is still there
-    unchanged, or the log now starts right after it. Without (a restart, a
-    leader change): the log's oldest entry is from before the soak, or is
-    its first ever. Not so when entries fell off its end (LOG_SIZE) before
-    anyone read them, or the log was lost and begun again."""
-    seen = _seen.get((canary["name"], float(canary["since"])))
-    if seen:
-        same = [e for e in entries if e.get("id") == seen[0]]
+    """Whether the log still holds every entry since the soak began. The
+    soak keeps the last entry the canary read ("log_read", saved with the OS
+    update's state, so a restart or a leader change keeps it too): that
+    entry is still there unchanged, or the log now starts right after it.
+    Before the first read (also a soak a previous release began) the log's
+    oldest entry must be from before the soak. Not so when entries fell off
+    its end (LOG_SIZE) unread, or the log was lost and begun again."""
+    read = canary.get("log_read")
+    if isinstance(read, list) and len(read) == 2:
+        same = [e for e in entries if e.get("id") == read[0]]
         if same:
-            return same[0].get("at") == seen[1]
-        return bool(entries) and entries[0].get("id") == seen[0] + 1 and float(entries[0].get("at") or 0) >= seen[1]
-    return not entries or float(entries[0].get("at") or 0) <= float(canary["since"]) or entries[0].get("id") == 1
+            return same[0].get("at") == read[1]
+        if not entries:
+            return read[0] == 0       # empty then and now; once it had entries, a lost log
+        return entries[0].get("id") == read[0] + 1 and int(entries[0].get("at") or 0) >= int(read[1] or 0)
+    return not entries or int(entries[0].get("at") or 0) < int(canary["since"])
 
 
 def _remember(canary, entries):
-    _seen.clear()
-    if entries and isinstance(entries[-1].get("id"), int):
-        _seen[(canary["name"], float(canary["since"]))] = (entries[-1].get("id"), entries[-1].get("at"))
+    last = entries[-1] if entries else {}
+    if isinstance(last.get("id"), int) or not entries:
+        canary["log_read"] = [last.get("id", 0), last.get("at")]
 
 
-def pending(since):
+def pending(since, now=None):
     """Degraded or critical conditions that began in the soak and are still
     in their hold: not news yet, but the canary does not pass while one may
     become news."""
-    return [row for row in _active()
+    return [row for row in _active(time.time() if now is None else now)
             if row.get("announced", 0) == 0 and not row.get("event")
             and row.get("severity") in SERIOUS and float(row.get("since") or 0) >= since]
 
@@ -154,7 +161,7 @@ def watch(canary, now=None):
         what = "an alert was raised"
         if first.get("phase") == "worsened":
             what, title = "an alert got worse", title.removeprefix("Worsened: ")
-        return "stop", (f"{what} while the canary soaked: {title} (see All alerts, under the bell). "
+        return "stop", (f"{what} while the canary soaked: {title} (see the Timeline). "
                         "The other hosts were left as they are")
     if not _complete(canary, entries):
         return "stop", ("the alert log no longer goes back to when the canary's day began, so Homestead "
@@ -163,8 +170,14 @@ def watch(canary, now=None):
     left = SOAK - (now - since)
     if left > 0:
         return "wait", f"{node} is the canary: checks pass; the other hosts follow in {int(left // 3600)} h {int(left % 3600 // 60)} min"
-    waiting = pending(since)
+    waiting = pending(since, now)
     if waiting:
-        return "wait", (f"{node} is the canary: a day passed; waiting to see whether "
-                        f"{waiting[0].get('title', 'a condition')} clears or is raised as an alert")
+        row = waiting[0]
+        title = row.get("title") or "a condition"
+        if -left >= SETTLE:
+            unread = " Homestead could not check it for over an hour." if row.get("stale") else ""
+            return "stop", (f"{title} neither cleared nor was raised as an alert within {SETTLE // 3600} h "
+                            f"after the canary's day.{unread} The other hosts were left as they are")
+        return "wait", (f"{node} is the canary: a day passed. Waiting up to {SETTLE // 3600} h for "
+                        f"{title} to clear or to be raised as an alert")
     return "go", f"{node} passed a day as the canary"

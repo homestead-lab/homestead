@@ -6,6 +6,7 @@ Runs the real alert store (homestead_alerts.observe and note, in a temporary
 data folder) with the Service-address facts homestead_vips gives, and the
 canary as it is wired in production: no alerts hook, so it reads the store."""
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -24,6 +25,7 @@ T = 1_800_000_000
 LOOK = 20     # the alert loop's look (homestead_overview_server.LOOK_SECONDS)
 TICK = 60     # the OS update's step while the canary is checked
 END = T + CANARY.SOAK
+SETTLE = 3600  # the wait after the day (homestead_os_canary.SETTLE): twice a stalled job's 30 min hold
 
 
 def setUpModule():
@@ -62,13 +64,16 @@ class RaisedAlertTests(unittest.TestCase):
         self.restart()
         self.soak = {"name": "node-b", "since": T}
         self.look(T - 600, [])            # the alert loop was running before the check began
+        self.routine(2, T - 600)          # and the log has entries from before it, as a running cluster's has
 
     def restart(self):
         """What a Homestead restart or a leader change gives the canary: the
         module as a new process loads it, the alert store as the data volume
-        keeps it."""
+        keeps it, and the OS update's state as it saved it (homestead_os_rollout._save)."""
         importlib.reload(CANARY)
         CANARY.bind(kget, None)
+        if hasattr(self, "soak"):
+            self.soak = json.loads(json.dumps(self.soak))
 
     def look(self, at, facts, source="addresses"):
         return ALERTS.observe({source: facts}, now=at)
@@ -118,9 +123,10 @@ class RaisedAlertTests(unittest.TestCase):
         verdict, words = self.watch(T + 100 + VIPS.ADDRESS_HOLD + LOOK)
         self.assertEqual("stop", verdict)
         self.assertIn("an alert was raised while the canary soaked: Service address 192.0.2.50 has no route", words)
-        self.assertIn("All alerts", words, "says where a person finds it")
+        self.assertIn("(see the Timeline)", words, "says where a person finds it, also once it cleared")
+        self.assertNotIn("All alerts", words, "All alerts lists only what is still open")
         titles = [e["title"] for e in ALERTS.log(limit=ALERTS.LOG_SIZE)["alerts"]]
-        self.assertIn("Service address 192.0.2.50 has no route", titles, "the alert it names is in the bell's list")
+        self.assertIn("Service address 192.0.2.50 has no route", titles, "the alert it names is in the Timeline's source")
 
     def test_a_fault_raised_and_cleared_between_two_looks_still_stops_it(self):
         self.looks(T + 100, T + 100 + VIPS.ADDRESS_HOLD + LOOK, unrouted())
@@ -153,15 +159,22 @@ class RaisedAlertTests(unittest.TestCase):
         self.assertEqual("stop", self.watch(T + 210)[0],
                          "seen by one person is not the same as unrelated to the update")
 
-    def test_a_failed_job_stops_it(self):
-        self.look(T - 300, [], "jobs")           # the jobs source was already watched
-        self.look(T + 100, ALERTS.job_facts([{"id": "op-7", "status": "failed", "title": "Back up web-data",
-                                              "message": "the backup target did not answer"}]), "jobs")
-        verdict, words = self.watch(T + 110)
-        self.assertEqual("stop", verdict)
-        self.assertIn("Job failed: Back up web-data", words)
+    def test_an_alert_raised_in_the_check_s_first_second_counts(self):
+        self.soak = {"name": "node-b", "since": T + 0.5}
+        self.look(T + 0.9, [{"key": "logs:la-0123456789ab", "category": "logs", "severity": "degraded", "urgent": True,
+                             "title": "Errors: 12 matching lines in a minute"}], "logs")
+        self.assertEqual(T, ALERTS.log(limit=1)["alerts"][-1]["at"], "the log keeps whole seconds")
+        self.assertEqual("stop", self.watch(T + 20)[0])
 
     # ---- what does not
+
+    def test_a_failed_job_does_not_stop_it(self):
+        self.look(T - 300, [], "jobs")           # the jobs source was already watched
+        self.look(T + 100, ALERTS.job_facts([{"id": "op-7", "status": "failed", "title": "Update web",
+                                              "message": "the registry did not answer"}]), "jobs")
+        entry = ALERTS.log(limit=1)["alerts"][-1]
+        self.assertEqual(("Job failed: Update web", "degraded", True), (entry["title"], entry["severity"], entry["event"]))
+        self.assertEqual("wait", self.watch(T + 110)[0], "an event, not a condition: as before #1526")
 
     def test_the_run_s_own_notes_and_routine_notes_do_not_stop_it(self):
         # The OS update's own alert (homestead_os_rollout._alert: "it never stops what raised it").
@@ -187,7 +200,8 @@ class RaisedAlertTests(unittest.TestCase):
         self.look(END - 30, unrouted())
         verdict, words = self.watch(END + 5)
         self.assertEqual("wait", verdict, "not news yet, but it may become news")
-        self.assertIn("Service address 192.0.2.50 has no route", words)
+        self.assertIn("a day passed. Waiting up to 1 h for Service address 192.0.2.50 has no route to clear", words)
+        self.assertNotIn(";", words)
         self.looks(END - 10, END + 200, [])
         self.assertEqual("go", self.watch(END + 210)[0], "it cleared: the day is not counted again")
 
@@ -196,6 +210,29 @@ class RaisedAlertTests(unittest.TestCase):
         self.assertEqual("wait", self.watch(END + 5)[0])
         self.looks(END - 10, END + VIPS.ADDRESS_HOLD, unrouted())
         self.assertEqual("stop", self.watch(END + VIPS.ADDRESS_HOLD)[0])
+
+    def test_a_condition_whose_source_cannot_be_read_stops_it_after_an_hour(self):
+        self.look(END - 30, unrouted())
+        self.looks(END - 10, END + SETTLE + 2 * LOOK, None)   # the addresses could not be read
+        row = ALERTS.active(now=END + SETTLE + LOOK)[0]
+        self.assertEqual((0, True), (row["announced"], row["since"] >= END), "never raised, and always new")
+        self.assertEqual("wait", self.watch(END + SETTLE - 60)[0])
+        verdict, words = self.watch(END + SETTLE + LOOK)
+        self.assertEqual("stop", verdict, "an hour is twice the longest hold (a stalled job's 30 minutes)")
+        self.assertIn("Service address 192.0.2.50 has no route neither cleared nor was raised as an alert", words)
+        self.assertIn("Homestead could not check it", words, "the row is stale (homestead_alerts.STALE)")
+
+    def test_a_condition_that_keeps_coming_back_stops_it_after_an_hour(self):
+        at = END - 30
+        while at < END + SETTLE + LOOK:   # seen, gone for 40 s, back: within the store's 60 s grace
+            self.look(at, unrouted())
+            self.look(at + LOOK, [])
+            self.look(at + 2 * LOOK, [])
+            at += 3 * LOOK
+        self.assertEqual(0, ALERTS.active()[0]["announced"])
+        verdict, words = self.watch(END + SETTLE + LOOK)
+        self.assertEqual("stop", verdict)
+        self.assertIn("Service address 192.0.2.50 has no route neither cleared nor was raised as an alert", words)
 
     # ---- restarts and the log's length
 
@@ -213,9 +250,11 @@ class RaisedAlertTests(unittest.TestCase):
         self.assertEqual("wait", self.watch(T + 900)[0])
         self.assertEqual("go", self.watch(END)[0])
 
-    def test_a_busy_log_looked_at_every_minute_does_not_stop_it(self):
+    def test_a_busy_log_looked_at_every_minute_does_not_stop_it_across_restarts(self):
         for n, at in enumerate(range(T + TICK, T + 40 * TICK, TICK)):
             self.routine(12, at)              # 468 entries: more than the log keeps
+            if n % 10 == 9:
+                self.restart()                # what the canary read is kept in the OS update's state
             self.assertEqual("wait", self.watch(at + 1)[0], n)
         self.assertGreater(ALERTS.log(limit=ALERTS.LOG_SIZE)["alerts"][0]["at"], T, "the start has left the log")
         self.assertEqual("go", self.watch(END)[0])
@@ -232,19 +271,47 @@ class RaisedAlertTests(unittest.TestCase):
         self.assertEqual("stop", verdict, "it cannot tell what was raised: it does not go on")
         self.assertIn("cannot tell whether an alert was raised", words)
 
-    def test_after_a_restart_a_log_that_no_longer_reaches_back_stops_it(self):
+    def test_a_restart_while_300_entries_arrived_unread_stops_it(self):
+        self.assertEqual("wait", self.watch(T + 60)[0])
         self.routine(ALERTS.LOG_SIZE + 10, T + 3600)
         self.restart()
-        verdict, words = self.watch(END)
+        verdict, words = self.watch(T + 3700)
         self.assertEqual("stop", verdict)
         self.assertIn("cannot tell whether an alert was raised", words)
 
-    def test_a_lost_alert_log_stops_it(self):
+    def test_a_run_started_by_the_previous_release_goes_on_while_the_log_reaches_back(self):
+        old = {"name": "node-b", "since": T}       # a soak saved before this change: no log fields
+        self.routine(5, T + 100)
+        self.assertEqual("wait", CANARY.watch(old, now=T + 7200)[0])
+        self.assertIn("log_read", old)
+
+    def test_a_run_started_by_the_previous_release_stops_when_the_log_no_longer_reaches_back(self):
+        self.routine(ALERTS.LOG_SIZE + 10, T + 3600)
+        verdict, words = CANARY.watch({"name": "node-b", "since": T}, now=T + 7200)
+        self.assertEqual("stop", verdict)
+        self.assertIn("cannot tell whether an alert was raised", words)
+
+    def test_a_lost_alert_log_stops_it_also_after_a_restart(self):
         self.routine(5, T + 100)
         self.assertEqual("wait", self.watch(T + 300)[0])
         os.remove(os.path.join(self.temp.name, "alerts.json"))
         self.routine(8, T + 400)                # a fresh log, counted from 1 again, past where it was
-        self.assertEqual("stop", self.watch(T + 500)[0])
+        self.restart()
+        verdict, words = self.watch(T + 500)
+        self.assertEqual("stop", verdict)
+        self.assertIn("cannot tell whether an alert was raised", words)
+
+    def test_a_corrupt_log_begun_again_stops_it_after_a_restart(self):
+        self.assertEqual("wait", self.watch(T + 60)[0])
+        with open(os.path.join(self.temp.name, "alerts.json"), "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        self.look(T + 100, [], "jobs")          # the alert loop reads it leniently: a fresh log
+        self.routine(3, T + 120)
+        self.assertEqual(1, ALERTS.log(limit=ALERTS.LOG_SIZE)["alerts"][0]["id"])
+        self.restart()
+        verdict, words = self.watch(T + 200)
+        self.assertEqual("stop", verdict)
+        self.assertIn("cannot tell whether an alert was raised", words)
 
     def test_an_unreadable_alert_log_makes_it_wait(self):
         with open(os.path.join(self.temp.name, "alerts.json"), "w", encoding="utf-8") as handle:
