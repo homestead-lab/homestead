@@ -47,7 +47,7 @@ class InstallTimeout(unittest.TestCase):
         self.data = tmp.name
         self.enterContext(mock.patch.object(HISTORY, "DATA_DIR", self.data))
         self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.data))
-        self.enterContext(Kube(*map(node, NAMES), pod("web-1", "node-a"), pod("web-2", "node-a"), pod("db-1", "node-c")))
+        self.kube = self.enterContext(Kube(*map(node, NAMES), pod("web-1", "node-a"), pod("web-2", "node-a"), pod("db-1", "node-c")))
         ALERTS.bind(self.data)
         CANARY.alerts = None
         self.hosts = Hosts({name: facts(["curl"]) for name in NAMES})
@@ -108,6 +108,29 @@ class InstallTimeout(unittest.TestCase):
         self.assertEqual("0 hosts done; 0 restarted; node-b: updates did not finish within two hours. "
                          f"See {Hosts.LOG} there", job["message"])
         self.assertEqual([f"Job failed: {TITLE}"], self.raised(later), "not the canary's stop alert")
+
+    def test_a_middle_host_timing_out_fails_the_run_and_leaves_the_rest(self):
+        with mock.patch.object(CANARY, "pick", return_value=None):
+            rollout, job, later = self.timed_out("node-c")
+        self.assertEqual(["node-b", "node-c"], self.hosts.began, "node-a, after it, is not touched")
+        self.assertEqual(("failed", "failed", 100), (rollout["status"], job["status"], job["progress"]))
+        self.assertEqual("1 host done; 0 restarted; node-c: updates did not finish within two hours. "
+                         f"See {Hosts.LOG} there", job["message"])
+        self.assertEqual([f"Job failed: {TITLE}"], self.raised(later))
+
+    def test_a_host_left_alone_is_not_counted_done(self):
+        # Not Ready by its turn: left alone, and the run goes on (not a failure).
+        with mock.patch.object(CANARY, "pick", return_value=None):
+            ROLLOUT.start(now=T)
+            down = node("node-c")
+            down["status"]["conditions"][0]["status"] = "False"
+            self.kube.add(down)
+            rollout = self.tick_until(T, lambda r: r.get("status") != "running")
+        OPS.list_operations()
+        job = next(j for j in OPS.snapshot() if j["kind"] == "os-rollout")
+        self.assertEqual(["node-b", "node-a"], self.hosts.began)
+        self.assertEqual(("succeeded", "succeeded"), (rollout["status"], job["status"]))
+        self.assertEqual("2 hosts done; 0 restarted; node-c: not Ready, so left alone", job["message"])
 
 
 if __name__ == "__main__":
