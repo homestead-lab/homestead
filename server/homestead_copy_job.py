@@ -53,6 +53,21 @@ class KeptStopped(IDENT.Stopped):
     """A failed copy whose app stays stopped; the message already says why and what was kept."""
 
 
+class PodsUnread(IDENT.Stopped):
+    """The pod list was refused, so whether a pod of the copy still runs is not known."""
+
+    def __init__(self, code):
+        super().__init__(f"The app's pods could not be read (HTTP {code}), so a copy pod may still run")
+
+
+def _passing(error):
+    """An API server or network error that may answer next time. A refusal (4xx
+    other than 429) is an answer, and so is a local error such as the journal's."""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code == 429 or error.code >= 500
+    return isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+
 def deadline(gib):
     """Seconds a copy of gib GiB may take; None is a size not known."""
     if gib is None:
@@ -376,6 +391,10 @@ def _read_job(ref, read):
         raise
 
 
+def _deleting(job):
+    return job is not None and bool((job.get("metadata") or {}).get("deletionTimestamp"))
+
+
 def _settling(ref):
     """A create with no answer recorded may still be done at the API server."""
     return (ref.get("phase") == "copy_intent" and not ref.get("job_uid") and
@@ -383,7 +402,7 @@ def _settling(ref):
 
 
 def _checking(ns, name):
-    return f"Homestead is checking whether copy Job {ns}/{name} was created. It does not send the request again."
+    return f"Homestead is checking whether the copy Job was created. It does not send the request again. Job: {ns}/{name}."
 
 
 def _copy_pods(ref, read, uids):
@@ -392,7 +411,13 @@ def _copy_pods(ref, read, uids):
     --cascade=orphan has no owner left, only its labels."""
     want = NAMES.labels("restructure", ref["name"])
     found = []
-    for pod in ROLLOUT.items(read, "/api/v1/pods"):
+    try:
+        pods = ROLLOUT.items(read, "/api/v1/pods")
+    except urllib.error.HTTPError as error:
+        if _passing(error):
+            raise
+        raise PodsUnread(error.code) from None
+    for pod in pods:
         meta = pod.get("metadata", {})
         if meta.get("namespace") != ref["namespace"] or pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
             continue
@@ -407,13 +432,19 @@ def copy_stopped(ref, read, job):
     what still runs. job is the Job read by name, None when it is gone. This
     never says the copy finished, only that it stopped."""
     uids = {uid for uid in (ref.get("job_uid"), ref.get("unowned_uid")) if uid}
+    if _deleting(job):
+        return "The copy Job is being deleted"
     if job is not None:
         conditions = job.get("status", {}).get("conditions", [])
         if not any(c.get("type") in ("Complete", "Failed") and c.get("status") == "True" for c in conditions):
-            return f"Copy Job {ref['namespace']}/{ref['job']} is still active"
+            return "The copy Job is still active"
         uids.add(IDENT.identity(job)["uid"])
     live = _copy_pods(ref, read, uids)
-    return f"Copy pod {', '.join(live)} is still running" if live else ""
+    if not live:
+        return ""
+    if len(live) == 1:
+        return f"1 copy pod is still running: {live[0]}"
+    return f"{len(live)} copy pods are still running: {', '.join(live)}"
 
 
 def _without_record(item, job, read, send, ops, admission):
@@ -427,15 +458,19 @@ def _without_record(item, job, read, send, ops, admission):
         ref.update(phase="copy_unowned", unowned_uid=IDENT.identity(job)["uid"])
         ops.checkpoint(item)
     if ref["phase"] == "copying":
-        why = f"Copy Job {name} is gone, so it is not known whether the copy finished"
+        why = f"The copy Job is gone, so it is not known whether the copy finished. Job: {name}"
     elif ref["phase"] == "copy_unowned":
-        why = f"Homestead has no record of creating copy Job {name}, so its result is not used"
+        why = f"Homestead has no record of creating the copy Job, so its result is not used. Job: {name}"
     else:
-        why = f"Homestead could not confirm that copy Job {name} was created, and no Job of that name exists"
-    still = copy_stopped(ref, read, job)
-    if still:
-        return "running", item.get("progress") or 20, f"{why}. {still}. Homestead waits for it to end."
+        why = f"Homestead cannot confirm the copy Job was created, and no Job of its name exists. Job: {name}"
     ref["job_gone"] = job is None
+    try:
+        still = copy_stopped(ref, read, job)
+    except PodsUnread as error:
+        raise KeptStopped(f"{why}. {ref['name']} stays stopped: {str(error)[0].lower()}{str(error)[1:]}. "
+                          f"Let Homestead read pods, then choose Check outcome. {kept(ref)}") from None
+    if still:
+        return "running", item.get("progress") or 20, f"{why}. {still}. Homestead waits for the copy to end."
     return restore(item, read, send, ops, admission, why)
 
 
@@ -464,6 +499,9 @@ def resolve(item, read, send, ops, admission):
             if _settling(ref):
                 return "running", 20, _checking(ref["namespace"], ref["job"])
             job = _read_job(ref, read)  # once per poll
+            if _deleting(job):
+                # A foreground delete: the Job stays while its pods go. Its result is not used.
+                return "running", percent or 20, "The copy Job is being deleted. Homestead waits until it and its pods are gone."
             # Before exclusive(), which fails for good on a copy pod left without its Job.
             if phase != "copying" or job is None:
                 return _without_record(item, job, read, send, ops, admission)
@@ -502,7 +540,7 @@ def resolve(item, read, send, ops, admission):
                 if not (isinstance(error, urllib.error.HTTPError) and error.code in NOT_CREATED):
                     # No answer, or one that does not say no Job was created: read by name later.
                     return "running", 20, _checking(ref["namespace"], job_name)
-                ref["job_gone"] = True
+                ref.update(job_gone=True, copy_refused=True)
                 return restore(item, read, send, ops, admission,
                                f"Kubernetes refused to create the copy Job (HTTP {error.code}), so nothing was copied")
             meta = IDENT.identity(receipt)
@@ -546,6 +584,10 @@ def resolve(item, read, send, ops, admission):
         ref["retain_resources"] = True
         return "failed", percent, str(error)
     except Exception as error:
+        if _passing(error) and ref.get("phase") in ("copy_intent", "copy_unowned", "copying", "restore_intent"):
+            # Asked again on the next poll. Every write here is recorded as an
+            # intent first, so asking again only reads, or finds restore_intent.
+            raise
         reason = str(error) if isinstance(error, IDENT.Stopped) else "Copy step could not be verified"
         # Preserve intent phase when the response is uncertain; never infer
         # success from a same-name replacement or repeat the upstream request.
@@ -555,10 +597,14 @@ def resolve(item, read, send, ops, admission):
 
 KEPT = "The new volumes and the copy Job were kept for inspection."
 GONE_KEPT = "The new volumes were kept. They may hold only part of the data."
+REFUSED_KEPT = "The new volumes were kept."
+UNCONFIRMED = " The end of the copy was not confirmed, so the new volumes may hold only part of the data."
 
 
 def kept(ref):
     """What was kept, without naming a copy Job that is not there."""
+    if ref.get("copy_refused"):
+        return REFUSED_KEPT  # nothing was copied
     return GONE_KEPT if ref.get("job_gone") else KEPT
 
 
@@ -610,7 +656,9 @@ def restore(item, read, send, ops, admission, why):
         stay("the app or a volume of the copy is gone, so the edit cannot be undone. Check the app and its volumes")
     try:
         text = read_earlier(ref, read)
-    except Exception:
+    except Exception as error:
+        if _passing(error):
+            raise
         stay("its settings from before the edit could not be read, so the edit cannot be undone. "
              "Edit it back, then start it")
     if not text:
@@ -693,9 +741,16 @@ def recovery_plan(item, read, ops):
             # the release starts nothing and changes no storage.
             if _settling(ref):
                 return {**plan, "why_not": "Homestead is still checking whether the copy Job was created. Try again in 2 minutes."}
-            still = copy_stopped(ref, read, _read_job(ref, read))
+            job = _read_job(ref, read)
+            if not ref.get("copy_refused") and (
+                    job is None or not ref.get("job_uid") or (job.get("metadata") or {}).get("uid") != ref["job_uid"]):
+                plan["lead"] += UNCONFIRMED  # gone, replaced, or no record of it
+            try:
+                still = copy_stopped(ref, read, job)
+            except PodsUnread as error:
+                return {**plan, "why_not": str(error)}
             if still:
-                return {**plan, "why_not": f"{still}. Wait for it to end before releasing the hold."}
+                return {**plan, "why_not": f"{still}. Wait for the copy to end before releasing the hold."}
         if dep["metadata"].get("annotations", {}).get(MARKER) not in (None, item["id"]):
             return {**plan, "why_not": "Another operation owns this workload's hold"}
         plan.update(can=True, why_not="")
@@ -718,7 +773,11 @@ def recovery_run(item, options, read, send, ops):
         meta = IDENT.identity(dep)
         if meta["uid"] != ref["deployment"]["uid"]:
             raise ValueError("The app was replaced, so no hold was changed")
-        if ref.get("job") and (_settling(ref) or copy_stopped(ref, read, _read_job(ref, read))):
+        try:
+            running = ref.get("job") and (_settling(ref) or copy_stopped(ref, read, _read_job(ref, read)))
+        except PodsUnread as error:
+            raise ValueError(f"{error}. No hold was changed.") from None
+        if running:
             raise ValueError("The copy has not ended, so no hold was changed")
         annotations = dep["metadata"].get("annotations", {})
         if annotations.get(MARKER) not in (None, item["id"]):

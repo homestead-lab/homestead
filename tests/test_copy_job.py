@@ -746,7 +746,8 @@ class CopyJobGoneTests(WithoutTheCopyJob):
         self.gone(job)
         result = self.poll()
         self.assertEqual("failed", result["status"])
-        self.assertIn(f"Copy Job lab/{job['metadata']['name']} is gone", result["message"])
+        self.assertIn("The copy Job is gone", result["message"])
+        self.assertIn(f"Job: lab/{job['metadata']['name']}", result["message"])
         self.assertIn("started again with 2 replicas", result["message"])
         self.assertIn("may hold only part of the data", result["message"])
         self.assertNotIn("copy Job were kept", result["message"])  # there is no Job to keep
@@ -775,7 +776,7 @@ class CopyJobGoneTests(WithoutTheCopyJob):
         self.copy_pod(job, owned=False)
         result = self.poll()
         self.assertEqual("running", result["status"])
-        self.assertIn("Copy pod copy-pod is still running", result["message"])
+        self.assertIn("1 copy pod is still running: copy-pod", result["message"])
         self.assert_still_held()
         self.assertFalse(self.plan()["can"])
         self.kube.discard("/api/v1/namespaces/lab/pods/copy-pod")
@@ -846,18 +847,18 @@ class CopyReceiptLostTests(WithoutTheCopyJob):
         self.cut_off_create(applied=False)
         result = self.poll()  # a create sent just before the restart may still be done
         self.assertEqual("running", result["status"])
-        self.assertIn("is checking whether copy Job", result["message"])
+        self.assertIn("is checking whether the copy Job", result["message"])
         self.assert_still_held()
         with mock.patch.object(flow, "CREATE_SETTLE", 0):
             result = self.poll()
         self.assertEqual("failed", result["status"])
-        self.assertIn("no Job of that name exists", result["message"])
+        self.assertIn("no Job of its name exists", result["message"])
         self.assert_undone(2)
         self.assertEqual(1, self.sent("POST", JOBS))
 
     def test_a_restart_with_no_record_and_a_running_job_waits_and_never_adopts_it(self):
         self.cut_off_create(applied=True)
-        self.assertIn("is checking whether copy Job", self.poll()["message"])
+        self.assertIn("is checking whether the copy Job", self.poll()["message"])
         with mock.patch.object(flow, "CREATE_SETTLE", 0):
             result = self.poll()
             self.assertEqual("running", result["status"])
@@ -878,7 +879,7 @@ class CopyReceiptLostTests(WithoutTheCopyJob):
     def test_a_complete_job_of_the_same_name_without_a_record_is_never_used(self):
         self.cut_off_create(applied=True)
         self.finish(self.job(), "Complete")  # someone else's, or ours with its answer lost
-        self.assertIn("is checking whether copy Job", self.poll()["message"])
+        self.assertIn("is checking whether the copy Job", self.poll()["message"])
         self.assert_still_held()
         with mock.patch.object(flow, "CREATE_SETTLE", 0):
             result = self.poll()
@@ -907,6 +908,7 @@ class CopyCreateRefusedTests(WithoutTheCopyJob):
         result = self.poll()
         self.assertEqual("failed", result["status"])
         self.assertIn("Kubernetes refused to create the copy Job (HTTP 403)", result["message"])
+        self.assertNotIn("part of the data", result["message"])  # nothing was copied
         self.assert_undone(2)
         self.assertEqual([], K.kget(JOBS)["items"])
 
@@ -917,7 +919,7 @@ class CopyCreateRefusedTests(WithoutTheCopyJob):
         self.assert_still_held()
         with mock.patch.object(flow, "CREATE_SETTLE", 0):
             result = self.poll()
-        self.assertIn("no Job of that name exists", result["message"])
+        self.assertIn("no Job of its name exists", result["message"])
         self.assert_undone(2)
 
 
@@ -946,10 +948,118 @@ class CopyGoneReleaseTests(WithoutTheCopyJob):
         self.assertEqual("running", self.poll()["status"])
         plan = self.plan()
         self.assertFalse(plan["can"])
-        self.assertIn("Copy pod copy-pod is still running", plan["why_not"])
+        self.assertIn("1 copy pod is still running: copy-pod", plan["why_not"])
         self.kube.discard("/api/v1/namespaces/lab/pods/copy-pod")
         self.assert_kept_stopped(self.poll(), "Edit it back")
         self.assertTrue(self.plan()["can"])
+
+
+class CopyGoneBlipTests(WithoutTheCopyJob):
+    """A read that fails in passing on the new paths is asked again on the next
+    poll (#1523), so the undo still comes; a refused pod list keeps the app
+    stopped with words, and Release hold is not offered."""
+
+    def test_a_passing_error_on_the_job_read_still_ends_in_the_undo(self):
+        job = self.started()
+        self.gone(job)
+        self.kube.fail(f"{JOBS}/{job['metadata']['name']}", 500, method="GET")
+        result = self.poll()
+        self.assertEqual("running", result["status"])
+        self.assert_still_held()
+        self.assertEqual("failed", self.poll()["status"])
+        self.assert_undone(2)
+
+    def test_a_passing_error_on_the_name_check_still_ends_in_the_undo(self):
+        self.begin()
+        self.kube.fail(JOBS, Crash(), method="POST")
+        with self.assertRaises(Crash):
+            self.poll()
+        self.assertIn("is checking whether the copy Job", self.poll()["message"])
+        with mock.patch.object(flow, "CREATE_SETTLE", 0):
+            self.kube.fail(f"{JOBS}/{ops.stored()[0]['ref']['job']}", TimeoutError("timed out"), method="GET")
+            self.assertEqual("running", self.poll()["status"])
+            self.assert_still_held()
+            self.poll()
+        self.assert_undone(2)
+
+    def test_a_passing_error_on_the_pod_list_still_ends_in_the_undo(self):
+        job = self.started()
+        self.gone(job)
+        self.kube.fail("/api/v1/pods", 503, method="GET")
+        self.assertEqual("running", self.poll()["status"])
+        self.assert_still_held()
+        self.assertEqual("failed", self.poll()["status"])
+        self.assert_undone(2)
+
+    def test_a_refused_pod_list_keeps_it_stopped_and_release_is_not_offered(self):
+        job = self.started()
+        self.gone(job)
+        self.kube.fail("/api/v1/pods", 403, method="GET")
+        self.assert_kept_stopped(self.poll(), "pods could not be read (HTTP 403)", "Let Homestead read pods")
+        self.assert_still_held()
+        self.kube.fail("/api/v1/pods", 403, method="GET")
+        plan = self.plan()
+        self.assertFalse(plan["can"])
+        self.assertIn("pods could not be read (HTTP 403)", plan["why_not"])
+        self.assertTrue(self.plan()["can"])  # once pods can be read again, and none of the copy runs
+
+
+class CopyReleaseReviewTests(WithoutTheCopyJob):
+    refused_undo = CopyGoneReleaseTests.refused_undo
+    """Release hold says the end of the copy was not confirmed when the Job is
+    gone, replaced or has no record (#1523), and only then."""
+
+    def test_the_review_says_so_for_a_gone_job(self):
+        self.refused_undo()
+        self.poll()
+        self.assertIn("The end of the copy was not confirmed", self.plan()["lead"])
+
+    def test_release_hold_for_a_replaced_job_says_so_and_is_offered(self):
+        job = self.started()
+        self.gone(job)
+        self.kube.add({**job, "metadata": {**job["metadata"], "uid": "someone-else"},
+                       "status": {"conditions": [{"type": "Complete", "status": "True"}]}})
+        result = self.poll()
+        self.assertEqual("failed", result["status"])
+        self.assertIn("replaced", result["message"])
+        self.assert_still_held()  # never started on the new volume
+        plan = self.plan()
+        self.assertTrue(plan["can"])
+        self.assertIn("The end of the copy was not confirmed", plan["lead"])
+
+    def test_the_review_says_so_for_a_job_without_a_record(self):
+        self.begin()
+        self.kube.fail(JOBS, Crash(), method="POST", applied=True)
+        with self.assertRaises(Crash):
+            self.poll()
+        self.assertIn("is checking whether the copy Job", self.poll()["message"])
+        with mock.patch.object(flow, "CREATE_SETTLE", 0):
+            self.poll()
+            self.assertIn("The end of the copy was not confirmed", self.plan()["lead"])
+
+    def test_the_review_does_not_say_so_for_the_recorded_job(self):
+        job = self.started()
+        self.kube.discard(self.record_path())
+        self.finish(job, "Failed", "BackoffLimitExceeded")
+        self.assert_kept_stopped(self.poll(), "Edit it back")
+        plan = self.plan()
+        self.assertTrue(plan["can"])
+        self.assertNotIn("not confirmed", plan["lead"])
+
+    def test_a_job_deleted_in_the_foreground_is_waited_for(self):
+        """The Job stays, with a deletionTimestamp, while its pods go."""
+        job = self.started()
+        self.copy_pod(job)
+        self.kube.add({**self.job(), "metadata": {**self.job()["metadata"], "deletionTimestamp": "2026-11-22T00:00:00Z",
+                                                  "finalizers": ["foregroundDeletion"]}})
+        result = self.poll()
+        self.assertEqual("running", result["status"], result["message"])
+        self.assert_still_held()
+        self.assertFalse(self.plan()["can"])
+        self.gone(job)
+        self.kube.discard("/api/v1/namespaces/lab/pods/copy-pod")
+        self.assertEqual("failed", self.poll()["status"])
+        self.assert_undone(2)
 
 
 if __name__ == "__main__":
