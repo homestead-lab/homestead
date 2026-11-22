@@ -85,6 +85,8 @@ NOTE_LIMIT = 2000
 # A host whose install may still be running after its run ended (#1540) is looked at
 # this often while no run goes: one command on the host, as each look of a run is.
 INSTALL_LOOK = 60
+# A host that does not answer is looked at half as often after each failed look, down to this.
+INSTALL_LOOK_MAX = 15 * 60
 clock = time.monotonic
 _lock = SHARED.SharedLock("os-rollout")
 
@@ -217,7 +219,7 @@ def _in_rows(rows, name):
     return isinstance(rows, list) and any(row == name or isinstance(row, dict) and row.get("node") == name for row in rows)
 
 
-def _busy_host(name):
+def _busy_host(name, ready=True):
     """Why this host can't start: an install an earlier run left that may still be
     running (#1540), or a job not ended that names it, of any kind, so that a kind
     added later is refused rather than run into. "" when none. The install would
@@ -225,11 +227,11 @@ def _busy_host(name):
     row = (_load().get("installing") or {}).get(name)
     if row is not None:
         why = f"{name} may still be installing updates from an earlier OS update"
-        if row.get("unread") == "not-ready":
-            return f"{why}. Homestead checks again once {name} is Ready. See {host_os.LOG} on {name}."
+        if not ready:
+            return f"{why}. Homestead checks again once {name} is Ready and no OS update runs. See {host_os.LOG} on {name}."
         if row.get("unread"):
-            return (f"{why}, and Homestead cannot reach it to check. Make sure {name} answers, then Homestead checks "
-                    f"again. See {host_os.LOG} on {name}.")
+            return (f"{why}, and Homestead cannot reach it to check. Make sure {name} answers. Homestead tries again "
+                    f"within {INSTALL_LOOK_MAX // 60} minutes while no OS update runs. See {host_os.LOG} on {name}.")
         return (f"{why}. Homestead checks about once a minute while no OS update runs, and starts none there until "
                 f"that install has ended. See {host_os.LOG} on {name}.")
     for item in OPS.stored():
@@ -414,9 +416,10 @@ def _left_installing(state, name, now):
 def _install_round(now):
     """While no run goes, each host left installing is looked at again, at most
     every INSTALL_LOOK: once its install unit is no longer active, the install has
-    ended, however it ended. A host that cannot be read stays. A host not Ready, or
-    gone, stays too and is not looked at: each look is a helper pod that could wait
-    a minute for nothing. The looks are outside the lock, as _hold_round's tries are."""
+    ended, however it ended. A host that cannot be read stays, and waits twice as
+    long after each failed look, up to INSTALL_LOOK_MAX. A host not Ready, or gone,
+    stays too and is not looked at: each look is a helper pod that could wait a
+    minute for nothing. The looks are outside the lock, as _hold_round's tries are."""
     now = now or time.time()
     state = _load()
     rows = state.get("installing") or {}
@@ -428,17 +431,17 @@ def _install_round(now):
         return    # the node list is read again next tick
     seen, ended = {}, []
     for name, row in sorted(rows.items()):
-        if now - row.get("looked", 0) < INSTALL_LOOK:
+        if now - row.get("looked", 0) < row.get("wait", INSTALL_LOOK):
             continue
-        seen[name] = {"since": row.get("since"), "run": row.get("run"), "looked": now, "unread": ""}
+        seen[name] = {"since": row.get("since"), "run": row.get("run"), "unread": "", "wait": INSTALL_LOOK}
         if name not in nodes or not _ready(nodes[name]):
-            seen[name]["unread"] = "not-ready"
             continue
         try:
             if not host_os.upgrade_state(name).get("active"):
                 ended.append(name)
         except Exception as error:
             seen[name]["unread"] = "unreachable"
+            seen[name]["wait"] = min(INSTALL_LOOK_MAX, 2 * row.get("wait", INSTALL_LOOK))
             print(f"OS updates: {name}: whether its earlier install has ended could not be read: "
                   f"{' '.join(str(error).split())[:120]}", flush=True)
     if not seen:
@@ -453,7 +456,7 @@ def _install_round(now):
             if name in ended:
                 rows.pop(name)
             else:
-                row.update(looked=now, unread=look["unread"])
+                row.update(looked=now, unread=look["unread"], wait=look["wait"])
         if rows:
             state["installing"] = rows
         else:
@@ -777,7 +780,7 @@ def _failing(state, error, now=None):
     if now - since <= limit or rollout.get("status") != "running":
         rollout["message"] = f"waiting: {text}"
         return False
-    if phase == "installing":
+    if phase == "installing" and (rollout.get("node") or {}).get("name"):
         # Its install was started, so it may still be running (#1540).
         _left_installing(state, (rollout.get("node") or {}).get("name"), now)
     left = (". Its updates may still be installing" if phase == "installing" else
@@ -1011,7 +1014,7 @@ def preview(names):
         hosts.append({"node": name, "ready": ready, "updates": facts.get("updates") or [], "security": facts.get("security", 0),
                       "reboot": bool(facts.get("reboot")), "reboot_for": facts.get("reboot_for") or "", "at": facts.get("at"),
                       "homestead_here": name == own, "restart_refusal": refusal, "restart_may_clear": may_clear, "restart_unread": unread,
-                      "busy": _busy_host(name), "unclean_restart": LHCAP.unclean_restart_warning(lone, name)})
+                      "busy": _busy_host(name, ready), "unclean_restart": LHCAP.unclean_restart_warning(lone, name)})
     missing = [h["node"] for h in hosts if not h["ready"]]
     blocked = (RUNNING if (state.get("rollout") or {}).get("status") == "running" else "") or _busy_cluster() \
         or ("Not Ready, so left alone: " + ", ".join(missing) if missing else "") \

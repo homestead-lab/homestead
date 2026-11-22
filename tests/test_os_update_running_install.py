@@ -190,19 +190,44 @@ class RunningInstall(unittest.TestCase):
     def test_a_recorded_host_not_ready_is_not_looked_at_until_it_is_ready_again(self):
         later = self.node_c_timed_out()
         self.set_ready("node-c", False)
+        # Before any look: the review's row for node-c says what is true of a host not Ready.
+        busy = ROLLOUT.preview(["node-c"])["hosts"][0]["busy"]
+        self.assertIn("once node-c is Ready and no OS update runs", busy)
+        self.assertNotIn("about once a minute", busy, "no promise it cannot keep")
         looked = self.hosts.looked.count("node-c")
         for at in range(later, later + 600, 20):
             ROLLOUT.tick(now=at)
         self.assertEqual(looked, self.hosts.looked.count("node-c"), "no command on a host that is not Ready")
-        busy = ROLLOUT.preview(["node-c"])["hosts"][0]["busy"]     # the review's row for node-c
-        self.assertIn("once node-c is Ready", busy)
-        self.assertNotIn("about once a minute", busy, "no promise it cannot keep")
+        busy = ROLLOUT.preview(["node-c"])["hosts"][0]["busy"]
+        self.assertIn("once node-c is Ready and no OS update runs", busy)
+        self.assertNotIn("about once a minute", busy)
         self.hosts.install_ends("node-c")
         self.set_ready("node-c", True)
         for at in range(later + 600, later + 900, 20):
             ROLLOUT.tick(now=at)
         self.assertGreater(self.hosts.looked.count("node-c"), looked, "looked at again once Ready")
         self.assertIn("node-c", self.released())
+
+    def test_a_host_that_does_not_answer_is_looked_at_less_and_less_often(self):
+        later = self.node_c_timed_out()
+        self.hosts.state_errors["node-c"] = OSError("node-c is not answering")
+        looked = self.hosts.looked.count("node-c")
+        for at in range(later, later + 3600, 20):     # an hour of idle ticks
+            ROLLOUT.tick(now=at)
+        looks = self.hosts.looked.count("node-c") - looked
+        # Waits of 1, 2, 4, 8, then 15 minutes: seven looks in the hour, not sixty.
+        self.assertLessEqual(looks, 8, "each failed look doubles the wait, up to 15 minutes")
+        self.assertGreaterEqual(looks, 5, "but it keeps looking")
+        busy = ROLLOUT.preview(["node-c"])["hosts"][0]["busy"]
+        self.assertIn("Make sure node-c answers", busy)
+        self.assertIn("within 15 minutes", busy)
+        self.assertNotIn("once a minute", busy, "no promise it cannot keep")
+        del self.hosts.state_errors["node-c"]
+        self.hosts.install_ends("node-c")
+        for at in range(later + 3600, later + 3600 + 15 * 60 + 40, 20):
+            ROLLOUT.tick(now=at)
+        self.assertIn("node-c", self.released(), "the first good look still clears it")
+        self.assertNotIn("node-c", ROLLOUT._load().get("installing") or {})
 
     def test_a_host_recorded_again_during_a_look_keeps_its_new_record(self):
         later = self.node_c_timed_out()
