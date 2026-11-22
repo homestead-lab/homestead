@@ -650,8 +650,9 @@ def _finish(state, rollout, now):
     if rollout.get("canary_failed"):
         # What happened to which host, first (#1527): the canary is the one host done.
         first = results[0] if results else {}
-        words = [f"{rollout['canary']} was updated first{', and restarted' if first.get('restarted') else ''}. "
-                 f"Its check stopped the update: {rollout['canary_failed']}"]
+        why = rollout["canary_failed"]
+        words = [f"{rollout['canary']} was updated first{', and restarted' if first.get('restarted') else ''}, "
+                 f"then its check stopped the update. {why[:1].upper()}{why[1:]}"]
     if waiting:
         # Why the first was not restarted - the review's reason - so the job
         # says what to fix, not only who waits.
@@ -668,7 +669,7 @@ def _finish(state, rollout, now):
         words.append(f"automatic updates could not be held on {name} ({row.get('error')})")
     rollout["message"] = "; ".join(words)
     rollout["phase"] = "done"
-    state["last_rollout"] = {k: rollout.get(k) for k in ("id", "status", "finished", "message", "reason", "nodes")}
+    state["last_rollout"] = {k: rollout.get(k) for k in ("id", "status", "finished", "message", "reason", "nodes", "index")}
     return True
 
 
@@ -824,12 +825,18 @@ def status(item):
     if rollout.get("id") != (item.get("ref") or {}).get("rollout"):
         last = _load().get("last_rollout") or {}
         if last.get("id") == (item.get("ref") or {}).get("rollout"):
-            return JOB_STATUS.get(last.get("status"), last.get("status") or "succeeded"), 100, last.get("message") or ""
+            return JOB_STATUS.get(last.get("status"), last.get("status") or "succeeded"), _progress(last), last.get("message") or ""
         return "failed", item.get("progress", 0), "this rollout's record is gone"
+    return JOB_STATUS.get(rollout.get("status"), rollout.get("status", "running")), _progress(rollout), rollout.get("message", "")
+
+
+def _progress(rollout):
+    """The share of the run's hosts reached: under 100 while it runs; for a stopped
+    run, not a full bar for hosts it left alone (#1527); 100 for any other end."""
     total = max(1, len(rollout.get("nodes") or []))
-    # A stopped run shows the share of its hosts it reached, not a full bar for every host (#1527).
-    progress = min(99, int(rollout.get("index", 0) * 100 / total)) if rollout.get("status") in ("running", "stopped") else 100
-    return JOB_STATUS.get(rollout.get("status"), rollout.get("status", "running")), progress, rollout.get("message", "")
+    share = int((rollout.get("index") or 0) * 100 / total)
+    status = rollout.get("status", "running")
+    return min(99, share) if status == "running" else share if status == "stopped" and "index" in rollout else 100
 
 
 def alert_facts():

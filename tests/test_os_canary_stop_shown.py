@@ -8,11 +8,13 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_alerts as ALERTS
+import homestead_fetch as FETCH
 import homestead_history as HISTORY
 import homestead_kube as K
 import homestead_operations as OPS
 import homestead_os_canary as CANARY
 import homestead_os_rollout as ROLLOUT
+import homestead_overview_server as OV
 from fakes.kube import Kube
 from rebind import keep_bound
 from test_os_rollout import Hosts, facts
@@ -65,7 +67,7 @@ class CanaryStopShown(unittest.TestCase):
                 return rollout
         self.fail(f"not reached: {rollout.get('phase')} {rollout.get('message')}")
 
-    def stopped_by_the_canary(self):
+    def stopped_by_the_canary(self, then=lambda later: None):
         """The run, stopped by an alert raised two hours into the canary's soak."""
         ALERTS.observe({"jobs": [], "os-updates": []}, T - 60)   # sources watched long before the run
         ROLLOUT.start(now=T)
@@ -78,13 +80,18 @@ class CanaryStopShown(unittest.TestCase):
         ALERTS.observe({"addresses": [fact]}, later - 90)
         ALERTS.observe({"addresses": [fact]}, later)            # held a minute: raised
         rollout = self.tick_until(later, lambda r: r.get("status") != "running")
+        then(later)
         OPS.list_operations()                                    # the jobs loop reads the run's state
-        job = next(j for j in OPS.snapshot() if j["kind"] == "os-rollout")
+        job = next(j for j in OPS.snapshot() if j["kind"] == "os-rollout" and j["status"] != "running")
         return rollout, job, later
 
     def look(self, now):
-        """One look of the alert sources this change touches, as the overview's alert loop takes them."""
-        return ALERTS.observe({"jobs": ALERTS.job_facts(OPS.snapshot()), "os-updates": ROLLOUT.alert_facts()}, now)
+        """One look of the alert loop's own sources (homestead_overview_server), the two
+        this is about kept: a source the loop does not take answers None, held."""
+        # The other sources read what they read and fail: no request leaves the test (a release check reads GitHub).
+        with mock.patch("builtins.print"), mock.patch.object(FETCH, "get", side_effect=OSError("no network here")):
+            answers = OV._alert_sources()
+        return ALERTS.observe({name: answers.get(name) for name in ("jobs", "os-updates")}, now)
 
     def test_the_stop_shows_what_happened_to_which_host_not_a_failure_of_every_host(self):
         rollout, job, _ = self.stopped_by_the_canary()
@@ -94,12 +101,17 @@ class CanaryStopShown(unittest.TestCase):
         self.assertEqual("stopped", rollout["status"], "the run's own record, shown under Last run")
         # A stopped run's job state, as a person's Stop gives it: not "failed", not a full bar.
         self.assertEqual(("cancelled", 33, "Update every host's OS (3 hosts)"), (job["status"], job["progress"], job["title"]))
-        self.assertEqual("node-b was updated first. Its check stopped the update: an alert was raised while the canary "
+        self.assertEqual("node-b was updated first, then its check stopped the update. An alert was raised while the canary "
                          "soaked: Service address 192.0.2.50 has no route. The other hosts were left as they are", job["message"])
+
+    def test_a_job_read_after_a_new_run_began_keeps_the_share_it_reached(self):
+        # The jobs loop had not read the stopped run before a new one replaced it.
+        _, job, _ = self.stopped_by_the_canary(then=lambda later: ROLLOUT.start(now=later + 60))
+        self.assertEqual(("cancelled", 33), (job["status"], job["progress"]))
 
     def test_the_stop_raises_an_alert_with_the_reason_and_a_link_to_the_job(self):
         _, job, later = self.stopped_by_the_canary()
-        self.assertEqual([], self.look(later + 20), "held a minute, as any condition")
+        self.assertEqual([], [e["title"] for e in self.look(later + 20)], "nothing at once: no 'Job failed', and a condition is held a minute")
         raised = self.look(later + 90)
         self.assertEqual([("raised", "degraded", "degraded", "An OS update stopped after its first host", f"/?job={job['id']}")],
                          [(e["phase"], e["category"], e["severity"], e["title"], e["href"]) for e in raised],
@@ -110,6 +122,7 @@ class CanaryStopShown(unittest.TestCase):
         _, job, later = self.stopped_by_the_canary()
         self.look(later + 20)
         self.look(later + 90)
+        self.assertTrue(any(r["key"].startswith("os-update-stopped:") for r in ALERTS.active()), "raised before the dismiss")
         OPS.dismiss(job["id"])
         self.look(later + 120)
         resolved = self.look(later + 200)

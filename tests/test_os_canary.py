@@ -115,7 +115,7 @@ class RolloutTests(unittest.TestCase):
             ROLLOUT.step(state, now=T + 120)
         # A hold, not a host that broke (#1527): the other hosts were left as they are.
         self.assertEqual("stopped", state["rollout"]["status"])
-        self.assertIn("b was updated first, and restarted. Its check stopped the update: the canary failed its checks: b is not Ready",
+        self.assertIn("b was updated first, and restarted, then its check stopped the update. The canary failed its checks: b is not Ready",
                       state["rollout"]["message"])
 
     def test_no_canary_on_one_host_or_when_the_first_host_failed(self):
