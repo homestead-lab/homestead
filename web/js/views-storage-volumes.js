@@ -69,6 +69,7 @@ function volumeActionItems(x) {
   const item = (label, run, iconName, options = {}) => ({ label, run, icon: iconName, ariaLabel: `${label} ${title}`, ...options });
   return [
     x.copies_short?.whole && item("Rebuild copy", `volumeRebuild(${jsq(x.name)})`, "refresh", { need: "operator", group: "Use", tip: "Rebuild the missing copies now." }),
+    item("Take snapshot", `volumeProtectNow('snapshot',${jsq(x.name)})`, "snapshot", { need: "operator", group: "Use", tip: "Take a snapshot of this volume now." }),
     item("Open snapshots", `lhSnaps(${jsq(x.name)},${pvc})`, "snapshot", { group: "Use", tip: "Take, view or restore snapshots and backups of this volume." }),
     item("Browse files", `fileManager(${ns},${pvc},${x.state === "attached"},${esc(JSON.stringify(x.access_modes || []))})`, "list", { need: "admin", group: "Use", tip: "Browse and edit the files on this volume" }),
     item("Expand volume", `volumeEdit(${vol})`, "edit", { need: "operator", group: "Change", tip: "Resize the volume or change its number of copies." }),

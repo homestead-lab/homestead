@@ -205,17 +205,43 @@ after reloading the page. Returning rechecks the facts.
 A click on a row of things that have more to say - an app, a VM, a volume, a
 network share - opens the **details sidebar** at the right, over the list,
 which stays where it was so a person can go from row to row. It leads with the
-item's name and its main actions (the first three as buttons, the rest in
-⋯), then tabs - Overview first, with what needs attention at the top of it,
-then the facts - each tab built from the page's own data. A phone shows it as
-a sheet from the bottom. The page registers the kind once,
-`DETAIL_KINDS[kind] = { head(key), actions(key), tabs: [{ id, label, when?,
-html(key) }] }`, and opens it with `openDetails(kind, key)`; every paint of
-the page redraws an open sidebar with the new data, keeping its tab and
-scroll, and closes it when its item is gone. Escape, a click on the dimmed
-page or ✕ closes it and gives focus back. An item on a linked cluster names
-it (`head(key).cluster`), so the panel carries `data-cluster` as its row
-does and its actions go to that cluster. A host keeps its own page.
+item's name and a line saying where it runs and what uses it ("lab · used by
+nextcloud, which is stopped"; an app's group, Ungrouped when it has none),
+then its main actions: words alone, the first one the main action (`pri`),
+three as buttons unless the kind says otherwise (`shown`), the rest in ⋯ at
+the right. Then a bar of tabs across the sidebar - Overview, then what the
+item has: Snapshots or Logs, Activity and Settings.
+
+- **Overview** is what needs attention, then a few short sections under
+  headings (`UI.section`) of tiles without icons (`UI.facts(pairs, { icons:
+  false })`): a volume's Space (a meter with its warning mark), Copies (a
+  tile per copy, its host and disk or Missing) and Protection (the last
+  snapshot and backup); an app's last lines of its log when it is in trouble
+  (`UI.logTail`), then its address in words ("192.0.2.20 port 8000"), host,
+  memory and uptime.
+- **Snapshots** and **Logs** show the item's own records - the snapshot
+  timeline and a compact backup list, the last 200 lines of the log - with
+  the buttons for more.
+- **Activity** is what happened to it, newest first (`UI.activity`): the
+  cluster's recent events about it, an app's changes, a volume's snapshots
+  and backups, and an app's web check above them.
+- **Settings** is what the item is, as facts with their icons, and the
+  changes that can be made to it.
+
+A tab that needs the server - snapshots, a log, the events - reads it when it
+is first drawn: `detailsData(name, read)` asks for it and `detailsSlot(state,
+render)` draws a line while it is read, a notice if it could not be, then
+the result. What was read is kept for 30 seconds per item and read again on
+the page's next refresh; `detailsForget(name)` reads it again after a change,
+such as Take snapshot. A phone shows the sidebar as a sheet from the bottom.
+The page registers the kind once, `DETAIL_KINDS[kind] = { head(key),
+actions(key), shown?, tabs: [{ id, label, when?, html(key) }] }`, and opens
+it with `openDetails(kind, key)`; every paint of the page redraws an open
+sidebar with the new data, keeping its tab and scroll, and closes it when
+its item is gone. Escape, a click on the dimmed page or ✕ closes it and gives
+focus back. An item on a linked cluster names it (`head(key).cluster`), so
+the panel carries `data-cluster` as its row does and its actions go to that
+cluster. A host keeps its own page.
 
 ### Collections
 
@@ -227,8 +253,9 @@ does and its actions go to that cluster. A host keeps its own page.
 | A set of values - an endpoint, a bucket, a size | `.about-grid` on a page, `UI.facts` in a dialog | Two to a row, one panel |
 | Headline figures | `UI.stats` | Two to a row |
 
-**Every fact has an icon.** A facts panel (`UI.facts`, `.about-grid`) shows
-an icon beside each label, so a panel is scanned by shape: an address, a
+**Every fact has an icon**, except the few tiles under a details sidebar's
+section heading, where the heading says what they are. A facts panel
+(`UI.facts`, `.about-grid`) shows an icon beside each label, so a panel is scanned by shape: an address, a
 size, memory, a host. The icon comes from the label (`UI.factIcon`, the first
 pattern in `FACT_ICONS` that matches); a third item in a pair names one
 instead. `.about-grid` markup gets the same icons in `paint()` and

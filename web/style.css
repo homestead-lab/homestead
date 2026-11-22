@@ -2332,6 +2332,16 @@ div.ipam-line.dim{display:block}
 .ui-facts dt{font-size:11.5px;color:var(--mut);margin-bottom:3px;display:flex;align-items:center;gap:6px}
 .ui-fact-icon{width:13px;height:13px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
 .about-grid span:has(>.ui-fact-icon){display:flex;align-items:center;gap:6px}
+.ui-facts.plain dt{display:block}
+.ui-activity{list-style:none;margin:0;padding:0;display:grid;gap:0;border:1px solid var(--line);border-radius:13px;overflow:hidden}
+.ui-activity li{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 13px;background:var(--surf);border-top:1px solid var(--line)}
+.ui-activity li:first-child{border-top:0}
+.ui-activity i{width:7px;height:7px;margin-top:6px;border-radius:50%;background:var(--line2)}
+.ui-activity li.warn i{background:var(--med)}.ui-activity li.bad i{background:var(--crit)}.ui-activity li.ok i{background:var(--ok)}
+.ui-activity b{display:block;font-size:13px;font-weight:600;color:var(--tx)}
+.ui-activity span{display:block;font-size:12px;color:var(--mut);overflow-wrap:anywhere}
+.ui-activity time{font-size:11.5px;color:var(--mut);white-space:nowrap}
+.ui-log{margin:0;padding:12px 14px;border:1px solid var(--line);border-radius:11px;background:#000;color:#e8e8ec;font:12px/1.55 "JetBrains Mono",ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
 .ui-facts dd{margin:0;font-size:13px;color:var(--tx);font-weight:600;overflow-wrap:anywhere}
 
 .ui-checklist,.ui-steps{list-style:none;margin:0;padding:0;display:grid;gap:2px}
@@ -4193,12 +4203,30 @@ button.a2port{font-family:inherit;line-height:inherit}
 .details-title{display:flex;align-items:center;gap:12px;min-width:0}
 .details-title h3{overflow-wrap:anywhere}
 .details-body{padding:16px 20px 28px;display:flex;flex-direction:column;gap:16px;overflow-y:auto;flex:1 1 auto;min-height:0}
-.details-tabs{align-self:flex-start;flex-wrap:wrap}
+/* The tabs span the sidebar, as in the mockup: one rounded bar. */
+.details-tabs{align-self:stretch;flex-wrap:wrap}
 .details-tabs button{border:0;background:transparent;color:var(--mut);font:inherit;font-weight:600;padding:6px 14px;border-radius:10px;cursor:pointer}
 .details-tabs button.on{background:var(--tx);color:#000}
-.details-tab{display:flex;flex-direction:column;gap:14px;min-width:0}
-/* A narrow sidebar lets its three buttons and ⋯ take a second line rather than run off it. */
-.details-actions .actionbar{flex-wrap:wrap;row-gap:6px}
+.details-tab{display:flex;flex-direction:column;gap:16px;min-width:0}
+/* A narrow sidebar lets its buttons and ⋯ take a second line rather than run
+   off it. The buttons are words alone, the first the main one, and ⋯ is at the right. */
+.details-actions .actionbar{flex-wrap:wrap;row-gap:6px;width:100%}
+.details-actions .actionbar>.btn{padding:8px 14px;font-size:13px}
+.details-actions .actionmenu{margin-left:auto}
+.details-actions .actionmenu>summary{padding:8px 12px}
+.details-reading{display:flex;align-items:center;gap:8px;padding:6px 0}
+.details-foot .actionbar{flex-wrap:wrap;row-gap:6px}
+.details-space{display:grid;gap:9px}
+.details-space .ui-meter{height:6px}
+.details-address{color:var(--tx);text-align:left;font-weight:600}
+.details-tab .ui-section h4{font-size:13.5px}
+.details-tab .snapshot-timeline{margin:0}
+.details-list{display:grid;border:1px solid var(--line);border-radius:13px;overflow:hidden}
+.details-list-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:10px 13px;background:var(--surf);border-top:1px solid var(--line)}
+.details-list-row:first-child{border-top:0}
+.details-list-main{display:grid;gap:2px;min-width:0}
+.details-list-main b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.details-tabs button{font-size:13px}
 .details-tab .wl-detail-more{margin:0;grid-template-columns:minmax(0,1fr)}
 .details-tab .workloadtree{margin:0}
 .details-tab .ui-facts .waccess,.details-tab .ui-facts .row{gap:6px;flex-wrap:wrap}
@@ -4210,6 +4238,9 @@ html[data-motion="off"] .details-panel{transition:none}
   .details-panel{top:auto;width:100%;height:86vh;border-left:0;border-top:1px solid var(--line2);border-radius:22px 22px 0 0;transform:translateY(100%)}
   .details-panel.open{transform:none}
   .details-hd::before{content:"";position:absolute;top:7px;left:50%;width:44px;height:5px;margin-left:-22px;border-radius:9px;background:var(--line2)}
+  /* Four tabs on one line: tighter, and they scroll sideways rather than wrap. */
+  .details-tabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .details-tabs button{padding:6px 10px;white-space:nowrap}
 }
 /* Hover cards (design.md): the card a hover, focus or tap on a status, a figure
    or a name shows, on the same surface as the ⋯ menus. Unlike a tooltip it

@@ -8,11 +8,13 @@ const test = require("node:test"), assert = require("node:assert/strict"), fs = 
 function page() {
   const esc = x => String(x ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const c = { window: {}, console, Set, Map, Promise, JSON, document: { addEventListener() {} }, STATE: { data: {}, q: "" },
-    esc, meter: pct => `<meter value="${pct}"></meter>`, tip: () => "?", toast() {}, fmtAgo: s => `${s}s ago`,
+    esc, meter: pct => `<meter value="${pct}"></meter>`, tip: () => "?", toast() {}, fmtAgo: s => `${s}s ago`, fmtDay: () => "21 Nov",
     icon: n => `<svg data-icon="${n}"></svg>`, HOVER_CARDS: {}, DETAIL_KINDS: {} };
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => esc(c.jsArg(s));
   vm.createContext(c);
-  for (const f of ["web/js/ui.js", ...require("./helpers/storage-source").files()]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  for (const f of ["web/js/ui.js", "web/js/details-panel.js", ...require("./helpers/storage-source").files()]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  // details-panel.js declares the sidebar kinds itself; the parts add to that one.
+  c.DETAIL_KINDS = vm.runInContext("DETAIL_KINDS", c);
   return c;
 }
 const volume = (name, extra = {}) => ({ name: `pvc-${name}`, pvc_name: name, namespace: "lab", state: "attached", robustness: "healthy", replicas: 2,
@@ -86,13 +88,21 @@ test("the Copies cell says under the dots what is missing or how far a rebuild i
 
 test("a volume's sidebar and hover cards come from the list the page read, escaped", () => {
   const c = page();
-  c.STATE.data.vols = [volume("<b>x</b>", { name: "pvc-x" }), volume("cloud", { state: "detached", attached: [], used_by: ["Deployment/nextcloud"], copies_short: { whole: 1, wanted: 2 } })];
+  c.STATE.data.vols = [volume("<b>x</b>", { name: "pvc-x" }), volume("cloud", { state: "detached", attached: [], used_by: ["Deployment/nextcloud"], copies: [], copies_short: { whole: 1, wanted: 2 } })];
   assert.equal(c.DETAIL_KINDS.volume.head("pvc-x").title, "<b>x</b>");
-  assert.equal(c.DETAIL_KINDS.volume.head("pvc-cloud").sub, "lab · used by nextcloud, stopped");
+  assert.equal(c.DETAIL_KINDS.volume.head("pvc-cloud").sub, "lab · used by nextcloud, which is stopped");
+  assert.deepEqual([...c.DETAIL_KINDS.volume.tabs.map(t => t.label)], ["Overview", "Snapshots", "Activity", "Settings"]);
+  // Overview (the mockup): the problem, then Space, Copies and Protection.
   const overview = c.DETAIL_KINDS.volume.tabs[0].html("pvc-cloud");
-  assert.match(overview, /cloud is missing a copy/);
-  for (const label of ["State", "Used by", "Files", "Size", "Longhorn footprint", "Copies", "Access", "Engine", "Last used"]) assert.match(overview, new RegExp(`</svg>${label}</dt>`), label);
-  assert.equal([...c.DETAIL_KINDS.volume.actions("pvc-cloud")][0].label, "Rebuild copy");
+  assert.match(overview, /1 of 2 copies[\s\S]*<h4>Space<\/h4>[\s\S]*<h4>Copies<\/h4>[\s\S]*<h4>Protection<\/h4>/);
+  assert.match(overview, /<dt>Copy 1<\/dt><dd>Whole<\/dd><\/div><div><dt>Copy 2<\/dt><dd>Missing<\/dd>/);
+  assert.match(c.volumeCopyTiles(volume("web")), /<dt>host-a<\/dt><dd>Stored on disk-1 · healthy<\/dd>/);
+  assert.match(c.volumeSpace(volume("web", { filesystem: { used_gb: 3.8, capacity_gb: 19.6, used_pct: 19 } })), /3\.8 of 19\.6 GiB of files[\s\S]*19%[\s\S]*ui-meter/);
+  // Settings: what it is, with the icons.
+  const settings = c.volumeSettingsTab("pvc-cloud");
+  for (const label of ["Size", "Longhorn footprint", "Copies", "Access", "Engine", "Last used"]) assert.match(settings, new RegExp(`</svg>${label}</dt>`), label);
+  assert.deepEqual([...c.DETAIL_KINDS.volume.actions("pvc-cloud").slice(0, 2).map(i => i.label)], ["Rebuild copy", "Take snapshot"]);
+  assert.deepEqual([...c.DETAIL_KINDS.volume.actions("pvc-x").slice(0, 2).map(i => i.label)], ["Take snapshot", "Open snapshots"], "a healthy volume leads with a snapshot");
   assert.doesNotMatch(c.HOVER_CARDS.volume("pvc-x"), /<b>x<\/b>/);
   assert.match(c.HOVER_CARDS["volume-copies"]("pvc-x"), /host-a[\s\S]*disk-1/);
   assert.match(c.HOVER_CARDS["volume-health"]("pvc-cloud"), /Why/);

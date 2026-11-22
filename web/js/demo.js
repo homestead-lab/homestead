@@ -3100,6 +3100,15 @@ ssh_pwauth: true
     "/api/container/command/preview": (url, init) => ({ settings: JSON.parse(init.body), review_token: "demo-command",
       summary: { limit: "Requires timeout in the image. Sends TERM, then KILL after 2 seconds; detached children may survive." } }),
     "/api/container/command": { exit_code: 0, stdout: "Linux example-server 6.12.0 x86_64\n", stderr: "", truncated: false, timed_out: false },
+    // A pod's last lines, as text with Kubernetes' timestamps, as the server sends them.
+    "/api/logs": url => {
+      const pod = url.searchParams.get("pod") || "", at = ago => new Date(Date.now() - ago * 1000).toISOString();
+      const lines = /paperless/.test(pod)
+        ? [[620, "[INFO] Starting gunicorn 21.2.0"], [600, "[INFO] Listening at: http://0.0.0.0:8000"], [240, "gunicorn: worker timeout (pid 41)"],
+          [175, "gunicorn: worker timeout (pid 44)"], [148, "redis: connection refused"]]
+        : [[300, "Server started"], [120, "GET /health 200 3ms"], [60, "GET /health 200 2ms"], [5, "GET /health 200 2ms"]];
+      return new Response(lines.map(([ago, line]) => `${at(ago)} ${line}`).join("\n") + "\n", { headers: { "Content-Type": "text/plain" } });
+    },
     "/api/logs/search": url => {
       const q = url.searchParams.get("q") || "", only = url.searchParams.get("apps") || "", t = Date.now();
       const at = s => new Date(t - s * 1000).toISOString();

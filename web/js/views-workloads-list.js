@@ -169,13 +169,17 @@ function workloadRowActions(w, update, off) {
   // The row's button shows its label alone, and its icon only where a narrow table has no room for words.
   return actionBar([main && { ...main, plain: true }, ...rest], {label:`More actions for ${w.name}`, shown:1});
 }
-/* The sidebar's actions: the row's, in the row's order, then every other
-   action the app has. */
+/* The sidebar's actions: the row's main one, then Restart (or Start), then
+   Open app - or the logs when opening the app is the main one - as buttons;
+   the rest of the row's, then every other action the app has, in ⋯. */
 function workloadDetailActions(w, update, off) {
   const first = workloadMenuItems(w, update, off), all = workloadActionItems(w, update, off);
   if (!first) return all;
+  const main = first[0], power = first.find(i => i.label === "Restart app" || i.label === "Start app");
+  const third = first.find(i => i !== main && i.label === "Open app") || first.find(i => i !== main && i.label === "Open logs");
+  const lead = [main, power, third].filter((item, n, list) => item && list.indexOf(item) === n);
   const runs = new Set(first.map(i => i.run));
-  return [...first, ...all.filter(i => !runs.has(i.run)).map(i => ({ ...i, pri: false, group: "More" }))];
+  return [...lead, ...first.filter(i => !lead.includes(i)), ...all.filter(i => !runs.has(i.run)).map(i => ({ ...i, pri: false, group: "More" }))];
 }
 /* The row's curated actions, its main one first; null for an app Homestead
    runs for itself, a managed share or a platform part, which keep their own short list. */

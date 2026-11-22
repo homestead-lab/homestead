@@ -18,6 +18,8 @@ const fmtAt = (v, { weekday = false } = {}) => { const at = asDate(v);
 const fmtDay = v => { const at = asDate(v); return at ? at.toLocaleDateString(undefined, { day: "numeric", month: "short", ...thisYear(at) }) : ""; };
 /* A day as a heading: "Saturday 24 October". */
 const fmtWeekday = v => { const at = asDate(v); return at ? at.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", ...thisYear(at) }) : ""; };
+/* A log line's time, to the second: "09:41:58". */
+const fmtLogClock = v => { const at = asDate(v); return at ? at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : ""; };
 const fmtClock = v => { const at = asDate(v); return at ? at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : ""; };
 const utcTip = at => at.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
 /* A past time and how long ago: "22 Sep, 05:00 · 6h 2m ago". */
@@ -46,6 +48,6 @@ const stateWords = state => STATE_WORDS[state] || String(state ?? "").replace(/(
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  fmtUp, fmtAgo, asDate, ageSecs, thisYear, fmtAt, fmtDay, fmtWeekday, fmtClock, utcTip, fmtWhen, fmtNext, yourZone,
+  fmtUp, fmtAgo, asDate, ageSecs, thisYear, fmtAt, fmtDay, fmtWeekday, fmtLogClock, fmtClock, utcTip, fmtWhen, fmtNext, yourZone,
   zoneLine, upChip, svcUrl, plural, STATE_WORDS, stateWords
 };
