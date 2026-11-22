@@ -18,6 +18,7 @@ import json
 import urllib.error
 
 import homestead_copy_job as COPY_JOB
+import homestead_restructure as RESTRUCTURE
 
 
 def _claims(spec):
@@ -26,8 +27,12 @@ def _claims(spec):
 
 
 def marked(dep):
-    """A Deployment a storage copy holds."""
-    return bool(((dep.get("metadata") or {}).get("annotations") or {}).get(COPY_JOB.MARKER))
+    """A Deployment a storage copy holds: its mark, and the hold count the
+    edit saved with it (RESTRUCTURE.HELD). A storage class move marks the
+    apps it stops with the same mark and no count; they still name their
+    volume, and it keeps no record of before."""
+    annotations = (dep.get("metadata") or {}).get("annotations") or {}
+    return bool(annotations.get(COPY_JOB.MARKER)) and RESTRUCTURE.HELD in annotations
 
 
 def _earlier(dep, read):
@@ -76,11 +81,18 @@ def needed(deployments, read):
 
 
 def reason(app):
-    """Why the volume a held copy copies from is not deleted."""
-    return (f"The storage copy of {app} is not confirmed. This volume holds {app}'s data from before the edit, "
+    """Why the volume a held copy copies from is not deleted. True of a copy
+    still running and of one kept stopped: the hold ends only when the copy
+    is confirmed, undone or released."""
+    return (f"The storage copy of {app} has not finished. This volume holds {app}'s data from before the edit, "
             f"and undoing the copy needs it. Its job is \"Move {app}'s data\" in Jobs.")
 
 
 def unread_warning(app, why):
-    return (f"The storage copy of {app} is not confirmed. Its record of the volumes from before the edit {why}, "
-            "so the volume it copies from is not known.")
+    """Why the volume a held copy copies from is not known, and the way out:
+    the copy's own release, or, when its job is gone or the app was created
+    again (a new uid, so no record and a release that refuses), the mark."""
+    return (f"The storage copy of {app} has not finished. Its record of the volumes from before the edit {why}, "
+            f"so the volume it copies from is not known. Release the hold from the job \"Move {app}'s data\" in Jobs "
+            "(Check outcome, then Release hold and stop tracking). If that job is gone or says the app was replaced, "
+            f"remove the annotation {COPY_JOB.MARKER} from the app in Kubernetes.")

@@ -67,7 +67,7 @@ class Scene(unittest.TestCase):
         self.kube.__enter__()
         self.addCleanup(self.kube.__exit__)
         self.kube.add({"apiVersion": "apps/v1", "kind": "Deployment",
-                       "metadata": {"name": "app", "namespace": "lab", "annotations": {flow.MARKER: "copy-1"}},
+                       "metadata": {"name": "app", "namespace": "lab", "annotations": {flow.MARKER: "copy-1", restructure.HELD: "1"}},
                        "spec": {"replicas": 0, "selector": {"matchLabels": {"app": "app"}},
                                 "template": template("new", "keep")}})
         self.uid = self.kube.object(DEP)["metadata"]["uid"]
@@ -100,12 +100,12 @@ class DeleteReviewTests(Scene):
         self.assertTrue(plan["blocked"])
         held = [r for r in plan["blocking_reasons"] if "storage copy" in r]
         self.assertEqual(1, len(held), plan["blocking_reasons"])
-        for words in ("app", "not confirmed", "data from before the edit", "Move app's data", "Jobs"):
+        for words in ("app", "has not finished", "data from before the edit", "Move app's data", "Jobs"):
             self.assertIn(words, held[0])
         self.assertFalse(plan["actions"]["delete_claim"]["enabled"])
         self.assertFalse(plan["actions"]["delete_data"]["enabled"])
         for action in ("delete_claim", "delete_data"):
-            with self.assertRaisesRegex(PermissionError, "storage copy of app is not confirmed"):
+            with self.assertRaisesRegex(PermissionError, "storage copy of app has not finished"):
                 VOLUMES.delete({"namespace": "lab", "name": "old", "action": action,
                                 "uid": plan["uid"], "confirmation": "old"})
         self.assertEqual([], self.kube.writes)
@@ -123,6 +123,18 @@ class DeleteReviewTests(Scene):
         self.assertFalse(plan["blocked"], plan["blocking_reasons"])
         self.assertEqual([], self.secret_reads())   # no mark, no read of the record
 
+    def test_a_mark_added_after_the_review_refuses_the_delete(self):
+        self.unmark()
+        plan = self.plan("old")
+        self.assertFalse(plan["blocked"], plan["blocking_reasons"])
+        dep = self.kube.object(DEP)
+        dep["metadata"]["annotations"][flow.MARKER] = "copy-1"
+        self.kube.add(dep)
+        with self.assertRaisesRegex(PermissionError, "storage copy of app has not finished"):
+            VOLUMES.delete({"namespace": "lab", "name": "old", "action": "delete_claim",
+                            "uid": plan["uid"], "confirmation": "old"})
+        self.assertEqual([], self.kube.writes)
+
     def test_a_running_copy_still_blocks_through_its_job(self):
         self.kube.add({"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": "homestead-copy-app", "namespace": "lab"},
                        "spec": {"template": {"spec": template("old", "new")["spec"]}}, "status": {"active": 1}})
@@ -136,6 +148,22 @@ class DeleteReviewTests(Scene):
         plan = self.plan("old", ns="media")
         self.assertFalse(plan["blocked"], plan["blocking_reasons"])
         self.assertEqual([], self.used_by()[("media", "old")])
+
+    def test_a_storage_class_move_that_holds_an_app_is_not_read_as_a_copy(self):
+        # A storage class move (reclass) marks the apps it stops with the same
+        # annotation, with no hold count and no record of before: they still
+        # name their volume, so nothing is missing.
+        self.kube.discard(self.record)
+        dep = self.kube.object(DEP)
+        dep["metadata"]["annotations"].pop(restructure.HELD)
+        self.kube.add(dep)
+        for obj in claim("spare"):
+            self.kube.add(obj)
+        plan = self.plan("spare")
+        self.assertFalse(plan["blocked"], plan["blocking_reasons"])
+        self.assertEqual([], plan["warnings"])
+        self.assertEqual([], self.used_by()[("lab", "spare")])
+        self.assertEqual([], self.secret_reads())
 
     def test_a_statefulset_with_the_mark_is_not_read_as_a_copy(self):
         self.unmark()
@@ -157,6 +185,49 @@ class RecordUnreadTests(Scene):
         self.assertIn("the app dependency list is incomplete", plan["blocking_reasons"])
         self.assertTrue([w for w in plan["warnings"] if "storage copy of app" in w and "is missing" in w], plan["warnings"])
         self.assertFalse(plan["actions"]["delete_data"]["enabled"])
+
+    def test_the_warning_says_how_to_release_the_hold(self):
+        self.kube.discard(self.record)
+        warning = [w for w in self.plan("old")["warnings"] if "storage copy of app" in w][0]
+        for words in ("Move app's data", "Check outcome", "Release hold and stop tracking",
+                      "app was replaced", "homestead.io/storage-copy-job"):
+            self.assertIn(words, warning)
+
+    def test_an_app_created_again_with_the_mark_on_it_is_blocked_and_told_to_remove_the_mark(self):
+        # Applied again from a saved manifest: a new uid, the mark still on it,
+        # and no record for that uid (the old one went with the old app).
+        dep = self.kube.object(DEP)
+        self.kube.discard(DEP)
+        self.assertIsNone(self.kube.object(self.record))     # owned by the old app
+        for field in ("uid", "resourceVersion", "creationTimestamp"):
+            dep["metadata"].pop(field, None)
+        self.kube.add(dep)
+        self.assertNotEqual(self.uid, self.kube.object(DEP)["metadata"]["uid"])
+        plan = self.plan("old")
+        self.assertTrue(plan["blocked"])
+        warning = [w for w in plan["warnings"] if "storage copy of app" in w][0]
+        self.assertIn("is missing", warning)
+        self.assertIn("remove the annotation homestead.io/storage-copy-job from the app in Kubernetes", warning)
+
+    def test_a_record_not_owned_by_the_app_is_not_trusted(self):
+        secret = self.kube.object(self.record)
+        secret["metadata"]["ownerReferences"][0]["uid"] = "another-uid"
+        self.kube.add(secret)
+        plan = self.plan("old")
+        self.assertTrue(plan["blocked"])
+        self.assertIn("the app dependency list is incomplete", plan["blocking_reasons"])
+        self.assertFalse([r for r in plan["blocking_reasons"] if "storage copy" in r])   # its names are not used
+        self.assertTrue([w for w in plan["warnings"] if "belongs to another app" in w], plan["warnings"])
+        self.assertIsNone(self.used_by()[("lab", "old")])
+
+    def test_an_install_does_not_take_over_a_volume_there_meanwhile(self):
+        import server
+        for obj in claim("spare"):
+            self.kube.add(obj)
+        self.kube.discard(self.record)
+        with mock.patch.object(server.STORAGE_ROUTES, "kget", K.kget):
+            with self.assertRaisesRegex(ValueError, "could not check what uses it"):
+                server.STORAGE_ROUTES.ensure_claim("lab", "spare", 1)
 
     def test_an_unreadable_record_blocks_with_its_http_status(self):
         self.kube.fail(self.record, 403, times=5)
@@ -232,9 +303,28 @@ class RealCopyTests(unittest.TestCase):
             refs = STORAGE.claim_references()
             plan = VOLUMES.deletion_plan("lab", "old")
         self.assertEqual(["Storage copy/app"], STORAGE._references_for(refs, "lab", "old"))
-        self.assertTrue([r for r in plan["blocking_reasons"] if "storage copy of app is not confirmed" in r],
+        self.assertTrue([r for r in plan["blocking_reasons"] if "storage copy of app has not finished" in r],
                         plan["blocking_reasons"])
         self.assertNotIn("secret-not-in-journal", json.dumps(plan) + json.dumps(STORAGE._references_for(refs, "lab", "old")))
+
+
+    def test_an_app_created_again_with_the_mark_cannot_be_released_from_jobs(self):
+        import homestead_operations as ops
+        self.started()
+        dep = self.kube.object(self.DEP)
+        self.kube.discard(self.DEP)
+        for field in ("uid", "resourceVersion", "creationTimestamp"):
+            dep["metadata"].pop(field, None)
+        self.kube.add(dep)
+        self.kube.absent_groups.add("kubevirt.io")
+        plan = ops.cancel_plan(ops.stored()[0]["id"])
+        self.assertFalse(plan["can"])
+        self.assertIn("The app was replaced", plan["why_not"])     # so the warning names the mark
+        with mock.patch.object(VOLUMES, "kget", K.kget), mock.patch.object(VOLUMES, "snapshots", lambda name: []), \
+                mock.patch.object(VOLUMES, "backups", lambda name: []):
+            review = VOLUMES.deletion_plan("lab", "old")
+        self.assertTrue(review["blocked"])
+        self.assertTrue([w for w in review["warnings"] if "homestead.io/storage-copy-job" in w], review["warnings"])
 
 
 if __name__ == "__main__":
