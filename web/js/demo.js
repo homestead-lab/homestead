@@ -1705,6 +1705,8 @@ ssh_pwauth: true
       left_default: [], back_to_default: [], kept_in_default: [] }),
     "/api/lh/group/delete": { ok: true, back_to_default: ["homeassistant-config"], idle_jobs: ["media-weekly-trim"] },
     "/api/lh/backup/delete": { ok: true },
+    // Take snapshot and Back up now, from the Snapshots dialog or a volume's sidebar.
+    "/api/lh/snapshot": { ok: true }, "/api/lh/backup": { ok: true },
     "/api/lh/restore/plan": restorePlan,
     "/api/lh/restore": (url, init) => {
       const body = JSON.parse(init?.body || "{}");

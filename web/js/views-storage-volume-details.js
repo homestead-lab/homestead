@@ -211,7 +211,9 @@ function volumeSettingsTab(name) {
 /* A snapshot or backup taken from the sidebar: the sidebar reads them again. */
 if (typeof window === "object") window.volumeProtectNow = async (kind, vol) => {
   try {
-    await api(kind === "backup" ? "/api/lh/backup" : "/api/lh/snapshot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ volume: vol }) });
+    const send = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ volume: vol }) };
+    // Each path written out, so the API contract test can read it.
+    await (kind === "backup" ? api("/api/lh/backup", send) : api("/api/lh/snapshot", send));
     toast(kind === "backup" ? "Backup started" : "Snapshot taken", "ok");
     detailsForget("protect");
   } catch (e) { toast(e.message, "bad"); }
