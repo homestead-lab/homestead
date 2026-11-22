@@ -219,7 +219,7 @@ def _in_rows(rows, name):
     return isinstance(rows, list) and any(row == name or isinstance(row, dict) and row.get("node") == name for row in rows)
 
 
-def _busy_host(name, ready=True):
+def _busy_host(name):
     """Why this host can't start: an install an earlier run left that may still be
     running (#1540), or a job not ended that names it, of any kind, so that a kind
     added later is refused rather than run into. "" when none. The install would
@@ -227,6 +227,11 @@ def _busy_host(name, ready=True):
     row = (_load().get("installing") or {}).get(name)
     if row is not None:
         why = f"{name} may still be installing updates from an earlier OS update"
+        try:
+            nodes = _nodes()
+            ready = name in nodes and _ready(nodes[name])
+        except Exception:
+            ready = True    # unknown: the text the record gives
         if not ready:
             return f"{why}. Homestead checks again once {name} is Ready and no OS update runs. See {host_os.LOG} on {name}."
         if row.get("unread"):
@@ -1014,7 +1019,7 @@ def preview(names):
         hosts.append({"node": name, "ready": ready, "updates": facts.get("updates") or [], "security": facts.get("security", 0),
                       "reboot": bool(facts.get("reboot")), "reboot_for": facts.get("reboot_for") or "", "at": facts.get("at"),
                       "homestead_here": name == own, "restart_refusal": refusal, "restart_may_clear": may_clear, "restart_unread": unread,
-                      "busy": _busy_host(name, ready), "unclean_restart": LHCAP.unclean_restart_warning(lone, name)})
+                      "busy": _busy_host(name), "unclean_restart": LHCAP.unclean_restart_warning(lone, name)})
     missing = [h["node"] for h in hosts if not h["ready"]]
     blocked = (RUNNING if (state.get("rollout") or {}).get("status") == "running" else "") or _busy_cluster() \
         or ("Not Ready, so left alone: " + ", ".join(missing) if missing else "") \

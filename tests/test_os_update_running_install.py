@@ -208,6 +208,15 @@ class RunningInstall(unittest.TestCase):
         self.assertGreater(self.hosts.looked.count("node-c"), looked, "looked at again once Ready")
         self.assertIn("node-c", self.released())
 
+    def test_a_refusal_whose_node_read_fails_still_says_the_host_may_be_installing(self):
+        self.node_c_timed_out()
+        self.set_ready("node-c", False)
+        # The review's own read of the hosts works; the refusal's read of them fails.
+        self.kube.fail("/api/v1/nodes", OSError("the API server is busy"), skip=1)
+        busy = ROLLOUT.preview(["node-c"])["hosts"][0]["busy"]
+        self.assertTrue(busy.startswith("node-c may still be installing updates from an earlier OS update."), busy)
+        self.assertIn("about once a minute", busy, "without the read, the text the record gives")
+
     def test_a_host_that_does_not_answer_is_looked_at_less_and_less_often(self):
         later = self.node_c_timed_out()
         self.hosts.state_errors["node-c"] = OSError("node-c is not answering")
