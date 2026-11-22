@@ -51,17 +51,14 @@ function volumeSummary(v, st, { q = "", reading = false } = {}) {
   const stores = (f?.rows || []).filter(r => r.kind !== "volume" && r.days_left !== null && r.days_left <= warn);
   const free = st ? `<span data-card="storage|pool"><b>${gibText(st.avail_gb)} GiB of ${gibText(st.cap_gb)} GiB is free.</b></span>`
     : reading ? '<span class="dim">Reading the free space…</span>' : `<b>${v.length === 1 ? "1 volume" : `${v.length} volumes`}.</b>`;
-  const links = [...troubled.slice(0, 3).map(([x, p]) => `<button type="button" class="linkish sum-link sum-${p.tone}" onclick="openDetails('volume',${jsq(volumeKey(x))})">${esc(volumeTitle(x))} ${esc(p.word)}</button>`),
-    troubled.length > 3 ? `<span class="sum-note">${troubled.length - 3} more</span>` : "",
-    ...stores.map(r => {
-      const tone = forecastTone(r.days_left, warn), words = `${r.kind === "pool" ? "All Longhorn storage" : `The disk ${esc(r.label)}`} is full ${esc(forecastWhen(r.days_left))}`;
-      return r.kind === "disk" ? `<button type="button" class="linkish sum-link sum-${tone}" onclick="nodeDetail(${jsq(r.node)})">${words}</button>` : `<span class="sum-${tone}">${words}</span>`;
-    }),
-    q ? `<span class="sum-note">${v.length === 1 ? "1 volume matches" : `${v.length} volumes match`} “${esc(q)}”</span>` : ""].filter(Boolean);
+  const parts = [...troubled.slice(0, 3).map(([x, p]) => ({ text: `${volumeTitle(x)} ${p.word}`, tone: p.tone, run: `openDetails('volume',${jsq(volumeKey(x))})` })),
+    troubled.length > 3 && { text: `${troubled.length - 3} more`, note: true },
+    ...stores.map(r => ({ text: `${r.kind === "pool" ? "All Longhorn storage" : `The disk ${r.label}`} is full ${forecastWhen(r.days_left)}`,
+      tone: forecastTone(r.days_left, warn), run: r.kind === "disk" ? `nodeDetail(${jsq(r.node)})` : "" })),
+    q && { text: `${v.length === 1 ? "1 volume matches" : `${v.length} volumes match`} “${q}”`, note: true }];
   const needs = troubled.length + stores.length;
-  const wide = `${free}${links.length ? ` ${links.join(SUM_DOT)}` : ""}`;
-  const narrow = `${st ? `<b>${gibText(st.avail_gb)} GiB free.</b>` : free}${needs ? ` <button type="button" class="linkish sum-link sum-warn" onclick="volumeNeedsOnly(true)">${needs === 1 ? "1 volume needs" : `${needs} volumes need`} attention</button>` : ""}`;
-  return `<span class="sum-wide">${wide}</span><span class="sum-narrow">${narrow}</span>`;
+  return UI.summary({ head: free, parts, narrow: { head: st ? `<b>${gibText(st.avail_gb)} GiB free.</b>` : free,
+    parts: [needs && { text: `${needs === 1 ? "1 volume needs" : `${needs} volumes need`} attention`, tone: "warn", run: "volumeNeedsOnly(true)" }] } });
 }
 if (typeof window === "object") window.volumeNeedsOnly = on => { STATE.volNeeds = on; viewStorage(); };
 
@@ -84,10 +81,10 @@ function volumeCopyDots(x) {
 /* The row's Copies cell: the dots, then a short line when a copy is missing,
    being rebuilt or restored. Its hover card gives Longhorn's reason. */
 function volumeCopiesCell(x) {
-  const busy = volumeBusy(x), problem = volumeProblem(x), key = esc(volumeKey(x));
+  const busy = volumeBusy(x), problem = volumeProblem(x);
   const doing = busy && !busy.error && `${x.restore ? "Restoring" : x.rebalancing ? "Moving a copy" : "Rebuilding"} ${+busy.pct || 0}%`;
   const note = doing ? `${volumeProgressBar(busy.pct)}${esc(doing)}` : problem && !problem.usage ? esc(problem.note) : "";
-  return `${volumeCopyDots(x)}${note ? `<div class="vol-note xs" data-card="volume-health|${key}">${note}</div>` : ""}`;
+  return `${volumeCopyDots(x)}${note ? UI.reason(note, { under: true, card: `volume-health|${volumeKey(x)}` }) : ""}`;
 }
 
 /* The details sidebar's reads (detailsData): the volume's snapshots and
@@ -165,17 +162,14 @@ function volumeSnapshotsTab(name) {
 /* The backups, newest first, narrow enough for the sidebar: each one's state,
    size and date, with Restore and the rest in its ⋯. */
 function volumeBackupList(backups, vol, label) {
-  if (!backups.length) return '<p class="dim small">No backups yet. Back up now needs a backup target.</p>';
-  return `<div class="details-list">${newestFirst(backups).map(b => `<div class="details-list-row"><div class="details-list-main">`
-    + `<b class="mono small">${esc(b.name)}</b><span class="dim xs">${esc(`${gibText(b.size_mb)} MiB · ${dayText(b.created)}`)}</span>`
-    + `${b.error ? `<span class="warntext xs">${esc(b.error)}</span>` : ""}</div>`
-    + `${UI.chip(b.state || "Unknown", b.state === "Completed" ? "ok" : b.state === "Error" ? "bad" : "warn", { size: "slim" })}`
-    + actionBar([
+  return UI.list(newestFirst(backups).map(b => ({ title: b.name, mono: true, detail: `${gibText(b.size_mb)} MiB · ${dayText(b.created)}`,
+    noteHtml: b.error ? `<span class="warntext xs">${esc(b.error)}</span>` : "",
+    chipHtml: UI.chip(b.state || "Unknown", b.state === "Completed" ? "ok" : b.state === "Error" ? "bad" : "warn", { size: "slim" }),
+    actionsHtml: actionBar([
       b.restorable && { label: "Restore", run: `lhRestore(${jsq(b.name)},${jsq(label)})`, need: "admin", plain: true },
       b.restorable && { label: "Restore into app", run: `lhRestoreInto(${jsq(b.name)})`, need: "admin", tip: "Restore this backup and move the app that uses this volume onto it." },
       { label: "Delete", run: `lhBackupDel(${jsq(b.name)},${jsq(vol)},${jsq(label)})`, need: "admin", danger: true, tip: "Delete this backup from the backup target." },
-    ].filter(Boolean), { shown: b.restorable ? 1 : 0, label: `More actions for ${b.name}` })
-    + `</div>`).join("")}</div>`;
+    ].filter(Boolean), { shown: b.restorable ? 1 : 0, label: `More actions for ${b.name}` }) })), { empty: "No backups yet. Back up now needs a backup target." });
 }
 
 /* Activity: what Kubernetes said about it lately, and its snapshots and backups. */

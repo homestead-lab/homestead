@@ -78,11 +78,11 @@ test("copies are dots: whole, not running, missing, or unknown when Longhorn cou
 
 test("the Copies cell says under the dots what is missing or how far a rebuild is", () => {
   const c = page();
-  assert.doesNotMatch(c.volumeCopiesCell(volume("web")), /vol-note/);
-  assert.match(c.volumeCopiesCell(volume("cloud", { state: "detached", copies_short: { whole: 1, wanted: 2 } })), /<div class="vol-note xs" data-card="volume-health\|pvc-cloud">1 copy is missing\.<\/div>/);
+  assert.doesNotMatch(c.volumeCopiesCell(volume("web")), /ui-reason/);
+  assert.match(c.volumeCopiesCell(volume("cloud", { state: "detached", copies_short: { whole: 1, wanted: 2 } })), /<div class="ui-reason under xs" data-card="volume-health\|pvc-cloud">1 copy is missing\.<\/div>/);
   assert.match(c.volumeCopiesCell(volume("db", { rebuild: { pct: 63, replicas: 1 } })), /role="progressbar" aria-valuenow="63"[\s\S]*Rebuilding 63%<\/div>/);
   c.STATE.data.forecast = forecast([{ key: "volume:pvc-cam", kind: "volume", volume: "pvc-cam", label: "cam", days_left: 9, per_day: 1, full_on: "2026-12-01", pct: 80 }]);
-  assert.doesNotMatch(c.volumeCopiesCell(volume("cam")), /vol-note/, "filling up is under the usage");
+  assert.doesNotMatch(c.volumeCopiesCell(volume("cam")), /ui-reason/, "filling up is under the usage");
   assert.match(c.volumeUsageCell(volume("cam")), /forecast-tag[\s\S]*Full in about 9 days/);
 });
 

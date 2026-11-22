@@ -57,7 +57,7 @@ function volumeHealthCell(x) {
     <span class="dim xs volume-reason">${rebuild.replicas === 1 ? "1 copy" : `${rebuild.replicas} copies`} being rebuilt</span>`;
   // A problem is a chip and a sentence saying why; a healthy or detached
   // volume reads in a quiet word (design.md "Resource list").
-  if (problem) return `${UI.chip(problem.chip, problem.tone, { size: "slim" })}<div class="vol-reason xs">${esc(problem.line)}</div>`;
+  if (problem) return `${UI.chip(problem.chip, problem.tone, { size: "slim" })}${UI.reason(esc(problem.line), { under: true })}`;
   if (x.rebalancing && x.state === "attached") return `<span class="vol-state dim">Healthy</span> ${UI.chip("moving a copy", "info", { size: "slim" })}`;
   return `<span class="vol-state dim">${x.state === "attached" ? "Healthy" : "Detached"}</span>`;
 }
@@ -255,9 +255,9 @@ function storagePaint(v, parts, missed) {
   const found = v.filter(x => !q || x.name.includes(q) || (x.node || "").includes(q) ||
     (x.pvc_name || "").includes(q) || (x.attached_to || "").toLowerCase().includes(q));
   const rows = found.filter(x => !only || only.includes(x));
-  const showingAll = '<button type="button" class="linkish sum-link" onclick="STATE.volSpare=false;volumeNeedsOnly(false)">Show all volumes</button>';
-  paint(`${UI.pageHeader(`Volumes`, `${volumeSummary(found, has("st") ? st : null, { q, reading: !has("st") })}${only
-      ? `${SUM_DOT}<span class="sum-note">Showing the ${only.length} ${only === needs ? "that need attention" : "not used by any app"}.</span> ${showingAll}` : ""}`, `${moreMenu([spare.length ? { label: STATE.volSpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volNeeds=false;STATE.volSpare=!STATE.volSpare;viewStorage()",
+  const showing = only ? `${SUM_DOT}${UI.summaryPart({ text: `Showing the ${only.length} ${only === needs ? "that need attention" : "not used by any app"}.`, note: true })} `
+    + UI.summaryPart({ text: "Show all volumes", run: "STATE.volSpare=false;volumeNeedsOnly(false)" }) : "";
+  paint(`${UI.pageHeader(`Volumes`, `${volumeSummary(found, has("st") ? st : null, { q, reading: !has("st") })}${showing}`, `${moreMenu([spare.length ? { label: STATE.volSpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volNeeds=false;STATE.volSpare=!STATE.volSpare;viewStorage()",
           tip: "Volumes that no app, VM or job uses, and volumes kept after their claim was deleted. These are the ones to review when freeing space." } : null,
         { label: "Rebalance copies…", icon: "layers", run: "volumeRebalance()", need: "operator", tip: "Move volume copies so that hosts hold similar amounts. Nothing restarts." },
         { label: "Disks", icon: "disk", run: "lhDisks()", need: "admin", tip: "Every disk on every host, the space Longhorn may allocate on each, and disks to add." },
