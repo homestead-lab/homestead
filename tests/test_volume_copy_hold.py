@@ -190,7 +190,8 @@ class RecordUnreadTests(Scene):
         self.kube.discard(self.record)
         warning = [w for w in self.plan("old")["warnings"] if "storage copy of app" in w][0]
         for words in ("Move app's data", "Check outcome", "Release hold and stop tracking",
-                      "app was replaced", "homestead.io/storage-copy-job"):
+                      "app was replaced", "homestead.io/storage-copy-job", "homestead.io/restructure-replicas",
+                      "stays stopped until it is scaled up"):
             self.assertIn(words, warning)
 
     def test_an_app_created_again_with_the_mark_on_it_is_blocked_and_told_to_remove_the_mark(self):
@@ -207,7 +208,8 @@ class RecordUnreadTests(Scene):
         self.assertTrue(plan["blocked"])
         warning = [w for w in plan["warnings"] if "storage copy of app" in w][0]
         self.assertIn("is missing", warning)
-        self.assertIn("remove the annotation homestead.io/storage-copy-job from the app in Kubernetes", warning)
+        self.assertIn("remove the annotations homestead.io/storage-copy-job and homestead.io/restructure-replicas "
+                      "from the app in Kubernetes", warning)
 
     def test_a_record_not_owned_by_the_app_is_not_trusted(self):
         secret = self.kube.object(self.record)
@@ -324,7 +326,13 @@ class RealCopyTests(unittest.TestCase):
                 mock.patch.object(VOLUMES, "backups", lambda name: []):
             review = VOLUMES.deletion_plan("lab", "old")
         self.assertTrue(review["blocked"])
-        self.assertTrue([w for w in review["warnings"] if "homestead.io/storage-copy-job" in w], review["warnings"])
+        self.assertTrue([w for w in review["warnings"] if "homestead.io/storage-copy-job" in w
+                         and "homestead.io/restructure-replicas" in w], review["warnings"])
+        # Removing the mark alone would leave the app refused by the start guard.
+        import homestead_import_guard as guard
+        dep = self.kube.object(self.DEP)
+        dep["metadata"]["annotations"].pop(flow.MARKER)
+        self.assertIn("older storage copy hold", guard.pending(dep, "lab", K.kget))
 
 
 if __name__ == "__main__":

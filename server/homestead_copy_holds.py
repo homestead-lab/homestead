@@ -91,8 +91,10 @@ def reason(app):
 def unread_warning(app, why):
     """Why the volume a held copy copies from is not known, and the way out:
     the copy's own release, or, when its job is gone or the app was created
-    again (a new uid, so no record and a release that refuses), the mark."""
+    again (a new uid, so no record and a release that refuses), both
+    annotations: the hold count left alone still stops a start and a new copy."""
     return (f"The storage copy of {app} has not finished. Its record of the volumes from before the edit {why}, "
             f"so the volume it copies from is not known. Release the hold from the job \"Move {app}'s data\" in Jobs "
             "(Check outcome, then Release hold and stop tracking). If that job is gone or says the app was replaced, "
-            f"remove the annotation {COPY_JOB.MARKER} from the app in Kubernetes.")
+            f"remove the annotations {COPY_JOB.MARKER} and {RESTRUCTURE.HELD} from the app in Kubernetes. "
+            "The app then stays stopped until it is scaled up.")
