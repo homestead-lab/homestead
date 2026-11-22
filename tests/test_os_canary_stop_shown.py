@@ -102,7 +102,7 @@ class CanaryStopShown(unittest.TestCase):
         # A stopped run's job state, as a person's Stop gives it: not "failed", not a full bar.
         self.assertEqual(("cancelled", 33, "Update every host's OS (3 hosts)"), (job["status"], job["progress"], job["title"]))
         self.assertEqual("node-b was updated first, then its check stopped the update. An alert was raised while the canary "
-                         "soaked: Service address 192.0.2.50 has no route. The other hosts were left as they are", job["message"])
+                         "soaked: Service address 192.0.2.50 has no route (see the Timeline). The other hosts were left as they are", job["message"])
 
     def test_a_job_read_after_a_new_run_began_keeps_the_share_it_reached(self):
         # The jobs loop had not read the stopped run before a new one replaced it.
