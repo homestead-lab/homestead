@@ -1138,29 +1138,18 @@ html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[
 .voltable .vol-open{padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .voltable .vol-open:hover b{text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--mut)}
 .voltable .vol-open:focus-visible{border-radius:6px}
-.voltable .volstate{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
 .vol-state{font-size:12.5px}
 .vol-reason{color:var(--mut);max-width:340px;overflow-wrap:anywhere;white-space:normal}
+/* Under the dots: a copy missing, or a rebuild or restore and how far it is. */
+.vol-note{margin-top:3px;color:var(--mut);max-width:220px;overflow-wrap:anywhere}
+.vol-note .volprogress{margin:2px 0 4px}
+.voltable .forecast-tag{margin-top:2px}
 .voltable tr.vol-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
 .voltable tr.vol-problem.warn>td:first-child{box-shadow:inset 3px 0 0 var(--med)}
 .copydots{display:inline-flex;gap:4px;align-items:center;padding:3px 0}
 .copydot{width:9px;height:9px;border-radius:50%;background:var(--ok)}
 .copydot.warn{background:var(--med)}
 .copydot.missing{background:transparent;box-shadow:inset 0 0 0 1.5px var(--med)}
-.copydot.unknown{background:var(--mut)}
-/* The page's space as one bar, its figures in its hover card. */
-.storagebar{display:inline-flex;align-items:center;gap:10px;min-width:0}
-.storagebar .meter{width:180px;flex:0 0 auto}
-@media (max-width:560px){.sumitem:has(.storagebar){flex:1 1 100%;min-width:0;white-space:normal}.storagebar{flex-wrap:wrap;width:100%}.storagebar .meter{width:100%}}
-/* A page's one notice: what needs a person, a line each with its button. */
-.attention-list{margin-bottom:14px;display:grid;gap:2px}
-.attention-list .ctitle{margin-bottom:6px}
-.attention-item{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;gap:6px 10px;padding:7px 0;border-top:1px solid var(--line)}
-.attention-item:first-of-type{border-top:0}
-.attention-text{min-width:0}
-.attention-dot{width:8px;height:8px;border-radius:50%;background:var(--low)}
-.attention-item.warn .attention-dot{background:var(--med)}.attention-item.bad .attention-dot{background:var(--crit)}
-@media (max-width:560px){.attention-item{grid-template-columns:8px minmax(0,1fr);align-items:start}.attention-dot{margin-top:6px}.attention-item>.btn{grid-column:2;justify-self:start}}
 .details-icon{display:grid;place-items:center;width:34px;height:34px;flex:0 0 34px;border-radius:10px;background:var(--surf2);color:var(--mut)}
 .details-icon .btnicon{width:17px;height:17px}
 .voltable .volname b{line-height:1.3;overflow-wrap:anywhere}
@@ -1558,21 +1547,30 @@ th.sortable[aria-sort="descending"]::after{content:" ↓";color:var(--tx)}
 .wltable .wl-name{max-width:280px}.wltable .wtitle{min-width:0}
 .wltable .wtitle>div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* The name opens the details sidebar; a problem colours the row's edge and
-   says why under its chip (design.md "Resource list"). */
+   says why beside its chip (design.md "Resource list"). */
 .wltable .wl-open{display:flex;align-items:center;gap:9px;min-width:0;max-width:100%;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .wltable .wl-open:hover b{text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--mut)}
 .wltable .wl-open:focus-visible{border-radius:6px}
 .wltable .wl-hardware{display:inline-flex;gap:4px;vertical-align:middle;margin-left:4px}
 .wltable .wl-hardware .ui-chip{height:auto;padding:1px 6px;font-size:10px}
 .wltable .wl-state{font-size:12.5px}
-.wltable .wl-reason{margin-top:3px;color:var(--mut);max-width:360px;overflow-wrap:anywhere;white-space:normal}
+.wltable .wl-reason{color:var(--mut);max-width:360px;overflow-wrap:anywhere;white-space:normal}
 .wltable tr.wl-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
 .wltable tr.wl-problem.warn>td:first-child{box-shadow:inset 3px 0 0 var(--med)}
 /* A ⋯ menu's group headings. */
 .actionmenu-group{padding:7px 9px 3px;font-size:10.5px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--mut)}
 .actionmenu-group:not(:first-child){margin-top:4px;padding-top:9px;border-top:1px solid var(--line)}
 /* A summary line's links to what needs attention. */
-.linkish.sum-link{padding:0}.linkish.sum-bad{color:var(--crit)}.linkish.sum-warn{color:var(--med)}
+.linkish.sum-link{padding:0}.linkish.sum-bad,.sum-bad{color:var(--crit)}.linkish.sum-warn,.sum-warn{color:var(--med)}.linkish.sum-info{color:var(--low)}
+/* A phone says the short form of a summary that has one. A summary line with
+   no group picker beside it keeps the picker's height, so every list page's
+   table starts at the same place. */
+.sum-narrow{display:none}
+@media(min-width:561px){.phead>div:first-child:not(:has(.wgroup-bar))>p:has(>.sum-wide){padding:9px 0 10px}}
+@media(max-width:560px){.sum-wide{display:none}.sum-narrow{display:inline}}
+/* Containers' group: a picker at the right of the summary line. */
+.wgroup-pick{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.wgroup-pick .wl-group-select{min-height:34px;padding:6px 30px 6px 12px;font-size:12.5px;font-weight:600}
 .wltable .wl-actions{width:1%}.wltable .wl-actions .wacts{justify-content:flex-end;gap:4px;flex-wrap:nowrap;min-height:0}
 .wltable .actionmenu{margin-left:0}
 .wltable .waccess .plink,.wltable .waccess .tag{padding:2px 7px}
@@ -1743,17 +1741,16 @@ html[data-theme="light"] .compose-editor{background:#fff}
   /* A flex item of its own, full width and no height: it ends the first line
      so the name keeps the actions company and nothing else joins them. */
   .voltable tr::after{content:"";flex:1 1 100%;order:2;height:0}
-  .voltable td[data-label="State"]{order:3}
-  .voltable td[data-label="Copies"]{order:4}
-  .voltable td[data-label="Used by"]{order:5;flex:0 1 auto;flex-wrap:wrap}
-  /* Why a volume has a problem is a sentence, so it takes a line of its own
-     rather than stretching the one the chips sit on. */
-  .voltable tr.vol-problem td.volhealth{flex:1 1 100%;flex-wrap:wrap}
-  .voltable .volstate{flex-wrap:wrap}
+  .voltable td[data-label="Copies"]{order:3;flex-wrap:wrap}
+  .voltable td[data-label="Last used"]{order:4}
+  .voltable td[data-label="Attached to"]{order:5;flex:0 1 auto;flex-wrap:wrap}
+  .voltable .vol-note{margin:0;max-width:none}
   .voltable tr.vol-problem>td:first-child{box-shadow:none}
   .voltable tr.vol-problem.bad{box-shadow:inset 3px 0 0 var(--crit)}
   .voltable tr.vol-problem.warn{box-shadow:inset 3px 0 0 var(--med)}
   .voltable .volusage{order:7;flex:1 1 100%;min-width:0}
+  .voltable .volusage-body{align-items:flex-start}
+  .voltable .volusage-line{width:100%}
   .voltable .volusage .mono{flex:0 0 auto}
   .voltable .volume-reason{flex:1 1 100%;max-width:none;margin:0}
   .voltable .volprogress{flex:1 1 100%;max-width:none;margin:2px 0 0}
@@ -3038,6 +3035,21 @@ html[data-theme="light"] .settings-nav button.on{background:rgba(0,0,0,.06)}
     font:650 13px "Inter Tight",sans-serif;padding:10px 12px;margin-bottom:12px;cursor:pointer}
 }
 /* Containers: the count and the group chips share the line under the tabs. */
+/* A tablet, between the phone toolbar and the one bar: a page with tabs puts
+   them on one line with its buttons, and its summary beside the list's
+   filters on the next, rather than giving each its own line. */
+@media (min-width:561px) and (max-width:900px){
+  /* A page with no tabs: its summary and its buttons share the line. */
+  .phead:not(:has(>div:first-child>.pagetabs)):has(>.page-actions){display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;column-gap:14px}
+  .phead:not(:has(>div:first-child>.pagetabs))>.page-actions{flex-wrap:nowrap}
+  .phead:has(>div:first-child>.pagetabs){display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:14px;row-gap:8px}
+  .phead:has(>div:first-child>.pagetabs)>div:first-child{display:contents}
+  .phead:has(>div:first-child>.pagetabs)>div:first-child>*{grid-column:1/-1}
+  .phead:has(>div:first-child>.pagetabs)>div:first-child>.pagetabs{grid-column:1;grid-row:1;min-width:0;max-width:100%;justify-self:start;margin:0}
+  .phead:has(>div:first-child>.pagetabs)>.page-actions{grid-column:2;grid-row:1;flex-wrap:nowrap;justify-self:end}
+  .phead:has(>div:first-child>.pagetabs):has(.wgroup-bar)>div:first-child>p{grid-column:1;grid-row:2}
+  .phead:has(>div:first-child>.pagetabs)>div:first-child>.wgroup-bar{grid-column:2;grid-row:2;justify-self:end}
+}
 /* The summary wraps beside the group chips rather than pushing them off the page. */
 .phead>div:first-child:has(.wgroup-bar){display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:16px;row-gap:8px;min-width:0}
 .phead>div:first-child:has(.wgroup-bar)>.pagetabs{grid-column:1/-1;justify-self:start;margin-bottom:2px}
@@ -3297,6 +3309,11 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
 .wltable .wl-state-tags{gap:4px;flex-wrap:wrap}
 .wltable .wl-actions .actionbar{justify-content:flex-end;flex-wrap:nowrap}
 .wltable .wl-actions .actionbar>.btn{gap:5px;min-width:30px;padding:4px 8px;white-space:nowrap}
+/* A narrow list keeps a row's main button as its icon, so the table fits; the
+   button keeps its name for screen readers, and the sidebar spells it out. */
+/* A row's labelled action shows its words; a narrow table shows its icon instead. */
+.btn[data-plain] .btnicon{display:none}
+@container container-rows (max-width:720px){.wltable .wl-actions .actionbar>.btn{font-size:0;gap:0;padding:4px 7px}.wltable .wl-actions .actionbar>.btn .btnicon{display:block;width:14px;height:14px}}
 .wltable .wl-actions .actionbar>.btn svg{width:14px;height:14px}
 .collection-mobile-head{display:none}
 html[data-theme="light"] .collection-mobile-summary .pillbtn.warn{color:#8a5200}
@@ -3380,20 +3397,19 @@ html[data-theme="light"] .collection-mobile-summary .pillbtn.crit{color:#a1242a}
   .tbl.stack.compact.wltable .wl-row>td{display:block;padding:0;min-width:0;width:auto;grid-column:auto;grid-row:auto;order:0;text-align:left}
   .tbl.stack.compact.wltable .wl-row>td::before{content:none}
   .tbl.stack.compact.wltable .wl-row>.wl-name{grid-area:name;min-width:0}
-  .tbl.stack.compact.wltable .wl-row>.wl-status{grid-area:status;text-align:right!important;align-self:start;padding-top:3px;max-width:86px}
+  .tbl.stack.compact.wltable .wl-row>.wl-status{grid-area:status;text-align:right!important;align-self:start;padding-top:3px;max-width:132px}
   .tbl.stack.compact.wltable .wl-state-tags{display:flex;justify-content:flex-end;gap:3px}
+  .tbl.stack.compact.wltable .wl-state-tags .wl-reason{flex:1 1 100%;text-align:right;line-height:1.35}
   .tbl.stack.compact.wltable .wl-row>.wl-cpu{grid-area:cpu;font-size:11.5px;line-height:1.4}
   .tbl.stack.compact.wltable .wl-row>.wl-ram{grid-area:ram;font-size:11.5px;line-height:1.4}
   .tbl.stack.compact.wltable .wl-row>.wl-cpu,.tbl.stack.compact.wltable .wl-row>.wl-ram{white-space:nowrap}
   .tbl.stack.compact.wltable .wl-state-tags .ui-chip{max-width:86px;overflow:hidden;text-overflow:ellipsis}
   .tbl.stack.compact.wltable .wl-row>.wl-cpu::before,.tbl.stack.compact.wltable .wl-row>.wl-ram::before{content:attr(data-label) " ";display:inline;font-size:11.5px;color:var(--mut);margin:0}
-  .tbl.stack.compact.wltable .wl-row>.wl-access,.tbl.stack.compact.wltable .wl-row>.wl-actions,.tbl.stack.compact.wltable .wl-reason,
+  .tbl.stack.compact.wltable .wl-row>.wl-access,.tbl.stack.compact.wltable .wl-row>.wl-actions,
   .tbl.stack.compact.wltable tr.wl-off>.wl-cpu,.tbl.stack.compact.wltable tr.wl-off>.wl-ram,.wltable .wl-row-meta{display:none}
   .wltable .wl-open .av{width:24px;height:24px;flex:0 0 24px}
   .wltable .wl-open .wtitle{font-size:13px}
   .tbl.stack.compact.wltable tr.wl-problem>td:first-child{box-shadow:none}
-  /* A phone's narrow status column says only what is wrong or set apart. */
-  .tbl.stack.compact.wltable tr:not(.wl-off) .wl-state{display:none}
   .tbl.stack.compact.wltable tr.wl-problem.bad{box-shadow:inset 3px 0 0 var(--crit)}
   .tbl.stack.compact.wltable tr.wl-problem.warn{box-shadow:inset 3px 0 0 var(--med)}
   .tbl.stack.compact.wltable .wl-name .wl-row-meta{display:none}

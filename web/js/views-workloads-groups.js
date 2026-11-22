@@ -59,13 +59,8 @@ function workloadSections(rows, layout, pick) {
   }).join("");
 }
 function workloadGroupBar(all, pick) {
-  const names = workloadGroupNames(all);
-  const loose = all.filter(w => !w.group).length;
-  if (!names.length) return "";
-  const chip = (value, label, count) => `<button type="button" class="${pick === value ? "on" : ""}" aria-pressed="${pick === value}" onclick="pickWorkloadGroup(${groupKeyIndex(value)})">${esc(label)} <span class="dim">${count}</span></button>`;
-  return `<div class="wgroup-bar">
-    ${names.length ? `<div class="seg wgroup-chips" role="group" aria-label="Show group">${chip("", "All", all.length)}${names.map(name =>
-      chip(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? chip(NO_GROUP, "Ungrouped", loose) : ""}</div>` : ""}</div>`;
+  if (!workloadGroupNames(all).length) return "";
+  return `<div class="wgroup-bar"><label class="wgroup-pick"><span class="dim xs">Group</span>${workloadGroupSelect(all, pick)}</label></div>`;
 }
 
 function workloadGroupSelect(all, pick) {

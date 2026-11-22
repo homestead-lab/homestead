@@ -45,7 +45,7 @@ test("every tag up to the last part loads as its own script, as the browser runs
   for (const file of tags.filter((_, i) => i <= last)) {
     assert.doesNotThrow(() => vm.runInContext(text(file), ctx, { filename: file }), file);
   }
-  for (const name of ["viewFlow", "viewStorage", "viewShares", "eventText", "lhCapacityCard", "diskTags", "volumeCopyMove", "volumeReclass"]) {
+  for (const name of ["viewFlow", "viewStorage", "viewShares", "eventText", "lhSettingsPaint", "diskTags", "volumeCopyMove", "volumeReclass"]) {
     assert.equal(typeof vm.runInContext(`window.${name} || (typeof ${name} === "function" ? ${name} : undefined)`, ctx), "function", name);
   }
 });

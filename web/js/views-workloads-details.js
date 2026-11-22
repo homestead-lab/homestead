@@ -78,6 +78,8 @@ if (typeof HOVER_CARDS === "object") HOVER_CARDS["app-status"] = key => {
     chartHtml: a?.strip?.length && a.state !== "off" ? answerStrip(a.strip, "ui-card-answer") : "",
     rows: [
       problem && ["Why", esc(problem.line), "alert"],
+      // The row says it in words; the card gives the check's own result.
+      problem?.detail && ["Last check", esc(problem.detail), "pulse"],
       ["Copies ready", `${w.ready} of ${w.desired}`, "layers"],
       a && !["off", "down", "slow"].includes(a.state) && ["Monitoring", esc(`${ANSWER_WORDS[a.state] || a.state} · ${answerDetail(a)}`), "pulse"],
       a && a.state !== "off" && ["Last 30 days", esc(answerShare(a.uptime_30d)), "check"],

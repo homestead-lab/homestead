@@ -54,7 +54,7 @@ test("the volumes are drawn while slower parts are still being read", async () =
   await settle();
   assert.equal(paints.length, 1, "drawn when the volumes answer");
   assert.match(last(), /paperless-data/);
-  assert.match(last(), /Reading the totals/);
+  assert.match(last(), /Reading the free space/);
   assert.doesNotMatch(last(), /321/);
 });
 
@@ -71,7 +71,7 @@ test("each part is drawn when its own read returns", async () => {
   for (const p of ["/api/storage/classes", "/api/storage/v2", "/api/longhorn/capacity", "/api/storage/forecast", "/api/volumes/other"]) answer(p);
   await done;
   assert.match(last(), /scratch-cache/);
-  assert.match(last(), /Needs attention[\s\S]*1 old copy is<\/b>|Needs attention[\s\S]*1 old copy is kept/, "the old copy is in the attention list");
+  assert.match(last(), /id="volOldCopies"[\s\S]*old-data/, "the old copy is in its own section");
   assert.doesNotMatch(last(), /Reading the/);
 });
 
@@ -117,7 +117,7 @@ test("another visit to the page does not show the last visit's parts as current"
   ctx.viewStorage();
   await settle();
   answer("/api/volumes"); await settle();
-  assert.match(last(), /Reading the totals/);
+  assert.match(last(), /Reading the free space/);
   assert.doesNotMatch(last(), /old-data/);
 });
 

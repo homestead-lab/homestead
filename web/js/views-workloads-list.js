@@ -30,14 +30,16 @@ function renderWorkloads() {
     { label: "Search logs", icon: "search", run: "logSearch()", tip: "Find a line in every app's recent logs" },
     { label: "Log alerts", icon: "bell", run: "logAlerts()", tip: "Saved log searches that raise an alert when they match too many lines" },
     { label: "Power schedules", icon: "clock", run: "schedulesOverview()", tip: "Apps and VMs that stop and start on their own" }];
-  const summary = workloadSummary(rows, { q, group, updateCount, updateErrors, unchecked, current: report && !updateCount && !updateErrors });
+  // The layout is a choice in ⋯, so the summary line keeps the group picker company alone.
+  const layoutItem = { label: layout === "rows" ? "Show as cards" : "Show as rows", icon: layout === "rows" ? "dash" : "list",
+    run: `setViewLayout('containers','renderWorkloads',${jsq(layout === "rows" ? "cards" : "rows")})` };
+  const summary = workloadSummary(rows, { q, group, updateCount, updateErrors, unchecked });
   const deploy = '<button class="btn pri" data-need="operator" onclick="go(\'deploy\')">＋ Deploy</button>';
   paint(`<div class="containers-page collection-page" data-collection="containers">${UI.pageHeader(`Containers`,
       summary + metricsNotice(STATE.data.wl),
       `<span class="dim xs scanprogress" id="scanprogress"></span>
-      ${layoutSwitch("containers", "renderWorkloads")}
-      ${moreMenu(platform.length ? [...items, { label: `${platformShown() ? "Hide" : "Show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}`, icon: "layers", run: "togglePlatformContainers()",
-        tip: "Homestead and its helpers, updated under Settings › Updates, and components such as KubeVirt and CDI, which their own operators run" }] : items)}
+      ${moreMenu(platform.length ? [layoutItem, ...items, { label: `${platformShown() ? "Hide" : "Show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}`, icon: "layers", run: "togglePlatformContainers()",
+        tip: "Homestead and its helpers, updated under Settings › Updates, and components such as KubeVirt and CDI, which their own operators run" }] : [layoutItem, ...items])}
       ${deploy}`, {extraHtml:`${all.length ? workloadGroupBar(all, group) : ""}`})}
     ${UI.collectionHeader(`${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}`, `<span>${summary}</span>`)}
 
@@ -49,7 +51,7 @@ function renderWorkloads() {
 /* The page's one line (design.md "Summary line"): how many apps run as they
    should, each one that does not as a link to its details, and the updates
    waiting. A search or a group says what is shown. */
-function workloadSummary(rows, { q = "", group = "", updateCount = 0, updateErrors = 0, unchecked = 0, current = false } = {}) {
+function workloadSummary(rows, { q = "", group = "", updateCount = 0, updateErrors = 0, unchecked = 0 } = {}) {
   const running = rows.filter(w => w.desired > 0), stopped = rows.length - running.length;
   const troubled = rows.map(w => [w, workloadProblem(w)]).filter(([, p]) => p);
   const fine = running.filter(w => !workloadProblem(w)).length;
@@ -57,17 +59,21 @@ function workloadSummary(rows, { q = "", group = "", updateCount = 0, updateErro
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const head = !rows.length ? `No apps${scope}.`
     : !running.length ? `${rows.length === 1 ? "The app" : `All ${rows.length} apps`}${scope} ${rows.length === 1 ? "is" : "are"} stopped.`
-    : fine === running.length ? `${running.length === 1 ? "The running app" : `All ${running.length} running apps`}${scope} ${running.length === 1 ? "is" : "are"} working normally.`
-    : `${fine} of ${plural(running.length, "running app", "running apps")}${scope} ${fine === 1 ? "is" : "are"} working normally.`;
+    : fine === rows.length ? `${rows.length === 1 ? "The app" : `All ${rows.length} apps`}${scope} ${rows.length === 1 ? "is" : "are"} running normally.`
+    : `${fine} of ${plural(rows.length, "app", "apps")}${scope} ${fine === 1 ? "is" : "are"} running normally.`;
   const shown = troubled.slice(0, 3).map(([w, p]) => `<button type="button" class="linkish sum-link sum-${p.tone}" onclick="openDetails('app',${jsq(workloadRowKey(w))})">${esc(w.name)} ${esc(p.word)}</button>`);
   const more = troubled.length > 3 ? ` and ${troubled.length - 3} more` : "";
-  return [`<b>${head}</b>`,
-    shown.length ? `${shown.join(", ")}${more}.` : "",
-    stopped && running.length ? `${plural(stopped, "app is", "apps are")} stopped.` : "",
-    updateCount ? `<button type="button" class="linkish sum-link" onclick="imageUpdateCenter()">${updateCount === 1 ? "An update is" : "Updates are"} ready for ${plural(updateCount, "app", "apps")}.</button>` : "",
-    updateErrors ? `<button type="button" class="linkish sum-link sum-bad sum-checks" onclick="imageUpdateCenter()" data-tip="Every other image was compared with its registry">${plural(updateErrors, "image", "images")} could not be checked.</button>` : "",
-    unchecked ? `<span data-tip="Stopped or still starting, so not yet compared with their registries. They are marked ? in the list.">${plural(unchecked, "image has", "images have")} not been checked yet.</span>` : current ? "Every image is current." : "",
-  ].filter(Boolean).join(" ");
+  const links = shown.length ? ` ${shown.join(SUM_DOT)}${more}` : "";
+  // A phone says the sentence without "normally" and the apps in trouble, nothing more.
+  const narrow = `<b>${head.replace(" running normally.", " running.")}</b>${links}`;
+  // The sentence, then each thing to look at, set apart by a dot.
+  const wide = [`<b>${head}</b>${links}`,
+    stopped && running.length ? `<span class="sum-note">${plural(stopped, "app is", "apps are")} stopped</span>` : "",
+    updateCount ? `<button type="button" class="linkish sum-link sum-info" onclick="imageUpdateCenter()">${updateCount === 1 ? "An update is" : "Updates are"} ready for ${plural(updateCount, "app", "apps")}</button>` : "",
+    updateErrors ? `<button type="button" class="linkish sum-link sum-bad sum-checks" onclick="imageUpdateCenter()" data-tip="Every other image was compared with its registry">${plural(updateErrors, "image", "images")} could not be checked</button>` : "",
+    unchecked ? `<span class="sum-note" data-tip="Stopped or still starting, so not yet compared with their registries. They are marked ? in the list.">${plural(unchecked, "image has", "images have")} not been checked yet</span>` : "",
+  ].filter(Boolean).join(SUM_DOT);
+  return `<span class="sum-wide">${wide}</span><span class="sum-narrow">${narrow}</span>`;
 }
 
 /* An image with no tag is Docker's latest; saying so is clearer than leaving it off. */
@@ -159,7 +165,9 @@ function workloadActionItems(w, update, off) {
    the app's state, then ⋯ with the actions people reach for, grouped by
    purpose. Everything else is in the details sidebar, a click on the row away. */
 function workloadRowActions(w, update, off) {
-  return actionBar(workloadMenuItems(w, update, off) || workloadActionItems(w, update, off), {label:`More actions for ${w.name}`, shown:1});
+  const [main, ...rest] = workloadMenuItems(w, update, off) || workloadActionItems(w, update, off);
+  // The row's button shows its label alone, and its icon only where a narrow table has no room for words.
+  return actionBar([main && { ...main, plain: true }, ...rest], {label:`More actions for ${w.name}`, shown:1});
 }
 /* The sidebar's actions: the row's, in the row's order, then every other
    action the app has. */
@@ -199,21 +207,25 @@ function workloadMenuItems(w, update, off) {
     || (off && items.find(i => i.label === "Start app")) || openApp || logs;
   return [main, ...items.filter(i => i !== main)];
 }
-/* What is wrong with an app, if anything: {tone, chip, line}, the line in a
-   full sentence for the row and the summary. Stopped on purpose is not a problem. */
+/* What is wrong with an app, if anything: {tone, chip, word, line, detail}.
+   The line is a short sentence in plain words for the row; the detail is the
+   check's own result, for the hover card. Stopped on purpose is not a problem. */
 function workloadProblem(w) {
   const blocked = workloadBlocked(w);
   if (blocked) return { tone: "bad", chip: "Blocked", word: "is blocked", line: blocked };
   if (w.desired === 0) return null;
   const answer = typeof answerOf === "function" ? answerOf(w) : null;
-  if (answer?.state === "down") return { tone: "bad", chip: "Down", word: "is down", line: `It does not respond. ${answerDetail(answer)}` };
+  if (answer?.state === "down") return { tone: "bad", chip: "Down", word: "is down",
+    line: answer.last?.code ? "The web check fails." : "Its address does not answer.", detail: answerDetail(answer) };
   if (w.ready < w.desired) {
     const pull = workloadPull(w);
     if (pull) return { tone: "warn", chip: `Downloading ${Math.min(100, pull.percent || 0)}%`, word: "is downloading its image", line: `Downloading ${pull.image || "its image"}.` };
     return { tone: w.ready ? "warn" : "bad", chip: `${w.ready}/${w.desired}`, word: w.ready ? "is partly ready" : "is not ready",
       line: `${w.ready} of ${w.desired} cop${w.desired === 1 ? "y is" : "ies are"} ready.` };
   }
-  if (answer?.state === "slow") return { tone: "warn", chip: "Slow", word: "is slow", line: `It responds slowly: ${answerDetail(answer)}` };
+  const ms = answer?.last?.ms;
+  if (answer?.state === "slow") return { tone: "warn", chip: "Slow", word: "is slow",
+    line: Number.isFinite(ms) ? `Responses take ${(ms / 1000).toFixed(1)} seconds.` : "It responds slowly.", detail: answerDetail(answer) };
   return null;
 }
 
@@ -267,12 +279,11 @@ window.startWaitText = startWaitText;
 /* A workload's state tags, the same in a row and a card so the two can't
    drift: its schedule, how it updates, who updates it, and an update waiting.
    A row whose own Update button is shown says the update there, not twice,
-   and leaves how it updates to the hover card on its name; a host
-   preference stays on the row, where people look. */
+   and leaves how it updates and a host preference to the hover card on its name. */
 function workloadStateTags(w, update, { row = false } = {}) {
   const owner = updateOwner(update);
   const button = row && update?.available && !owner && (typeof can !== "function" || can("operator"));
-  return `${startWaitChip(w)}${scheduleTag(w)}${row ? preferTag(w) : ""}${row ? "" : autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
+  return `${startWaitChip(w)}${scheduleTag(w)}${row ? "" : autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
     : update?.available && !button ? UI.chip("update available", "warn") : ""}${uncheckedMark(update)}`;
 }
 
@@ -322,7 +333,7 @@ function workloadTable(rows, sections = null, folded = new Set()) {
       <tbody${shut ? " hidden" : ""}>${workloadTableRows(members)}</tbody>`;
   }).join("") : `<tbody>${workloadTableRows(rows)}</tbody>`;
   return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack compact wltable" data-sort="containers" data-sort-controls="containers"><thead><tr>
-    <th>App</th><th>Status</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th data-nosort>Actions</th></tr></thead>
+    <th>App</th><th>Status</th><th>CPU</th><th>Memory</th><th class="wl-access">Access</th><th data-nosort>Actions</th></tr></thead>
     ${bodies}</table></div>`;
 }
 
@@ -348,6 +359,15 @@ window.openWorkloadVolume = claim => {
 };
 
 const workloadRowKey = w => JSON.stringify([w.site?.id || "", w.ns, w.name]);
+/* A row's status in words (design.md "Resource list"): a problem is a chip and
+   a plain reason beside it; a healthy app says Running, its copies when it has
+   more than one, and an update waiting for it. */
+function workloadStatusWords(w, update, problem = workloadProblem(w)) {
+  if (problem) return `${UI.chip(problem.chip, problem.tone, { size: "slim" })}<span class="wl-reason xs">${esc(problem.line)}</span>`;
+  if (w.desired === 0) return '<span class="wl-state dim">Stopped</span>';
+  const ready = update?.available && !updateOwner(update) ? '<span class="wl-reason xs">Update ready</span>' : "";
+  return `<span class="wl-state dim">Running${w.desired > 1 ? `, ${w.desired} copies` : ""}</span>${ready}`;
+}
 /* One line per app (design.md "Resource list"): its name, how it is, what it
    uses, its address and one labelled action. A problem colours the row's edge
    and says why in a sentence. A click on the name opens the details sidebar,
@@ -365,10 +385,9 @@ function workloadTableRows(rows) {
         onclick="openDetails('app',${jsq(key)})">${appAvatar(w.name, w.icon)}<span class="wtitle"><b>${esc(w.name)}</b> ${clusterTag(w)}</span></button>
         <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `${UI.chip(`managed ${w.managed_nfs ? "NFS" : "SMB"}`, "info", { size: "slim" })} ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}${hardware ? ` <span class="wl-hardware">${hardware}</span>` : ""}</div></td>
       <td class="wl-status" data-status data-sort="${off ? -1 : problem ? 0 : 1}"><div class="row wl-state-tags" data-card="app-status|${esc(key)}">
-        ${problem ? UI.chip(problem.chip, problem.tone, { size: "slim" }) : `<span class="wl-state dim">${off ? "Stopped" : "Running"}</span>`}
+        ${workloadStatusWords(w, update, problem)}
         ${workloadStateTags(w, update, { row: true })}
-        ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable. ${esc(updateError.error)}" data-tip="Registry check unavailable. ${esc(updateError.error)}">!</span>` : ""}</div>
-        ${problem ? `<div class="wl-reason xs">${esc(problem.line)}</div>` : ""}</td>
+        ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable. ${esc(updateError.error)}" data-tip="Registry check unavailable. ${esc(updateError.error)}">!</span>` : ""}</div></td>
       <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Current use. 100% is one fully used CPU core.">${off ? "—" : workloadCpuPercent(w.cpu)}</td>
       <td class="mono small nowrap wl-ram" data-sort="${off ? "" : w.mem_mb}">${off ? "—" : workloadMemory(w.mem_mb)}</td>
       <td class="wl-access" data-sm-hide><div class="waccess">${accessPorts(w.ports)}</div></td>
@@ -593,5 +612,5 @@ window.wlScaleGo = async (ns, name, n, confirmed = false, reviewed = false) => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  renderWorkloads, workloadSummary, imageLabel, imageShortLabel, imageTitle, imageShort, imagePullRef, imagePullNote, platformTag, workloadActions, workloadActionItems, workloadRowActions, workloadDetailActions, workloadMenuItems, workloadProblem, startsWords, startsSpan, startWaitText, startsAfterNames, startWaitsLine, startsAfterFact, startWaitChip, workloadStateTags, workloadCard, workloadTable, uncheckedMark, workloadRowKey, workloadTableRows, accessPorts, capacityPlacementHtml, capacityHosts, capacityHostTable, HOST_MEMORY, hostReasonWords, SCHEDULER_ECHO, noRoomLine, reviewAck, startProblems, VM_LAUNCHER, startCaveats, startReview
+  renderWorkloads, workloadSummary, imageLabel, imageShortLabel, imageTitle, imageShort, imagePullRef, imagePullNote, platformTag, workloadActions, workloadActionItems, workloadRowActions, workloadDetailActions, workloadMenuItems, workloadProblem, startsWords, startsSpan, startWaitText, startsAfterNames, startWaitsLine, startsAfterFact, startWaitChip, workloadStateTags, workloadCard, workloadTable, uncheckedMark, workloadRowKey, workloadStatusWords, workloadTableRows, accessPorts, capacityPlacementHtml, capacityHosts, capacityHostTable, HOST_MEMORY, hostReasonWords, SCHEDULER_ECHO, noRoomLine, reviewAck, startProblems, VM_LAUNCHER, startCaveats, startReview
 };

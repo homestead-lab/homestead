@@ -171,7 +171,8 @@ function enhanceActions(root = document) {
   labelStackTables(root);
   sortTables(root);
   $$("button.btn", root).forEach(button => {
-    if ($(".btnicon", button)) return;
+    // A row's one labelled action is its words alone (design.md "Resource list").
+    if ($(".btnicon", button) || button.dataset.plain) return;
     const label = button.textContent.trim().replace(/^[＋↻←]+\s*/, "").toLowerCase();
     const match = ACTION_ICONS.find(([pattern]) => pattern.test(label));
     if (match) button.insertAdjacentHTML("afterbegin", icon(match[1]));

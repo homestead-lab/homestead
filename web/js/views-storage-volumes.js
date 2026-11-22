@@ -62,13 +62,13 @@ function volumeHealthCell(x) {
   return `<span class="vol-state dim">${x.state === "attached" ? "Healthy" : "Detached"}</span>`;
 }
 
-/* A volume's actions, in groups (#506): Rebuild now first when a detached
+/* A volume's actions, in groups (#506): Rebuild copy first when a detached
    volume is short of copies. The details sidebar offers them all. */
 function volumeActionItems(x) {
   const vol = esc(JSON.stringify(x)), ns = jsq(x.namespace || "lab"), pvc = jsq(x.pvc_name || x.name), title = volumeTitle(x);
   const item = (label, run, iconName, options = {}) => ({ label, run, icon: iconName, ariaLabel: `${label} ${title}`, ...options });
   return [
-    x.copies_short?.whole && item("Rebuild now", `volumeRebuild(${jsq(x.name)})`, "refresh", { need: "operator", group: "Use", tip: "Rebuild the missing copies now." }),
+    x.copies_short?.whole && item("Rebuild copy", `volumeRebuild(${jsq(x.name)})`, "refresh", { need: "operator", group: "Use", tip: "Rebuild the missing copies now." }),
     item("Open snapshots", `lhSnaps(${jsq(x.name)},${pvc})`, "snapshot", { group: "Use", tip: "Take, view or restore snapshots and backups of this volume." }),
     item("Browse files", `fileManager(${ns},${pvc},${x.state === "attached"},${esc(JSON.stringify(x.access_modes || []))})`, "list", { need: "admin", group: "Use", tip: "Browse and edit the files on this volume" }),
     item("Expand volume", `volumeEdit(${vol})`, "edit", { need: "operator", group: "Change", tip: "Resize the volume or change its number of copies." }),
@@ -79,14 +79,16 @@ function volumeActionItems(x) {
     item("Delete volume…", `volumeDelete(${vol})`, "trash", { need: "admin", danger: true, group: "Remove", tip: "Review what uses this volume and what would be lost before deleting it." }),
   ].filter(Boolean);
 }
-/* A volume row's actions: the one that fits its state labelled - Rebuild now
-   when a copy is missing, Expand volume when it is filling up, otherwise its
-   snapshots - then the rest in ⋯ under their groups. */
+/* A volume row's actions: a labelled button only when something needs doing -
+   Rebuild copy when a copy is missing, Expand volume when it is filling up -
+   and the rest in ⋯ under their groups. */
 function volumeActions(x) {
   const items = volumeActionItems(x), soon = forecastFor(`volume:${x.name}`);
   const full = soon || x.filesystem?.used_pct >= 90;
-  const main = items.find(i => i.label === "Rebuild now") || (full && items.find(i => i.label === "Expand volume")) || items.find(i => i.label === "Open snapshots");
-  return actionBar([main, ...items.filter(i => i !== main)], { shown: 1, label: `More actions for ${volumeTitle(x)}` });
+  const main = items.find(i => i.label === "Rebuild copy") || (full && items.find(i => i.label === "Expand volume"));
+  const label = `More actions for ${volumeTitle(x)}`;
+  // The row's button shows its label alone (style.css .btn[data-plain]).
+  return main ? actionBar([{ ...main, plain: true }, ...items.filter(i => i !== main)], { shown: 1, label }) : actionBar(items, { shown: 0, label });
 }
 window.volumeRebuild = async name => {
   try {
@@ -106,18 +108,20 @@ function forecastFor(key) {
   return row && row.days_left !== null && row.days_left <= (f.show_days || 60) ? row : null;
 }
 
+/* The row's Usage cell: how much of the file system the files use, and a chip
+   when the forecast says it fills soon. Its hover card has the sizes. */
 function volumeUsageCell(x) {
-  const fs = x.filesystem;
+  const fs = x.filesystem, problem = volumeProblem(x);
   const known = fs && Number.isFinite(fs.used_gb) && Number.isFinite(fs.capacity_gb)
     && Number.isFinite(fs.used_pct) && fs.used_pct >= 0 && fs.used_pct <= 100
     && fs.capacity_gb > 0 && fs.used_gb >= 0 && fs.used_gb <= fs.capacity_gb;
   return `<div class="volusage-body" data-card="volume-usage|${esc(volumeKey(x))}">${known
-    ? `<div class="volusage-line">${meter(fs.used_pct)}<span class="mono">${esc(fs.used_gb)} / ${esc(fs.capacity_gb)} GiB</span></div>`
-    : `<span class="dim xs">Not measured</span>`}</div>`;
+    ? `<div class="volusage-line">${meter(fs.used_pct)}<span class="mono">${esc(fs.used_gb)} / ${esc(fs.capacity_gb)} GiB files</span></div>`
+    : `<span class="dim xs">Filesystem usage unavailable</span>`}${problem?.usage ? `<div class="forecast-tag">${UI.chip(problem.chip, problem.tone, { size: "slim" })}</div>` : ""}</div>`;
 }
 
 /* While anything rebuilds or restores, re-read the volumes every 4 s and
-   repaint only their Health and Usage cells, so the percentages move without
+   repaint only their Copies and Usage cells, so the percentages move without
    the table jumping. A page poll (#1406): a hidden tab reads nothing (#983: a
    rebuild can last hours) and reads once when shown, a read with no answer is
    given up and tried again, and leaving the page stops it. Every paint of the
@@ -134,14 +138,10 @@ function volumeProgressWatch() {
     for (const x of vols) {
       const row = document.querySelector(`#views tr[data-vol="${CSS.escape(x.name)}"]`);
       if (!row) continue;
-      const health = row.querySelector("td.volhealth"), usage = row.querySelector("td.volusage");
-      if (health) {
-        health.innerHTML = `<div class="volstate" data-card="volume-health|${esc(volumeKey(x))}">${volumeHealthCell(x)}</div>`;
-      }
+      const usage = row.querySelector("td.volusage"), copies = row.querySelector("td.volcopies");
       if (usage) usage.innerHTML = volumeUsageCell(x);
-      const copies = row.querySelector("td.volcopies");
-      if (copies) copies.innerHTML = volumeCopyDots(x);
-      // Rebuild now comes and goes with the copies; an open ⋯ is left alone.
+      if (copies) copies.innerHTML = volumeCopiesCell(x);
+      // Rebuild copy comes and goes with the copies; an open ⋯ is left alone.
       const actions = row.querySelector("td.volactions");
       if (actions && !actions.querySelector("details[open]")) actions.innerHTML = volumeActions(x);
     }
@@ -240,6 +240,7 @@ function storagePaint(v, parts, missed) {
   STATE.data.lhcap = cap || STATE.data.lhcap;
   if (has("classes")) STATE.data.storageClasses = classes;
   if (has("v2")) STATE.data.v2 = v2;
+  if (has("st")) STATE.data.storageTotals = st;
   STATE.data.vols = v;
   const q = STATE.q.toLowerCase();
   // A search narrows every list on the page, not only Longhorn's.
@@ -247,49 +248,31 @@ function storagePaint(v, parts, missed) {
   const oldCopies = allOldCopies.filter(o => matches(o.was, o.pv));
   const others = allOthers.filter(r => matches(r.name, r.namespace));
   const spare = v.filter(x => ["orphaned", "unclaimed"].includes(volumeUse(x).kind));
-  const onlySpare = STATE.volSpare && spare.length;
-  const rows = v.filter(x => (!q || x.name.includes(q) || (x.node || "").includes(q) ||
-    (x.pvc_name || "").includes(q) || (x.attached_to || "").toLowerCase().includes(q))
-    && (!onlySpare || spare.includes(x)));
-  if (has("st")) STATE.data.storageTotals = st;
-  paint(`${UI.pageHeader(`Volumes`, `${volumeSummary(v, has("st") ? st : null, { q, spare: onlySpare ? 0 : spare.length })}${onlySpare
-      ? ` <button type="button" class="linkish sum-link" onclick="STATE.volSpare=false;viewStorage()">Showing the ${spare.length} unused. Show all volumes.</button>` : ""}`, `${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
+  const needs = v.filter(x => volumeProblem(x));
+  // Only the unused, or only those needing attention: each a filter the summary or ⋯ turns on.
+  const only = STATE.volNeeds && needs.length ? needs : STATE.volSpare && spare.length ? spare : null;
+  const found = v.filter(x => !q || x.name.includes(q) || (x.node || "").includes(q) ||
+    (x.pvc_name || "").includes(q) || (x.attached_to || "").toLowerCase().includes(q));
+  const rows = found.filter(x => !only || only.includes(x));
+  const showingAll = '<button type="button" class="linkish sum-link" onclick="STATE.volSpare=false;volumeNeedsOnly(false)">Show all volumes</button>';
+  paint(`${UI.pageHeader(`Volumes`, `${volumeSummary(found, has("st") ? st : null, { q, reading: !has("st") })}${only
+      ? `${SUM_DOT}<span class="sum-note">Showing the ${only.length} ${only === needs ? "that need attention" : "not used by any app"}.</span> ${showingAll}` : ""}`, `${moreMenu([spare.length ? { label: STATE.volSpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volNeeds=false;STATE.volSpare=!STATE.volSpare;viewStorage()",
           tip: "Volumes that no app, VM or job uses, and volumes kept after their claim was deleted. These are the ones to review when freeing space." } : null,
         { label: "Rebalance copies…", icon: "layers", run: "volumeRebalance()", need: "operator", tip: "Move volume copies so that hosts hold similar amounts. Nothing restarts." },
+        { label: "Disks", icon: "disk", run: "lhDisks()", need: "admin", tip: "Every disk on every host, the space Longhorn may allocate on each, and disks to add." },
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "The storage classes new volumes are created from, in Settings › Hardware and storage." }])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button>`)}
   ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
-  ${!has("st") ? summaryLine("volumes", [`<span class="dim small"><span class="spin2"></span> Reading the totals…</span>`])
-  : st ? summaryLine("volumes", [
-      `<span class="storagebar" data-card="storage|pool">${meter(st.used_pct)}<span><b>${st.used_gb ?? Math.max(0, st.cap_gb - st.avail_gb)} GiB</b> used of ${st.cap_gb} GiB · ${st.provisioned_gb} GiB provisioned</span></span>`],
-    `<div class="grid g4 statgrid">
-    <div class="card flat"><div class="ctitle">Free space</div>
-      <div class="bignum" style="margin-top:8px">${st.avail_gb}<span class="unit">GiB</span></div>
-      <div class="csub">of ${st.cap_gb} GiB raw</div>${meter(st.used_pct, 'style="margin-top:10px"')}</div>
-    <div class="card flat"><div class="ctitle">Provisioned</div>
-      <div class="bignum" style="margin-top:8px">${st.provisioned_gb}<span class="unit">GiB</span></div>
-      <div class="csub" data-tip="The disk space Longhorn uses for one copy of each volume, including snapshots, added together.">${st.actual_gb} GiB Longhorn footprint</div></div>
-    <div class="card flat statwide"><div class="ctitle">Volume health</div>${(st.reasons || []).length
-      ? `<div class="dim xs volume-reason" style="margin-top:8px">${esc(st.reasons[0].name)}: ${esc(st.reasons[0].reason)}${st.reasons.length > 1 ? ` · and ${st.reasons.length - 1} more` : ""}</div>` : ""}
-      <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
-        ${UI.chip(`${st.healthy} healthy`, "ok")}
-        ${st.degraded ? UI.chip(`${st.degraded} degraded`, "warn") : ""}
-        ${st.faulted ? UI.chip(`${st.faulted} faulted`, "bad") : ""}
-        ${(st.detached ?? st.unknown) ? UI.chip(`${st.detached ?? st.unknown} detached`, "neutral") : ""}</div>
-      <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
-    ${lhCapacityCard(cap, st)}
-  </div>`, "Per host") : ""}
-  ${has("forecast") ? volumeAttention(v, forecast, allOldCopies) : ""}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
-   <th>Volume</th><th>Used by</th><th>State</th><th>Copies</th><th>Files</th><th data-nosort>Actions</th>
-   </tr></thead><tbody>${rows.map(x => { const problem = volumeProblem(x); return `<tr data-vol="${esc(x.name)}" class="volrow${problem ? ` vol-problem ${problem.tone}` : ""}"${clusterAttr(x)}>
-     <td class="volname" data-sort="${esc(volumeTitle(x))}"><div class="volname-content"><button type="button" class="vol-open" data-card="volume|${esc(volumeKey(x))}" aria-label="Open details for ${esc(volumeTitle(x))}"
+   <th>Volume</th><th>Attached to</th><th>Copies</th><th>Usage</th><th>Last used</th><th data-nosort>Actions</th>
+   </tr></thead><tbody>${rows.map(x => { const problem = volumeProblem(x), key = esc(volumeKey(x)); return `<tr data-vol="${esc(x.name)}" class="volrow${problem ? ` vol-problem ${problem.tone}` : ""}"${clusterAttr(x)}>
+     <td class="volname" data-sort="${esc(volumeTitle(x))}"><div class="volname-content"><button type="button" class="vol-open" data-card="volume|${key}" aria-label="Open details for ${esc(volumeTitle(x))}"
        onclick="openDetails('volume',${jsq(volumeKey(x))})"><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b></button> ${clusterTag(x)}
-       <span class="dim xs">${esc(x.namespace || "")} · ${esc(x.size_gb)} GiB</span></div></td>
-     <td data-label="Used by">${volumeUseCell(x)}</td>
-     <td data-label="State" class="volhealth" data-sort="${problem ? (problem.tone === "bad" ? 0 : 1) : 2}"><div class="volstate" data-card="volume-health|${esc(volumeKey(x))}">${volumeHealthCell(x)}</div></td>
-     <td data-label="Copies" class="volcopies" data-sort="${(x.copies || []).filter(c => c.healthy).length}">${volumeCopyDots(x)}</td>
-     <td data-label="Files" class="volusage" data-sort="${x.filesystem?.used_pct ?? ""}">${volumeUsageCell(x)}</td>
+       <span class="dim xs mono">${esc(x.namespace || "")}${x.node ? ` · ${esc(x.node.replace(/^harvester-/, ""))}` : ""}</span></div></td>
+     <td data-label="Attached to" class="volattach">${volumeUseCell(x)}${x.pod_status ? `<span class="dim xs"> · ${esc(x.pod_status)}</span>` : ""}</td>
+     <td data-label="Copies" class="volcopies" data-sort="${problem && !problem.usage ? (problem.tone === "bad" ? 0 : 1) : 2}">${volumeCopiesCell(x)}</td>
+     <td data-label="Usage" class="volusage" data-sort="${x.filesystem?.used_pct ?? ""}">${volumeUsageCell(x)}</td>
+     <td data-label="Last used" class="vollast small dim" data-sort="${x.state === "attached" ? 0 : x.last_used_secs ?? ""}">${x.state === "attached" ? UI.chip("in use", "neutral", { size: "slim" }) : esc(fmtAgo(x.last_used_secs))}</td>
      <td class="volactions" data-actions>${volumeActions(x)}</td>
       </tr>`; }).join("") || `<tr><td colspan=6 class="empty">No volumes to show.</td></tr>`}
    </tbody></table></div></div>

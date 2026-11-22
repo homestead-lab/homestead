@@ -14,7 +14,7 @@ const volume = { name: "v1", pvc_name: "v1", size_gb: 200, actual_gb: 292.06, us
 
 test("usage shows the files against the file system, never the footprint against the size", () => {
   const html = context.volumeUsageCell(volume);
-  assert.match(html, /180 \/ 196 GiB</);
+  assert.match(html, /180 \/ 196 GiB files</);
   assert.match(html, /value="91\.8"/);
   assert.doesNotMatch(html, /292\.06|value="146"/);
   assert.match(html, /data-card="volume-usage\|v1"/, "the rest is in its hover card");
@@ -23,7 +23,7 @@ test("missing or invalid filesystem samples are unknown, never a footprint bar",
   for (const filesystem of [null, {}, {used_gb: 4, capacity_gb: 0, used_pct: 0},
     {used_gb: 3, capacity_gb: 2, used_pct: 150}, {used_gb: 0, capacity_gb: 2, used_pct: -1}]) {
     const html = context.volumeUsageCell({...volume, filesystem});
-    assert.match(html, /Not measured/);
+    assert.match(html, /Filesystem usage unavailable/);
     assert.doesNotMatch(html, /<meter/);
   }
 });
@@ -35,7 +35,7 @@ test("the usage hover card separates files, provisioned size and snapshot footpr
   assert.match(card, /292\.06 GiB, snapshots included/);
   context.STATE.data.vols = [{...volume, actual_gb: "<script>"}];
   assert.doesNotMatch(context.HOVER_CARDS["volume-usage"]("v1"), /<script>/);
-  assert.match(context.volumeUsageCell({...volume, filesystem: {used_gb: 0, capacity_gb: 196, used_pct: 0}}), /0 \/ 196 GiB</);
+  assert.match(context.volumeUsageCell({...volume, filesystem: {used_gb: 0, capacity_gb: 196, used_pct: 0}}), /0 \/ 196 GiB files</);
 });
 test("desktop volume-name cell remains a table cell, flex belongs to its child", () => {
   const css = fs.readFileSync("web/style.css", "utf8");

@@ -1,5 +1,5 @@
 "use strict";
-// A host preference shows on the Containers row, and Balance's review says it leaves one.
+// A host preference shows in the app's hover card and details, and Balance's review says it leaves one.
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
 
@@ -19,9 +19,11 @@ test("the row says which host an app prefers", () => {
   assert.equal(preferTag({ prefers: "" }), "");
 });
 
-test("it goes on the row, not the card, whose title has no room beside it", () => {
-  const tags = between(require("./helpers/workloads-source")(), "function workloadStateTags", "\n}\n");
-  assert.match(tags, /row \? preferTag\(w\) : ""/);
+test("it goes in the name's hover card and the details, not the row's status (Nov 2026 mockup)", () => {
+  const source = require("./helpers/workloads-source")();
+  assert.doesNotMatch(between(source, "function workloadStateTags", "\n}\n"), /preferTag/);
+  assert.match(between(source, "HOVER_CARDS.app = key", "\n};\n"), /w\.prefers && \["Placement"/);
+  assert.match(source, /w\.prefers && \["Placement", preferTag\(w\)/);
 });
 
 test("the row's tip says who left it and what clearing it costs", () => {

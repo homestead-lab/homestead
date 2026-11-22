@@ -81,9 +81,10 @@ column headings are the one small upper-case label.
    page's title (`liftPageBar`). There is no breadcrumb; the sidebar shows the
    place, and the cluster switch is shown under the brand. What filters the list
    stays on the page: the subtitle becomes the page's one toolbar line, with
-   the list's controls on its right - Containers' group chips, a count pill,
-   the cards/rows switch, a search field. A phone keeps the header on the
-   page.
+   the list's controls on its right - Containers' group picker ("Group: All
+   groups · 6"), a count pill, a search field. Containers' cards or rows is a
+   choice in ⋯ rather than a switch on that line. A phone keeps the header on
+   the page.
    On a phone, Containers and Virtual machines keep their page tabs above one
    compact toolbar. Containers has a group picker, Options and Deploy; Virtual
    machines has an All VMs scope label, Options and New VM. The page's
@@ -235,13 +236,15 @@ instead. `.about-grid` markup gets the same icons in `paint()` and
 adds a pattern to `FACT_ICONS` and a line to `tests/fact-icons.test.js`
 rather than falling back to the generic icon.
 
-**The attention list.** When something on a page needs a person, one card
-under the summary line lists it, a line each: a sentence naming it, a short
-reason, and the button that deals with it, such as "frigate-config is full in
-about 11 days" with Expand volume. It is the page's one notice, it replaces
-separate panels such as Filling up, and a page with nothing to do shows none.
-Volumes lists filling volumes and disks, volumes short of a copy, volumes no
-app uses and old copies (`volumeAttention()`).
+**What needs a person is in the summary line**, not a card of its own. A list
+page's summary line leads with how things stand ("5 of 6 apps are running
+normally.", "906 GiB of 1,392 GiB is free.") and then names each item that
+needs a person as a link to its details, set apart by a dot (`SUM_DOT`):
+"nextcloud-data is missing a copy · frigate-config is full in about 11 days".
+The row then says it again in place - a coloured edge, a short note - with the
+button that deals with it. A phone says the short form (`.sum-narrow`): "906
+GiB free. 2 volumes need attention". Sizes are written with thousands
+separators (`gibText()`).
 
 **Hover cards.** A status, a figure or a name that has more to say than a
 tooltip shows a card: a title and its chip, three or four facts with their
@@ -272,13 +275,23 @@ storage and facts beneath it. Full host names remain in accessible labels and in
 **A row of a resource list** - the Containers page first, then the others -
 holds what a person scans for and nothing they look up: the name, with what
 it runs on beneath it; its state; the figures that change; its address; and
-its actions. A healthy item's state reads in quiet words (Running); a problem
-is a chip, a sentence under it saying why, and a coloured edge on the row
-(`wl-problem bad` or `warn`), so problems are found by scanning the edge. The
-actions are one labelled button that fits the item's state - the update when
-one is waiting, the logs when it is in trouble, Start when it is stopped,
-otherwise opening the app - then ⋯ with the actions people reach for, under
-group headings (an item's `group` in `actionBar()`: Use, Change, Remove).
+its actions. A healthy item's state reads in quiet words (Running, Running, 3
+copies, with Update ready beside it when one waits); a problem is a chip, a
+short plain reason beside it ("Responses take 2.4 seconds.", "The web check
+fails."), and a coloured edge on the row (`wl-problem bad` or `warn`), so
+problems are found by scanning the edge. The check's own figures (HTTP 200 ·
+2840 ms) are for the hover card. The actions are one labelled button that
+fits the item's state - the update when one is waiting, the logs when it is
+in trouble, Start when it is stopped, otherwise opening the app - then ⋯ with
+the actions people reach for, under group headings (an item's `group` in
+`actionBar()`: Use, Change, Remove). The labelled button is words alone
+(`plain`, so `enhanceActions()` adds no icon); a table too narrow for words
+shows its icon instead. Where nothing needs doing and no action fits every
+item, as on Volumes, a row has ⋯ alone and a labelled button only when one is
+needed: Rebuild copy when a copy is missing, Expand volume when it fills up.
+Volumes' columns are Volume, Attached to, Copies (dots, and under them what is
+missing or how far a rebuild is), Usage (files against the file system, and a
+Full in … chip under it), Last used and actions.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
 pause on the name or the state shows a hover card. The page's summary line
