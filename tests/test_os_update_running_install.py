@@ -33,7 +33,10 @@ class Installing(Hosts):
 
     def __init__(self, facts_by_host):
         super().__init__(facts_by_host)
-        self.installing, self.refreshed = set(), []
+        self.installing, self.refreshed, self.looked = set(), [], []
+        # What upgrade_state raises per host: the real one runs a command there through hostrun.
+        self.state_errors = {}
+        self.during_look = lambda name: None
 
     def read(self, name, refresh=False):
         if refresh:
@@ -48,6 +51,10 @@ class Installing(Hosts):
             self.installing.add(name)        # an install that does not end by itself
 
     def upgrade_state(self, name, run=None):
+        self.looked.append(name)
+        self.during_look(name)
+        if name in self.state_errors:
+            raise self.state_errors[name]
         return {**super().upgrade_state(name, run), "active": name in self.installing}
 
     def install_ends(self, name):
@@ -66,8 +73,8 @@ class RunningInstall(unittest.TestCase):
         self.data = tmp.name
         self.enterContext(mock.patch.object(HISTORY, "DATA_DIR", self.data))
         self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.data))
-        self.enterContext(Kube(*map(node, NAMES)))
-        self.enterContext(mock.patch.object(CANARY, "pick", return_value=None))
+        self.kube = self.enterContext(Kube(*map(node, NAMES)))
+        self.pick = self.enterContext(mock.patch.object(CANARY, "pick", return_value=None))
         self.enterContext(mock.patch("builtins.print"))
         self.hosts = Installing({name: facts(["curl"]) for name in NAMES})
         ROLLOUT.bind(K.kget, lambda force=False: {"distribution": "k3s"}, self.hosts, None, lambda op: None,
@@ -139,6 +146,95 @@ class RunningInstall(unittest.TestCase):
         self.assertNotIn("node-c", self.released(), "and its automatic updates stay held")
         with self.assertRaisesRegex(ValueError, "node-c may still be installing updates"):
             ROLLOUT.start(now=T + 60)
+
+    def node_c_not_answering_past_its_install_time(self):
+        """node-c's install began, then node-c stopped answering for over two hours."""
+        self.hosts.codes["node-c"] = None
+        ROLLOUT.start(now=T)
+        self.tick_until(T, lambda r: r.get("phase") == "installing" and r["node"].get("name") == "node-c")
+        self.hosts.state_errors["node-c"] = OSError("node-c is not answering")
+        at = T
+        while (ROLLOUT._load().get("rollout") or {}).get("status") == "running":
+            at += 60
+            self.assertLess(at, T + ROLLOUT.INSTALL_LIMIT + 3600, "it never ended")
+            ROLLOUT.tick(now=at)
+        self.assertIn("no answer for 120 min", ROLLOUT._load()["rollout"]["message"])
+        return at
+
+    def test_a_host_that_stopped_answering_while_installing_stays_held_and_refused(self):
+        at = self.node_c_not_answering_past_its_install_time()
+        for later in range(at, at + 600, 20):
+            ROLLOUT.tick(now=later)
+        self.assertEqual({"node-a", "node-b"}, self.released(), "its install was started, so it may still run")
+        self.assertTrue(self.hosts.facts["node-c"]["auto"]["held"])
+        with self.assertRaisesRegex(ValueError, "node-c may still be installing updates"):
+            ROLLOUT.start(now=at + 660)
+
+    def test_a_recorded_host_whose_look_fails_stays_held_and_says_how_to_go_on(self):
+        later = self.node_c_timed_out()
+        self.hosts.state_errors["node-c"] = OSError("node-c is not answering")
+        self.hosts.install_ends("node-c")
+        for at in range(later, later + 600, 20):
+            ROLLOUT.tick(now=at)
+        self.assertGreater(self.hosts.looked.count("node-c"), 1, "it is looked at again")
+        self.assertNotIn("node-c", self.released(), "an unanswered look is no proof the install ended")
+        blocked = ROLLOUT.preview(["node-c"])["blocked"]
+        self.assertIn("cannot reach it", blocked)
+        self.assertIn("Make sure node-c answers", blocked, "the way on")
+
+    def set_ready(self, name, ready):
+        item = node(name)
+        item["status"]["conditions"][0]["status"] = "True" if ready else "False"
+        self.kube.add(item)
+
+    def test_a_recorded_host_not_ready_is_not_looked_at_until_it_is_ready_again(self):
+        later = self.node_c_timed_out()
+        self.set_ready("node-c", False)
+        looked = self.hosts.looked.count("node-c")
+        for at in range(later, later + 600, 20):
+            ROLLOUT.tick(now=at)
+        self.assertEqual(looked, self.hosts.looked.count("node-c"), "no command on a host that is not Ready")
+        busy = ROLLOUT.preview(["node-c"])["hosts"][0]["busy"]     # the review's row for node-c
+        self.assertIn("once node-c is Ready", busy)
+        self.assertNotIn("about once a minute", busy, "no promise it cannot keep")
+        self.hosts.install_ends("node-c")
+        self.set_ready("node-c", True)
+        for at in range(later + 600, later + 900, 20):
+            ROLLOUT.tick(now=at)
+        self.assertGreater(self.hosts.looked.count("node-c"), looked, "looked at again once Ready")
+        self.assertIn("node-c", self.released())
+
+    def test_a_host_recorded_again_during_a_look_keeps_its_new_record(self):
+        later = self.node_c_timed_out()
+        self.hosts.install_ends("node-c")
+
+        def recorded_again(name):
+            # Another replica's run recorded node-c anew while this look was out.
+            state = ROLLOUT._load()
+            state["installing"]["node-c"] = {"since": later + 30, "run": "os-other"}
+            ROLLOUT._save(state)
+            self.hosts.during_look = lambda name: None
+        self.hosts.during_look = recorded_again
+        ROLLOUT.tick(now=later + 20)
+        self.assertIn("node-c", ROLLOUT._load().get("installing") or {}, "the newer record is not cleared by an older look")
+
+    def test_a_canary_found_installing_is_left_alone_and_the_others_get_no_soak(self):
+        # As for a canary not Ready by its turn: the others go on without a day of watching it.
+        self.pick.return_value = "node-c"
+        self.hosts.installing.add("node-c")
+        rollout = ROLLOUT.start(now=T)
+        self.assertEqual("node-c", rollout["nodes"][0])
+        phases = []
+        for _ in range(30):
+            ROLLOUT.tick(now=T)
+            rollout = ROLLOUT._load()["rollout"]
+            phases.append(rollout.get("phase"))
+            if rollout.get("status") != "running":
+                break
+        self.assertNotIn("canary", phases)
+        self.assertEqual(["node-b", "node-a"], self.hosts.began)
+        self.assertEqual((False, f"an earlier install is still running, so left alone. See {Hosts.LOG} there"),
+                         (rollout["results"][0]["ok"], rollout["results"][0]["note"]))
 
 
 if __name__ == "__main__":

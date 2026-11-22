@@ -222,10 +222,16 @@ def _busy_host(name):
     running (#1540), or a job not ended that names it, of any kind, so that a kind
     added later is refused rather than run into. "" when none. The install would
     otherwise fail inside the run and wait out its error limit."""
-    if name in (_load().get("installing") or {}):
-        return (f"{name} may still be installing updates from an earlier OS update. "
-                f"Homestead looks again every minute and starts no new one there until that install has ended. "
-                f"See {host_os.LOG} on {name}.")
+    row = (_load().get("installing") or {}).get(name)
+    if row is not None:
+        why = f"{name} may still be installing updates from an earlier OS update"
+        if row.get("unread") == "not-ready":
+            return f"{why}. Homestead checks again once {name} is Ready. See {host_os.LOG} on {name}."
+        if row.get("unread"):
+            return (f"{why}, and Homestead cannot reach it to check. Make sure {name} answers, then Homestead checks "
+                    f"again. See {host_os.LOG} on {name}.")
+        return (f"{why}. Homestead checks about once a minute while no OS update runs, and starts none there until "
+                f"that install has ended. See {host_os.LOG} on {name}.")
     for item in OPS.stored():
         ref = item.get("ref") or {}
         resource = item.get("resource") or {}
@@ -402,39 +408,52 @@ def _hold_round(now):
 def _left_installing(state, name, now):
     """name's install may go on after its run: held, and not started by a new run,
     until _install_round sees it has ended (#1540)."""
-    state.setdefault("installing", {})[name] = {"since": int(now)}
+    state.setdefault("installing", {})[name] = {"since": int(now), "run": (state.get("rollout") or {}).get("id", "")}
 
 
 def _install_round(now):
     """While no run goes, each host left installing is looked at again, at most
     every INSTALL_LOOK: once its install unit is no longer active, the install has
-    ended, however it ended. A host that cannot be read stays. The looks are outside
-    the lock, as _hold_round's tries are."""
+    ended, however it ended. A host that cannot be read stays. A host not Ready, or
+    gone, stays too and is not looked at: each look is a helper pod that could wait
+    a minute for nothing. The looks are outside the lock, as _hold_round's tries are."""
     now = now or time.time()
     state = _load()
-    if (state.get("rollout") or {}).get("status") == "running":
+    rows = state.get("installing") or {}
+    if not rows or (state.get("rollout") or {}).get("status") == "running":
         return
-    looked, ended = [], []
-    for name, row in sorted((state.get("installing") or {}).items()):
+    try:
+        nodes = _nodes()
+    except Exception:
+        return    # the node list is read again next tick
+    seen, ended = {}, []
+    for name, row in sorted(rows.items()):
         if now - row.get("looked", 0) < INSTALL_LOOK:
             continue
-        looked.append(name)
+        seen[name] = {"since": row.get("since"), "run": row.get("run"), "looked": now, "unread": ""}
+        if name not in nodes or not _ready(nodes[name]):
+            seen[name]["unread"] = "not-ready"
+            continue
         try:
             if not host_os.upgrade_state(name).get("active"):
                 ended.append(name)
         except Exception as error:
+            seen[name]["unread"] = "unreachable"
             print(f"OS updates: {name}: whether its earlier install has ended could not be read: "
                   f"{' '.join(str(error).split())[:120]}", flush=True)
-    if not looked:
+    if not seen:
         return
     with _lock:
         state = _load()
         rows = state.get("installing") or {}
-        for name in looked:
+        for name, look in seen.items():
+            row = rows.get(name)
+            if row is None or (row.get("since"), row.get("run")) != (look["since"], look["run"]):
+                continue    # recorded again since this look began: the newer record stays
             if name in ended:
-                rows.pop(name, None)
-            elif name in rows:
-                rows[name]["looked"] = now
+                rows.pop(name)
+            else:
+                row.update(looked=now, unread=look["unread"])
         if rows:
             state["installing"] = rows
         else:
@@ -758,6 +777,9 @@ def _failing(state, error, now=None):
     if now - since <= limit or rollout.get("status") != "running":
         rollout["message"] = f"waiting: {text}"
         return False
+    if phase == "installing":
+        # Its install was started, so it may still be running (#1540).
+        _left_installing(state, (rollout.get("node") or {}).get("name"), now)
     left = (". Its updates may still be installing" if phase == "installing" else
             ". It is left cordoned" if phase in ("restart", "restarting") else "")
     _result(rollout, False, f"no answer for {limit // 60} min: {text}{left}")

@@ -384,11 +384,13 @@ class RolloutTests(unittest.TestCase):
         self.assertIn("not answering", rollout["message"], "the last error is kept")
         held = {name for name, on in self.hosts.holds if on}
         self.assertTrue(held)
-        self.assertEqual(held, {name for name, on in self.hosts.holds if not on},
-                         "every host's automatic updates are let go of")
+        self.assertEqual(held - {"node-2"}, {name for name, on in self.hosts.holds if not on},
+                         "every other host's automatic updates are let go of; node-2's install may still run (#1540)")
         self.assertIn("node-2", self.hosts.held, "the install may still run there: its own hold lapses by itself")
         self.assertEqual(["node-2"], self.hosts.began, "no other host was started")
-        ROLLOUT.start(now=clock + 600)   # a new rollout is no longer refused
+        with self.assertRaisesRegex(ValueError, "node-2 may still be installing"):
+            ROLLOUT.start(now=clock + 600)
+        ROLLOUT.start(now=clock + 600, only=["node-1", "node-3"])   # a new rollout of the others is no longer refused
 
     def test_a_host_whose_check_keeps_failing_ends_the_rollout_after_30_min(self):
         original = self.hosts.read
