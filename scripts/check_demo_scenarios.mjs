@@ -40,7 +40,8 @@ try {
     await page.evaluate(() => go("vms"));
     await page.locator("#views h2").filter({ hasText: /^Virtual machines$/ }).waitFor();
     await page.waitForFunction(() => STATE.data.vms?.length);
-    assert.equal(await page.locator("#views").getByText("ErrorUnschedulable", { exact: true }).count(), scenario === "healthy" ? 0 : 1);
+    // The row says it in words; Kubernetes' own state (ErrorUnschedulable) is in the VM page and the hover card.
+    assert.equal(await page.locator("#views").getByText("Cannot start", { exact: true }).count(), scenario === "healthy" ? 0 : 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `release-assets/scenarios/${scenario}-vms-${width}.png`, fullPage: true });
     await page.evaluate(() => vmOpen("lab", "ubuntu-test"));
