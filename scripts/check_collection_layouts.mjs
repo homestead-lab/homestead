@@ -142,7 +142,7 @@ try {
       // The top bar's title picks the family's pages; ＋ is Deploy (design.md "One bar").
       assert.equal(await page.locator('.containers-page .pagetabs>a:visible').count(),0,'the title picker replaces the tab strip');
       assert.equal(await page.locator('#title .title-pick option').count(),5);
-      assert.equal(await page.locator('#phonePrimary').getAttribute('aria-label'),'Deploy');
+      assert.equal(await page.locator('#phonePrimary').getAttribute('aria-label'),'＋ Deploy');
       assert.equal(await page.locator('.containers-page>.phead>.row').isVisible(),false);
       assert.equal(await page.locator('.containers-page>.sortbar').count(),0,'sorting lives inside Options');
       const bounds=await toolbar.locator(':scope>*').evaluateAll(items=>items.filter(e=>e.checkVisibility()).map(e=>e.getBoundingClientRect()));
@@ -243,7 +243,7 @@ try {
       const toolbar=header.locator('.collection-mobile-toolbar');
       assert.equal(await page.locator('.vms-page .pagetabs>a:visible').count(),0,'the title picker replaces the tab strip');
       assert.equal(await page.locator('#title .title-pick option').count(),2);
-      assert.equal(await page.locator('#phonePrimary').getAttribute('aria-label'),'New VM');
+      assert.equal(await page.locator('#phonePrimary').getAttribute('aria-label'),'＋ New VM');
       assert.equal(await page.locator('.vms-page>.phead>.row').isVisible(),false);
       assert.equal(await page.locator('.vms-page>.sortbar').count(),0);
       const bounds=await toolbar.locator(':scope>*').evaluateAll(items=>items.filter(e=>e.checkVisibility()).map(e=>e.getBoundingClientRect()));

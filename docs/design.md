@@ -89,9 +89,9 @@ column headings are the one small upper-case label.
    titled by its family's name over a picker of its pages ("Containers" over
    "Running ▾"), which replaces the tab strip. ＋ does the page's main button
    (Deploy, Create volume, New VM) for whoever may use it, and the page's own
-   copy of that button is hidden. Refresh is the pull-down gesture, the
-   cluster switch is in the menu, and the setup guide shows in the bar only
-   while setup is unfinished, then from Settings. On the page, the summary
+   copy of that button is hidden. Refresh is the pull-down gesture and the
+   cluster switch is in the menu; the setup guide's button stays, and a long
+   title ends in "…". On the page, the summary
    line keeps the list's controls on its right: Containers' group picker and
    Options, Virtual machines' All VMs scope and Options, ⋯ elsewhere.
    `listOptions()` puts sorting, layout and platform visibility inside the

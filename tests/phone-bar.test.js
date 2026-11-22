@@ -56,11 +56,12 @@ test("a page without tabs, or a wider window, keeps the plain title", () => {
 
 test("＋ takes the page's main button's words and who may use it, and clicks it", () => {
   let clicked = 0;
-  const main = { textContent: "＋ Create volume", dataset: { need: "operator" }, disabled: false, click: () => { clicked += 1; } };
+  const main = { textContent: "＋ Create volume", dataset: { need: "operator" }, disabled: false, getAttribute: () => null, click: () => { clicked += 1; } };
   const { ctx, plus } = world({ main });
   assert.equal(ctx.phonePrimary(true), true);
   assert.equal(plus.hidden, false);
-  assert.equal(plus.attrs["aria-label"], "Create volume");
+  assert.equal(plus.attrs["aria-label"], "＋ Create volume", "announced as the button it stands for");
+  assert.equal(plus.title, "Create volume");
   assert.equal(plus.dataset.need, "operator");
   plus.onclick();
   assert.equal(clicked, 1);

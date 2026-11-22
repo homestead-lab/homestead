@@ -3,7 +3,9 @@
 export async function openAuditPage(page, url) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.locator("#gate.hidden").waitFor({ state: "attached" });
-  await page.locator("#views .phead").waitFor({ state: "visible" });
+  // Attached, not visible: on a phone a header whose only content was its tabs
+  // is empty once the title picks the page (design.md "One bar").
+  await page.locator("#views .phead").waitFor({ state: "attached" });
   await page.waitForFunction(() => typeof pageLoading === "function" && !pageLoading(window.NAV_TOKEN));
   await page.evaluate(() => document.fonts.ready);
 }

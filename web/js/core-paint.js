@@ -172,9 +172,10 @@ function phonePrimary(phone) {
   const main = phone ? V()?.querySelector(".phead .page-actions>button.btn.pri") : null;
   plus.hidden = !main;
   if (!main) return false;
-  const words = main.textContent.replace(/^[＋+]\s*/, "").trim();
-  plus.setAttribute("aria-label", words);
-  plus.title = words;
+  // The same name as the button it stands for, so it is announced (and found) as that button.
+  const name = main.getAttribute("aria-label") || main.textContent.trim();
+  plus.setAttribute("aria-label", name);
+  plus.title = name.replace(/^[＋+]\s*/, "");
   if (main.dataset.need) plus.dataset.need = main.dataset.need; else delete plus.dataset.need;
   plus.disabled = main.disabled;
   plus.onclick = () => main.click();
