@@ -283,7 +283,32 @@ class RaisedAlertTests(unittest.TestCase):
         old = {"name": "node-b", "since": T}       # a soak saved before this change: no log fields
         self.routine(5, T + 100)
         self.assertEqual("wait", CANARY.watch(old, now=T + 7200)[0])
-        self.assertIn("log_read", old)
+        self.routine(ALERTS.LOG_SIZE - 10, T + 7210)   # the start of the day leaves the log
+        self.assertEqual("wait", CANARY.watch(old, now=T + 7220)[0], "a later look trusts what the first one read")
+        self.looks(T + 7300, T + 7300 + VIPS.ADDRESS_HOLD + LOOK, unrouted())
+        self.assertEqual("stop", CANARY.watch(old, now=T + 7300 + VIPS.ADDRESS_HOLD + LOOK)[0])
+
+    def test_a_person_s_summary_replaced_after_the_canary_read_it_does_not_stop_it(self):
+        summary = {"key": "summary:owner:1", "category": "summary", "severity": "info", "event": True,
+                   "title": "Your summary", "for": "owner"}
+        ALERTS.note(summary, now=T + 100)
+        self.assertEqual("wait", self.watch(T + 110)[0])        # the last entry it read is that summary
+        ALERTS.note({**summary, "key": "summary:owner:2"}, now=T + 3600)   # the next one replaces it
+        self.assertEqual("wait", self.watch(T + 3610)[0])
+        self.assertEqual("go", self.watch(END)[0])
+
+    def test_an_alert_with_a_time_before_the_check_counts_once_the_check_began(self):
+        self.assertEqual("wait", self.watch(T + 60)[0])
+        # The clock set back: the alert log says it was raised before the check.
+        self.looks(T - 3000, T - 3000 + VIPS.ADDRESS_HOLD + LOOK, unrouted())
+        self.assertEqual("stop", self.watch(T + 120)[0])
+
+    def test_a_damaged_record_of_what_was_read_stops_it(self):
+        for bad in ([None, 3, T], [1, 5, "abc"], [1, "5", T], "x", [1, 2], {"id": 5}, [True, 5, T]):
+            soak = {"name": "node-b", "since": T, "log_read": bad}
+            verdict, words = CANARY.watch(soak, now=T + 600)
+            self.assertEqual("stop", verdict, bad)
+            self.assertIn("cannot tell whether an alert was raised", words, bad)
 
     def test_a_run_started_by_the_previous_release_stops_when_the_log_no_longer_reaches_back(self):
         self.routine(ALERTS.LOG_SIZE + 10, T + 3600)

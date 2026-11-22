@@ -62,6 +62,7 @@ class CanaryTests(unittest.TestCase):
         self.assertEqual("wait", verdict)
         self.assertIn("follow in 23 h", words)
         self.assertEqual("go", CANARY.watch(soak, now=T + CANARY.SOAK)[0])
+        soak = {"name": "b", "since": T}          # a new day, first read with these entries in the log
         self.alerts = [{"id": 1, "phase": "raised", "severity": "degraded", "at": T - 100, "title": "from before"},
                        {"id": 2, "phase": "raised", "severity": "info", "at": T + 10, "title": "info"},
                        {"id": 3, "phase": "resolved", "severity": "degraded", "at": T + 20, "title": "Cleared: from before"}]

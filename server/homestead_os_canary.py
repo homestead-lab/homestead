@@ -93,41 +93,68 @@ def _active(now):
     return ALERTS.active(now=now)
 
 
-def new_alerts(since, entries=None):
+def new_alerts(since, entries=None, after=None):
     """Degraded or critical conditions raised, or grown worse, since the
     soak began, from the alert log: also one that began before the soak, and
     one raised and cleared between two looks. Events (a failed job, the OS
     update's own notices) are not counted, as they were not before #1526.
-    The log keeps whole seconds."""
+    Once the canary has read the log, "since" is by entry id (after), which
+    only grows, so a clock set back hides nothing; before that, by the
+    entries' whole seconds."""
     return [e for e in (_log() if entries is None else entries)
             if e.get("phase") in ("raised", "worsened") and e.get("severity") in SERIOUS
             and not e.get("event") and not str(e.get("key") or "").startswith(OWN)
-            and int(e.get("at") or 0) >= int(since)]
+            and (int(e.get("id") or 0) > after if after is not None else int(e.get("at") or 0) >= int(since))]
 
 
-def _complete(canary, entries):
-    """Whether the log still holds every entry since the soak began. The
-    soak keeps the last entry the canary read ("log_read", saved with the OS
-    update's state, so a restart or a leader change keeps it too): that
-    entry is still there unchanged, or the log now starts right after it.
-    Before the first read (also a soak a previous release began) the log's
-    oldest entry must be from before the soak. Not so when entries fell off
-    its end (LOG_SIZE) unread, or the log was lost and begun again."""
-    read = canary.get("log_read")
-    if isinstance(read, list) and len(read) == 2:
-        same = [e for e in entries if e.get("id") == read[0]]
-        if same:
-            return same[0].get("at") == read[1]
-        if not entries:
-            return read[0] == 0       # empty then and now; once it had entries, a lost log
-        return entries[0].get("id") == read[0] + 1 and int(entries[0].get("at") or 0) >= int(read[1] or 0)
-    return not entries or int(entries[0].get("at") or 0) < int(canary["since"])
+def _whole(value):
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _remember(canary, entries):
-    last = entries[-1] if entries else {}
-    if isinstance(last.get("id"), int) or not entries:
-        canary["log_read"] = [last.get("id", 0), last.get("at")]
+def _record(canary):
+    """What the canary read before, from the soak ("log_read", saved with the
+    OS update's state, so a restart or a leader change keeps it): [the last
+    id from before the soak, the highest id read, that entry's time]. None
+    before the first read (also a soak a previous release began); "bad"
+    when it is there but damaged."""
+    if "log_read" not in canary:
+        return None
+    read = canary["log_read"]
+    if (isinstance(read, list) and len(read) == 3 and _whole(read[0]) and _whole(read[1])
+            and 0 <= read[0] <= read[1] and (read[2] is None or _whole(read[2]))):
+        return read
+    return "bad"
+
+
+def _complete(canary, entries, read):
+    """Whether the log still holds every entry since the soak began. Ids only
+    grow, and entries leave the log from its front (LOG_SIZE) or, for a
+    person's summary, when their next one replaces it - never a condition's.
+    So with what was read: the newest id is at least the highest read (or
+    the log was lost and begun again), the oldest is at most one past it
+    (or entries after it fell off unread), and the entry read last, if still
+    there, is unchanged. Before the first read the oldest entry must be from
+    before the soak."""
+    if read == "bad":
+        return False
+    ids = [e.get("id") for e in entries]
+    if not all(_whole(i) for i in ids):
+        return False
+    if read is None:
+        return not entries or int(entries[0].get("at") or 0) < int(canary["since"])
+    if not ids:
+        return read[1] == 0
+    same = [e for e in entries if e["id"] == read[1]]
+    return ids[-1] >= read[1] and ids[0] <= read[1] + 1 and all(e.get("at") == read[2] for e in same)
+
+
+def _remember(canary, entries, read):
+    if isinstance(read, list):
+        start, last = read[0], entries[-1] if entries else {"id": read[1], "at": read[2]}
+    else:
+        start = max([e["id"] for e in entries if int(e.get("at") or 0) < int(canary["since"])], default=0)
+        last = entries[-1] if entries else {"id": 0, "at": None}
+    canary["log_read"] = [start, last["id"], last.get("at")]
 
 
 def pending(since, now=None):
@@ -154,7 +181,8 @@ def watch(canary, now=None):
         entries = _log()
     except Exception as error:
         return "wait", f"{node}: reading the alert log again ({str(error)[:80]})"
-    raised = new_alerts(since, entries)
+    read = _record(canary)
+    raised = new_alerts(since, entries, read[0] if isinstance(read, list) else None)
     if raised:
         first = raised[0]
         title = str(first.get("title") or "an alert")
@@ -163,10 +191,10 @@ def watch(canary, now=None):
             what, title = "an alert got worse", title.removeprefix("Worsened: ")
         return "stop", (f"{what} while the canary soaked: {title} (see the Timeline). "
                         "The other hosts were left as they are")
-    if not _complete(canary, entries):
+    if not _complete(canary, entries, read):
         return "stop", ("the alert log no longer goes back to when the canary's day began, so Homestead "
                         "cannot tell whether an alert was raised in it. The other hosts were left as they are")
-    _remember(canary, entries)
+    _remember(canary, entries, read)
     left = SOAK - (now - since)
     if left > 0:
         return "wait", f"{node} is the canary: checks pass; the other hosts follow in {int(left // 3600)} h {int(left % 3600 // 60)} min"
