@@ -61,19 +61,16 @@ function workloadSummary(rows, { q = "", group = "", updateCount = 0, updateErro
     : !running.length ? `${rows.length === 1 ? "The app" : `All ${rows.length} apps`}${scope} ${rows.length === 1 ? "is" : "are"} stopped.`
     : fine === rows.length ? `${rows.length === 1 ? "The app" : `All ${rows.length} apps`}${scope} ${rows.length === 1 ? "is" : "are"} running normally.`
     : `${fine} of ${plural(rows.length, "app", "apps")}${scope} ${fine === 1 ? "is" : "are"} running normally.`;
-  const shown = troubled.slice(0, 3).map(([w, p]) => `<button type="button" class="linkish sum-link sum-${p.tone}" onclick="openDetails('app',${jsq(workloadRowKey(w))})">${esc(w.name)} ${esc(p.word)}</button>`);
-  const more = troubled.length > 3 ? ` and ${troubled.length - 3} more` : "";
-  const links = shown.length ? ` ${shown.join(SUM_DOT)}${more}` : "";
-  // A phone says the sentence without "normally" and the apps in trouble, nothing more.
-  const narrow = `<b>${head.replace(" running normally.", " running.")}</b>${links}`;
-  // The sentence, then each thing to look at, set apart by a dot.
-  const wide = [`<b>${head}</b>${links}`,
-    stopped && running.length ? `<span class="sum-note">${plural(stopped, "app is", "apps are")} stopped</span>` : "",
-    updateCount ? `<button type="button" class="linkish sum-link sum-info" onclick="imageUpdateCenter()">${updateCount === 1 ? "An update is" : "Updates are"} ready for ${plural(updateCount, "app", "apps")}</button>` : "",
-    updateErrors ? `<button type="button" class="linkish sum-link sum-bad sum-checks" onclick="imageUpdateCenter()" data-tip="Every other image was compared with its registry">${plural(updateErrors, "image", "images")} could not be checked</button>` : "",
-    unchecked ? `<span class="sum-note" data-tip="Stopped or still starting, so not yet compared with their registries. They are marked ? in the list.">${plural(unchecked, "image has", "images have")} not been checked yet</span>` : "",
-  ].filter(Boolean).join(SUM_DOT);
-  return `<span class="sum-wide">${wide}</span><span class="sum-narrow">${narrow}</span>`;
+  const apps = [...troubled.slice(0, 3).map(([w, p]) => ({ text: `${w.name} ${p.word}`, tone: p.tone, run: `openDetails('app',${jsq(workloadRowKey(w))})` })),
+    troubled.length > 3 && { text: `${troubled.length - 3} more`, note: true }];
+  // The sentence, then each thing to look at, set apart by a dot. A phone says
+  // the sentence without "normally" and the apps in trouble, nothing more.
+  return UI.summary({ head: `<b>${head}</b>`, parts: [...apps,
+    stopped && running.length && { text: `${plural(stopped, "app is", "apps are")} stopped`, note: true },
+    updateCount && { text: `${updateCount === 1 ? "An update is" : "Updates are"} ready for ${plural(updateCount, "app", "apps")}`, tone: "info", run: "imageUpdateCenter()" },
+    updateErrors && { text: `${plural(updateErrors, "image", "images")} could not be checked`, tone: "bad", className: "sum-checks", run: "imageUpdateCenter()", tip: "Every other image was compared with its registry" },
+    unchecked && { text: `${plural(unchecked, "image has", "images have")} not been checked yet`, note: true, tip: "Stopped or still starting, so not yet compared with their registries. They are marked ? in the list." },
+  ], narrow: { head: `<b>${head.replace(" running normally.", " running.")}</b>`, parts: apps } });
 }
 
 /* An image with no tag is Docker's latest; saying so is clearer than leaving it off. */
@@ -367,9 +364,9 @@ const workloadRowKey = w => JSON.stringify([w.site?.id || "", w.ns, w.name]);
    a plain reason beside it; a healthy app says Running, its copies when it has
    more than one, and an update waiting for it. */
 function workloadStatusWords(w, update, problem = workloadProblem(w)) {
-  if (problem) return `${UI.chip(problem.chip, problem.tone, { size: "slim" })}<span class="wl-reason xs">${esc(problem.line)}</span>`;
+  if (problem) return `${UI.chip(problem.chip, problem.tone, { size: "slim" })}${UI.reason(esc(problem.line))}`;
   if (w.desired === 0) return '<span class="wl-state dim">Stopped</span>';
-  const ready = update?.available && !updateOwner(update) ? '<span class="wl-reason xs">Update ready</span>' : "";
+  const ready = update?.available && !updateOwner(update) ? UI.reason("Update ready") : "";
   return `<span class="wl-state dim">Running${w.desired > 1 ? `, ${w.desired} copies` : ""}</span>${ready}`;
 }
 /* One line per app (design.md "Resource list"): its name, how it is, what it

@@ -262,6 +262,42 @@ const UI = (() => {
   const facts = (pairs, { icons = true } = {}) => `<dl class="ui-facts${icons ? "" : " plain"}">${pairs.filter(Boolean).map(([label, valueHtml, chosen]) =>
     `<div><dt>${icons ? factIconSvg(label, chosen) : ""}${text(label)}</dt><dd>${valueHtml}</dd></div>`).join("")}</dl>`;
 
+  /* The summary line (design.md "What needs a person is in the summary line"):
+     how things stand (headHtml), then what needs a person, set apart by dots.
+     A part is { text, run?, tone?, note?, tip?, className? }: with run - an
+     onclick already escaped for an attribute, as jsq gives it - a link; with
+     note, quiet words; otherwise words in its tone. The text is plain. A phone
+     shows `narrow` ({ head?, parts? }) when given, otherwise the same line. */
+  const summaryPart = p => {
+    if (!p) return "";
+    const tip = p.tip ? ` data-tip="${text(p.tip)}"` : "";
+    const cls = [p.run ? "linkish sum-link" : p.note ? "sum-note" : "", p.tone ? `sum-${p.tone}` : "", p.className || ""].filter(Boolean).join(" ");
+    return p.run ? `<button type="button" class="${cls}" onclick="${p.run}"${tip}>${text(p.text)}</button>`
+      : `<span class="${cls}"${tip}>${text(p.text)}</span>`;
+  };
+  const summaryJoin = (headHtml, parts) => {
+    const shown = (parts || []).filter(Boolean).map(summaryPart);
+    return `${headHtml}${shown.length ? `${headHtml ? " " : ""}${shown.join(SUM_DOT)}` : ""}`;
+  };
+  const summary = ({ head = "", parts = [], narrow = null } = {}) =>
+    `<span class="sum-wide">${summaryJoin(head, parts)}</span><span class="sum-narrow">${summaryJoin(narrow?.head ?? head, narrow?.parts ?? parts)}</span>`;
+
+  /* A short reason in quiet words: beside a chip (a row's status) or, with
+     under, below a value ("1 copy is missing." under the copies). bodyHtml is
+     HTML: escape what goes in. card names the hover card it opens. */
+  const reason = (bodyHtml, { under = false, card = "" } = {}) => {
+    const attrs = `class="ui-reason${under ? " under" : ""} xs"${card ? ` data-card="${text(card)}"` : ""}`;
+    return under ? `<div ${attrs}>${bodyHtml}</div>` : `<span ${attrs}>${bodyHtml}</span>`;
+  };
+
+  /* A short list of records, each a title and a line under it, then its chip
+     and its actions: a volume's backups in its sidebar. rows: [{ title, mono?,
+     detail?, noteHtml?, chipHtml?, actionsHtml? }]; title and detail are text. */
+  const list = (rows, { empty = "Nothing to show." } = {}) => (rows || []).length
+    ? `<div class="ui-list">${rows.map(r => `<div class="ui-list-row"><div class="ui-list-main"><b class="${r.mono ? "mono small" : "small"}">${text(r.title)}</b>`
+      + `${r.detail ? `<span class="dim xs">${text(r.detail)}</span>` : ""}${r.noteHtml || ""}</div>${r.chipHtml || ""}${r.actionsHtml || ""}</div>`).join("")}</div>`
+    : `<div class="ui-empty">${text(empty)}</div>`;
+
   /* What happened to something, newest first: [{ at, title, detail?, tone? }].
      at is a date, ISO text or epoch seconds or milliseconds; the title and
      detail are plain text. */
@@ -888,7 +924,7 @@ const UI = (() => {
   const openDialog = (title, spec, { wide = false, context = "", child = false } = {}) =>
     (child && typeof childModal === "function" ? childModal : modal)(title, dialog(spec), wide, context);
 
-  return { factIcon, withFactIcons, card, spark, strip, dialog, openDialog, head: subjectHtml, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, activity, logTail, checklist, steps, progress, meter, table, more, ack,
+  return { factIcon, withFactIcons, card, spark, strip, dialog, openDialog, head: subjectHtml, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, activity, logTail, summary, summaryPart, reason, list, checklist, steps, progress, meter, table, more, ack,
     fields, field, typedConfirm, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,

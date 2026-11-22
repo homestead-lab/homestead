@@ -220,7 +220,7 @@ item has: Snapshots or Logs, Activity and Settings.
   (`UI.logTail`), then its address in words ("192.0.2.20 port 8000"), host,
   memory and uptime.
 - **Snapshots** and **Logs** show the item's own records - the snapshot
-  timeline and a compact backup list, the last 200 lines of the log - with
+  timeline and a compact backup list (`UI.list`), the last 200 lines of the log - with
   the buttons for more.
 - **Activity** is what happened to it, newest first (`UI.activity`): the
   cluster's recent events about it, an app's changes, a volume's snapshots
@@ -266,7 +266,9 @@ rather than falling back to the generic icon.
 **What needs a person is in the summary line**, not a card of its own. A list
 page's summary line leads with how things stand ("5 of 6 apps are running
 normally.", "906 GiB of 1,392 GiB is free.") and then names each item that
-needs a person as a link to its details, set apart by a dot (`SUM_DOT`):
+needs a person as a link to its details, set apart by a dot. `UI.summary({
+head, parts, narrow })` builds it, each part a link (`run`), quiet words
+(`note`) or words in a tone, so no page writes the markup itself:
 "nextcloud-data is missing a copy · frigate-config is full in about 11 days".
 The row then says it again in place - a coloured edge, a short note - with the
 button that deals with it. A phone says the short form (`.sum-narrow`): "906
@@ -304,8 +306,8 @@ holds what a person scans for and nothing they look up: the name, with what
 it runs on beneath it; its state; the figures that change; its address; and
 its actions. A healthy item's state reads in quiet words (Running, Running, 3
 copies, with Update ready beside it when one waits); a problem is a chip, a
-short plain reason beside it ("Responses take 2.4 seconds.", "The web check
-fails."), and a coloured edge on the row (`wl-problem bad` or `warn`), so
+short plain reason beside it (`UI.reason`: "Responses take 2.4 seconds.",
+"The web check fails."), and a coloured edge on the row (`wl-problem bad` or `warn`), so
 problems are found by scanning the edge. The check's own figures (HTTP 200 ·
 2840 ms) are for the hover card. The actions are one labelled button that
 fits the item's state - the update when one is waiting, the logs when it is
@@ -317,7 +319,7 @@ shows its icon instead. Where nothing needs doing and no action fits every
 item, as on Volumes, a row has ⋯ alone and a labelled button only when one is
 needed: Rebuild copy when a copy is missing, Expand volume when it fills up.
 Volumes' columns are Volume, Attached to, Copies (dots, and under them what is
-missing or how far a rebuild is), Usage (files against the file system, and a
+missing or how far a rebuild is, `UI.reason(…, { under: true })`), Usage (files against the file system, and a
 Full in … chip under it), Last used and actions.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
