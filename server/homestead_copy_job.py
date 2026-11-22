@@ -7,6 +7,7 @@ import base64
 import copy
 import hashlib
 import json
+import time
 import urllib.error
 
 import homestead_cancel_rerun as CANCEL_RERUN
@@ -38,6 +39,14 @@ EARLIER_LABEL = "homestead.io/storage-copy-earlier"
 DEADLINE_FLOOR = 30 * 60
 SECONDS_PER_GIB = 120
 DEADLINE_CEILING = 48 * 3600
+# Answers to the copy Job's create that say no Job was created. A 409 (a Job of
+# that name is there), a 5xx or no answer at all say nothing about it.
+NOT_CREATED = {400, 403, 404, 422, 429}
+# How long after the create was recorded a Job read by name as missing (404)
+# still counts as perhaps on its way: the answer was lost, so the create may
+# still be done. The client gives up after 15 seconds and the API server ends a
+# request after 60 by default; 120 leaves room for a write finishing late.
+CREATE_SETTLE = 120
 
 
 class KeptStopped(IDENT.Stopped):
@@ -337,9 +346,12 @@ def quiet(dep, read):
     return known and not owned and state.get("observedGeneration", -1) >= dep["metadata"].get("generation", 0) and not state.get("replicas", 0)
 
 
-def copy_finished(ref, read):
+def copy_finished(ref, read, job=None):
+    """(complete, failed) of the Job whose uid was recorded, its pods ended. job
+    is the Job when the caller has just read it."""
     ns = ref["namespace"]
-    job = read(f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}")
+    if job is None:
+        job = read(f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}")
     if IDENT.identity(job)["uid"] != ref["job_uid"]:
         raise IDENT.Stopped("The copy Job was replaced, so its result is not trusted")
     if digest(job.get("spec", {}).get("template")) != ref.get("job_template_digest"):
@@ -352,6 +364,79 @@ def copy_finished(ref, read):
             ROLLOUT.controller(p).get("kind") == "Job" and ROLLOUT.controller(p).get("uid") == ref["job_uid"] and
             p.get("status", {}).get("phase") not in ("Succeeded", "Failed")]
     return complete and not live, failed and not live
+
+
+def _read_job(ref, read):
+    """The copy Job by its recorded name, or None when there is none (404)."""
+    try:
+        return read(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def _settling(ref):
+    """A create with no answer recorded may still be done at the API server."""
+    return (ref.get("phase") == "copy_intent" and not ref.get("job_uid") and
+            time.time() - float(ref.get("intent_at") or 0) < CREATE_SETTLE)
+
+
+def _checking(ns, name):
+    return f"Homestead is checking whether copy Job {ns}/{name} was created. It does not send the request again."
+
+
+def _copy_pods(ref, read, uids):
+    """Pods of this app's copy that have not ended: owned by a Job of the copy,
+    or carrying the copy's labels. A pod whose Job was deleted with
+    --cascade=orphan has no owner left, only its labels."""
+    want = NAMES.labels("restructure", ref["name"])
+    found = []
+    for pod in ROLLOUT.items(read, "/api/v1/pods"):
+        meta = pod.get("metadata", {})
+        if meta.get("namespace") != ref["namespace"] or pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+            continue
+        owner, labels = ROLLOUT.controller(pod), meta.get("labels") or {}
+        if (owner.get("kind") == "Job" and owner.get("uid") in uids) or all(labels.get(k) == v for k, v in want.items()):
+            found.append(meta.get("name", ""))
+    return sorted(found)
+
+
+def copy_stopped(ref, read, job):
+    """"" when nothing of the copy can still write to its volumes, otherwise
+    what still runs. job is the Job read by name, None when it is gone. This
+    never says the copy finished, only that it stopped."""
+    uids = {uid for uid in (ref.get("job_uid"), ref.get("unowned_uid")) if uid}
+    if job is not None:
+        conditions = job.get("status", {}).get("conditions", [])
+        if not any(c.get("type") in ("Complete", "Failed") and c.get("status") == "True" for c in conditions):
+            return f"Copy Job {ref['namespace']}/{ref['job']} is still active"
+        uids.add(IDENT.identity(job)["uid"])
+    live = _copy_pods(ref, read, uids)
+    return f"Copy pod {', '.join(live)} is still running" if live else ""
+
+
+def _without_record(item, job, read, send, ops, admission):
+    """A copy Job with no usable record: gone after it was created, or created
+    (or not) with the answer lost. Its result is never used. Once nothing of the
+    copy runs, the edit is undone as for a failed copy."""
+    ref = item["ref"]
+    name = f"{ref['namespace']}/{ref['job']}"
+    if ref["phase"] == "copy_intent" and job is not None:
+        # Never taken over by name: waited for, and its result not used.
+        ref.update(phase="copy_unowned", unowned_uid=IDENT.identity(job)["uid"])
+        ops.checkpoint(item)
+    if ref["phase"] == "copying":
+        why = f"Copy Job {name} is gone, so it is not known whether the copy finished"
+    elif ref["phase"] == "copy_unowned":
+        why = f"Homestead has no record of creating copy Job {name}, so its result is not used"
+    else:
+        why = f"Homestead could not confirm that copy Job {name} was created, and no Job of that name exists"
+    still = copy_stopped(ref, read, job)
+    if still:
+        return "running", item.get("progress") or 20, f"{why}. {still}. Homestead waits for it to end."
+    ref["job_gone"] = job is None
+    return restore(item, read, send, ops, admission, why)
 
 
 def exclusive(ref, read):
@@ -372,9 +457,16 @@ def resolve(item, read, send, ops, admission):
     phase = ref.get("phase")
     if phase == "restore_intent":
         return resumed_restore(item, read, send)
-    if phase in ("preparing", "copy_intent", "release_intent", "recovery_intent"):
+    if phase in ("preparing", "release_intent", "recovery_intent"):
         return "running", percent, "A request may be unfinished. Choose Check outcome. Homestead does not send it again."
     try:
+        if phase in ("copy_intent", "copy_unowned", "copying"):
+            if _settling(ref):
+                return "running", 20, _checking(ref["namespace"], ref["job"])
+            job = _read_job(ref, read)  # once per poll
+            # Before exclusive(), which fails for good on a copy pod left without its Job.
+            if phase != "copying" or job is None:
+                return _without_record(item, job, read, send, ops, admission)
         if phase == "starting":
             dep = read(IDENT.base(ref["namespace"]) + "/" + ref["name"])
             if IDENT.identity(dep)["uid"] != ref["deployment"]["uid"] or digest(dep["spec"]) != ref["running_digest"]:
@@ -401,10 +493,18 @@ def resolve(item, read, send, ops, admission):
             if not quiet(held(item, read), read):
                 return "running", 10, "Waiting for workload pods to terminate after the placement check"
             exclusive(ref, read)
-            ref.update(phase="copy_intent", job=job_name, copy_gib=gib)
+            ref.update(phase="copy_intent", job=job_name, copy_gib=gib, intent_at=time.time())
             ops._finish(item, "running", 20, f"Starting copy Job {ref['namespace']}/{job_name}. An uncertain request is not repeated.")
             ops.checkpoint(item)  # before POST; never adopt a same-name Job on retry
-            receipt = send("POST", f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs", body)
+            try:
+                receipt = send("POST", f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs", body)
+            except Exception as error:
+                if not (isinstance(error, urllib.error.HTTPError) and error.code in NOT_CREATED):
+                    # No answer, or one that does not say no Job was created: read by name later.
+                    return "running", 20, _checking(ref["namespace"], job_name)
+                ref["job_gone"] = True
+                return restore(item, read, send, ops, admission,
+                               f"Kubernetes refused to create the copy Job (HTTP {error.code}), so nothing was copied")
             meta = IDENT.identity(receipt)
             if (meta["namespace"], meta["name"], receipt.get("kind"), receipt.get("apiVersion")) != (ref["namespace"], job_name, "Job", "batch/v1"):
                 raise IDENT.Stopped("Copy Job creation receipt did not match")
@@ -413,9 +513,9 @@ def resolve(item, read, send, ops, admission):
             return "running", 30, "Copying data. The original volumes are kept."
         if phase != "copying":
             raise IDENT.Stopped("The copy step is unknown. Check the kept resources.")
-        complete, failed = copy_finished(ref, read)
+        complete, failed = copy_finished(ref, read, job)
         if failed:
-            return restore(item, dep, read, send, ops, admission)
+            return restore(item, read, send, ops, admission, failure(job, ref.get("copy_gib")))
         if not complete:
             return "running", 45, "Waiting for the copy Job to finish and release its pods"
         proposed = unheld(dep)
@@ -454,6 +554,12 @@ def resolve(item, read, send, ops, admission):
 
 
 KEPT = "The new volumes and the copy Job were kept for inspection."
+GONE_KEPT = "The new volumes were kept. They may hold only part of the data."
+
+
+def kept(ref):
+    """What was kept, without naming a copy Job that is not there."""
+    return GONE_KEPT if ref.get("job_gone") else KEPT
 
 
 def undone(ref, dep):
@@ -469,26 +575,26 @@ def _undone_message(ref):
     if count:
         return (f"{ref['failure']}. The edit was undone: {name} was started again with {count} "
                 f"replica{'s' if count != 1 else ''} on its configuration and storage from before the edit, "
-                f"which the copy only read. {KEPT}")
+                f"which the copy only read. {kept(ref)}")
     return (f"{ref['failure']}. The edit was undone: {name} has its configuration and storage from before the "
-            f"edit back and stays stopped, as it was before. {KEPT}")
+            f"edit back and stays stopped, as it was before. {kept(ref)}")
 
 
 def _unsure_message(ref):
     return (f"{ref.get('failure') or 'The copy failed'}. Undoing the edit of {ref['name']} may not have been "
-            f"applied: check its pod template, its replica count and the {MARKER} mark before starting it. {KEPT}")
+            f"applied: check its pod template, its replica count and the {MARKER} mark before starting it. {kept(ref)}")
 
 
-def restore(item, dep, read, send, ops, admission):
-    """A copy that failed or ran out of time: the edit is undone. The pod
-    template and replicas from before it come back, so the app runs as it did,
-    on storage the copy only read. Anything that makes that unsafe or unsure
-    keeps the app stopped and says why. The new volumes and the Job are kept."""
+def restore(item, read, send, ops, admission, why):
+    """A copy that failed, ran out of time, or whose Job is gone or was never
+    confirmed (why says which): the edit is undone. The pod template and
+    replicas from before it come back, so the app runs as it did, on storage
+    the copy only read. Anything that makes that unsafe or unsure keeps the app
+    stopped and says why. The new volumes and the Job are kept."""
     ref = item["ref"]
-    why = failure(read(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}"), ref.get("copy_gib"))
 
     def stay(reason):
-        raise KeptStopped(f"{why}. {ref['name']} stays stopped: {reason}. {KEPT}")
+        raise KeptStopped(f"{why}. {ref['name']} stays stopped: {reason}. {kept(ref)}")
     try:
         dep = held(item, read)
         if not quiet(dep, read):
@@ -498,6 +604,10 @@ def restore(item, dep, read, send, ops, admission):
         raise
     except IDENT.Stopped as error:
         stay(str(error).rstrip(".").lower() + ". Check it, then start it")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        stay("the app or a volume of the copy is gone, so the edit cannot be undone. Check the app and its volumes")
     try:
         text = read_earlier(ref, read)
     except Exception:
@@ -579,11 +689,13 @@ def recovery_plan(item, read, ops):
         if IDENT.identity(dep)["uid"] != ref["deployment"]["uid"]:
             return {**plan, "why_not": "The app was replaced, so its hold is not changed"}
         if ref.get("job"):
-            if not ref.get("job_uid"):
-                return {**plan, "why_not": "Whether the copy was created is unknown. Check the recorded Job in Kubernetes. Homestead does not take over or delete it by name."}
-            complete, failed = copy_finished(ref, read)
-            if not (complete or failed):
-                return {**plan, "why_not": "Copy is still active. Wait for its pods to finish before releasing the hold."}
+            # Released once nothing of the copy runs, whatever is known of its Job:
+            # the release starts nothing and changes no storage.
+            if _settling(ref):
+                return {**plan, "why_not": "Homestead is still checking whether the copy Job was created. Try again in 2 minutes."}
+            still = copy_stopped(ref, read, _read_job(ref, read))
+            if still:
+                return {**plan, "why_not": f"{still}. Wait for it to end before releasing the hold."}
         if dep["metadata"].get("annotations", {}).get(MARKER) not in (None, item["id"]):
             return {**plan, "why_not": "Another operation owns this workload's hold"}
         plan.update(can=True, why_not="")
@@ -606,8 +718,8 @@ def recovery_run(item, options, read, send, ops):
         meta = IDENT.identity(dep)
         if meta["uid"] != ref["deployment"]["uid"]:
             raise ValueError("The app was replaced, so no hold was changed")
-        if ref.get("job") and (not ref.get("job_uid") or not any(copy_finished(ref, read))):
-            raise ValueError("The end of the copy cannot be confirmed, so no hold was changed")
+        if ref.get("job") and (_settling(ref) or copy_stopped(ref, read, _read_job(ref, read))):
+            raise ValueError("The copy has not ended, so no hold was changed")
         annotations = dep["metadata"].get("annotations", {})
         if annotations.get(MARKER) not in (None, item["id"]):
             raise ValueError("Another operation owns the hold")

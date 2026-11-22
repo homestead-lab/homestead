@@ -345,18 +345,23 @@ class CopyJobTests(unittest.TestCase):
         self.assertEqual(0, self.dep["spec"]["replicas"])
 
     def test_missing_job_does_not_restart_or_recreate_copy(self):
+        # A gone Job is never created again or read as done: the edit is undone (#1523).
         self.start(); self.poll(); self.jobs.clear()
         self.assertEqual("failed", self.poll()["status"])
         self.poll()
-        self.assertEqual(["PUT", "POST"], [row[0] for row in self.sent])
+        self.assertEqual(["PUT", "POST", "PATCH"], [row[0] for row in self.sent])
+        self.assertEqual("old", self.dep["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
 
     def test_lost_copy_response_preserves_intent_without_retry_or_name_adoption(self):
         self.start()
         self.after_send = lambda *args: (_ for _ in ()).throw(TimeoutError("secret-not-in-journal"))
-        self.assertEqual("failed", self.poll()["status"])
-        self.poll()
+        self.assertEqual("running", self.poll()["status"])  # not known yet, so not failed (#1523)
+        self.assertEqual("copy_intent", ops.stored()[0]["ref"]["phase"])
+        with mock.patch.object(flow, "CREATE_SETTLE", 0):
+            self.poll()
         saved = ops.stored()[0]
-        self.assertEqual("copy_intent", saved["ref"]["phase"])
+        self.assertEqual("copy_unowned", saved["ref"]["phase"])  # waited for, never taken over
+        self.assertNotIn("job_uid", saved["ref"])
         self.assertFalse(flow.recovery_plan(saved, self.read, ops)["can"])
         self.assertEqual(["PUT", "POST"], [row[0] for row in self.sent])
         self.assertNotIn("secret-not-in-journal", json.dumps(saved))
@@ -442,9 +447,9 @@ class Crash(BaseException):
     """Homestead stopping mid-step: nothing after it runs, the journal stays as it was."""
 
 
-class CopyDeadlineTests(unittest.TestCase):
-    """A copy that never runs or never ends: the Job has a deadline, and its
-    failure undoes the edit and starts the app again (on the shared fake)."""
+class OnTheSharedFake(unittest.TestCase):
+    """A reviewed storage copy of app (2 copies, /data on volume old) on the
+    shared fake, and what the tests below check it with."""
     DEP = "/apis/apps/v1/namespaces/lab/deployments/app"
 
     def setUp(self):
@@ -544,6 +549,15 @@ class CopyDeadlineTests(unittest.TestCase):
         for word in words:
             self.assertIn(word, result["message"])
         self.assertEqual(0, self.kube.object(self.DEP)["spec"]["replicas"])
+
+    def record_path(self):
+        uid = self.kube.object(self.DEP)["metadata"]["uid"]
+        return f"/api/v1/namespaces/lab/secrets/{flow.earlier_name(uid)}"
+
+
+class CopyDeadlineTests(OnTheSharedFake):
+    """A copy that never runs or never ends: the Job has a deadline, and its
+    failure undoes the edit and starts the app again (on the shared fake)."""
 
     def test_deadline_grows_with_the_data_between_a_floor_and_a_ceiling(self):
         self.assertEqual(flow.DEADLINE_FLOOR, flow.deadline(0))
@@ -658,10 +672,6 @@ class CopyDeadlineTests(unittest.TestCase):
         self.assertEqual("example/app:2", dep["spec"]["template"]["spec"]["containers"][0]["image"])
         self.assertIsNone(self.kube.object(self.record_path()))  # the record goes once the app is back
 
-    def record_path(self):
-        uid = self.kube.object(self.DEP)["metadata"]["uid"]
-        return f"/api/v1/namespaces/lab/secrets/{flow.earlier_name(uid)}"
-
     def test_the_record_of_before_is_a_secret_owned_by_the_app_and_never_in_its_view(self):
         self.started()
         record = self.kube.object(self.record_path())
@@ -683,6 +693,263 @@ class CopyDeadlineTests(unittest.TestCase):
         self.assertEqual("example/app", dep["spec"]["template"]["spec"]["containers"][0]["image"])
         self.assertNotIn(flow.MARKER, dep["metadata"].get("annotations", {}))
         self.assertEqual("failed", ops.stored()[0]["status"])
+
+
+JOBS = "/apis/batch/v1/namespaces/lab/jobs"
+
+
+class WithoutTheCopyJob(OnTheSharedFake):
+    """What the classes below use: a copy Job taken away from outside, its pods, the Check outcome plan."""
+
+    def begin(self):
+        """The edit saved and the app held stopped; the copy Job is not sent yet."""
+        flow.start(self.body, self.context, self.prepared, restructure.copies(self.body), K.kget, ops, self.apply, send=K.ksend)
+
+    def gone(self, job):
+        """kubectl delete job (background): the Job goes, and the pods it owns with it."""
+        self.kube.discard(f"{JOBS}/{job['metadata']['name']}")
+
+    def copy_pod(self, job, owned=True):
+        """A running pod of the copy, mounting both volumes. owned=False is a pod
+        whose Job was deleted with --cascade=orphan: it keeps its labels only."""
+        meta = {"name": "copy-pod", "namespace": "lab", "labels": job["spec"]["template"]["metadata"]["labels"]}
+        if owned:
+            meta["ownerReferences"] = [{"apiVersion": "batch/v1", "kind": "Job", "name": job["metadata"]["name"],
+                                        "uid": job["metadata"]["uid"], "controller": True}]
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": meta,
+                       "spec": {"volumes": [{"name": "v0", "persistentVolumeClaim": {"claimName": "new"}},
+                                            {"name": "v1", "persistentVolumeClaim": {"claimName": "old"}}]},
+                       "status": {"phase": "Running"}})
+
+    def plan(self):
+        return ops.cancel_plan(ops.stored()[0]["id"])
+
+    def sent(self, method, path):
+        return len([w for w in self.kube.writes if w[0] == method and w[1] == path])
+
+    def assert_still_held(self):
+        dep = self.kube.object(self.DEP)
+        self.assertEqual(0, dep["spec"]["replicas"])
+        self.assertEqual("new", dep["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+        self.assertEqual(0, self.sent("PATCH", self.DEP))
+
+
+class CopyJobGoneTests(WithoutTheCopyJob):
+    """The copy Job deleted while it copies, or after it ended and before
+    Homestead read it (#1523): the edit is undone as for a failed copy, once no
+    pod of the copy runs. What the Job did is never used."""
+
+    def test_a_job_deleted_while_it_copies_undoes_the_edit(self):
+        job = self.started()
+        self.copy_pod(job)
+        self.assertEqual("running", self.poll()["status"])
+        self.gone(job)
+        result = self.poll()
+        self.assertEqual("failed", result["status"])
+        self.assertIn(f"Copy Job lab/{job['metadata']['name']} is gone", result["message"])
+        self.assertIn("started again with 2 replicas", result["message"])
+        self.assertIn("may hold only part of the data", result["message"])
+        self.assertNotIn("copy Job were kept", result["message"])  # there is no Job to keep
+        self.assert_undone(2)
+        self.assertEqual("restored", ops.stored()[0]["ref"]["phase"])
+        self.assertEqual(1, self.sent("POST", JOBS))  # never created again
+
+    def test_a_complete_job_deleted_before_it_was_read_is_not_used(self):
+        job = self.started()
+        self.finish(job, "Complete")
+        self.gone(job)
+        result = self.poll()
+        self.assertIn("is gone", result["message"])
+        self.assert_undone(2)  # on the old volume: the new one is never started on
+
+    def test_a_failed_job_deleted_before_it_was_read_undoes_the_edit(self):
+        job = self.started()
+        self.finish(job, "Failed", "BackoffLimitExceeded")
+        self.gone(job)
+        self.assertIn("is gone", self.poll()["message"])
+        self.assert_undone(2)
+
+    def test_an_orphaned_copy_pod_keeps_the_app_stopped_until_it_ends(self):
+        job = self.started()
+        self.gone(job)
+        self.copy_pod(job, owned=False)
+        result = self.poll()
+        self.assertEqual("running", result["status"])
+        self.assertIn("Copy pod copy-pod is still running", result["message"])
+        self.assert_still_held()
+        self.assertFalse(self.plan()["can"])
+        self.kube.discard("/api/v1/namespaces/lab/pods/copy-pod")
+        self.assertEqual("failed", self.poll()["status"])
+        self.assert_undone(2)
+
+    def test_another_pod_on_the_volumes_keeps_it_stopped_with_words(self):
+        job = self.started()
+        self.gone(job)
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "other", "namespace": "lab"},
+                       "spec": {"volumes": [{"name": "v", "persistentVolumeClaim": {"claimName": "old"}}]},
+                       "status": {"phase": "Running"}})
+        self.assert_kept_stopped(self.poll(), "is gone", "another running pod uses a copy volume")
+        self.assert_still_held()
+
+    def test_a_deleted_source_volume_keeps_it_stopped_with_words(self):
+        job = self.started()
+        self.kube.discard("/api/v1/namespaces/lab/persistentvolumeclaims/old")
+        self.gone(job)
+        self.assert_kept_stopped(self.poll(), "is gone", "the app or a volume of the copy is gone")
+        self.assert_still_held()
+
+    def undo_cut_off(self, applied):
+        """Homestead stops while it sends the undo; the next poll looks and never sends it again."""
+        job = self.started()
+        self.gone(job)
+
+        def crash(who, write):
+            if applied:
+                write()
+            raise Crash()
+        with mock.patch.object(flow, "_as", crash), self.assertRaises(Crash):
+            self.poll()
+        self.assertEqual("restore_intent", ops.stored()[0]["ref"]["phase"])
+        sent = self.sent("PATCH", self.DEP)
+        result = self.poll()
+        self.assertEqual(sent, self.sent("PATCH", self.DEP))
+        self.assertEqual("failed", self.poll()["status"])
+        self.assertEqual(sent, self.sent("PATCH", self.DEP))
+        return result
+
+    def test_a_restart_after_the_undo_was_sent_finishes_as_undone(self):
+        result = self.undo_cut_off(applied=True)
+        self.assertIn("is gone", result["message"])
+        self.assertIn("started again with 2 replicas", result["message"])
+        self.assertIn("may hold only part of the data", result["message"])
+        self.assert_undone(2)
+
+    def test_a_restart_before_the_undo_was_sent_never_sends_it(self):
+        result = self.undo_cut_off(applied=False)
+        self.assertIn("may not have been applied", result["message"])
+        self.assert_still_held()
+
+
+class CopyReceiptLostTests(WithoutTheCopyJob):
+    """Homestead restarted, or lost the answer, between recording the copy Job
+    and saving its uid (#1523). The create is never sent again and a Job of the
+    same name is never taken over: it is waited for, and its result is not used."""
+
+    def cut_off_create(self, applied):
+        self.begin()
+        self.kube.fail(JOBS, Crash(), method="POST", applied=applied)
+        with self.assertRaises(Crash):
+            self.poll()
+        self.assertEqual("copy_intent", ops.stored()[0]["ref"]["phase"])
+
+    def test_a_restart_with_no_record_and_no_job_waits_then_undoes_the_edit(self):
+        self.cut_off_create(applied=False)
+        result = self.poll()  # a create sent just before the restart may still be done
+        self.assertEqual("running", result["status"])
+        self.assertIn("is checking whether copy Job", result["message"])
+        self.assert_still_held()
+        with mock.patch.object(flow, "CREATE_SETTLE", 0):
+            result = self.poll()
+        self.assertEqual("failed", result["status"])
+        self.assertIn("no Job of that name exists", result["message"])
+        self.assert_undone(2)
+        self.assertEqual(1, self.sent("POST", JOBS))
+
+    def test_a_restart_with_no_record_and_a_running_job_waits_and_never_adopts_it(self):
+        self.cut_off_create(applied=True)
+        self.assertIn("is checking whether copy Job", self.poll()["message"])
+        with mock.patch.object(flow, "CREATE_SETTLE", 0):
+            result = self.poll()
+            self.assertEqual("running", result["status"])
+            self.assertIn("still active", result["message"])
+            ref = ops.stored()[0]["ref"]
+            self.assertEqual("copy_unowned", ref["phase"])
+            self.assertNotIn("job_uid", ref)
+            self.assert_still_held()
+            self.assertFalse(self.plan()["can"])
+            self.finish(self.job(), "Complete")
+            result = self.poll()
+        self.assertEqual("failed", result["status"])
+        self.assertIn("its result is not used", result["message"])
+        self.assert_undone(2)
+        self.job()  # kept, not deleted
+        self.assertEqual(1, self.sent("POST", JOBS))
+
+    def test_a_complete_job_of_the_same_name_without_a_record_is_never_used(self):
+        self.cut_off_create(applied=True)
+        self.finish(self.job(), "Complete")  # someone else's, or ours with its answer lost
+        self.assertIn("is checking whether copy Job", self.poll()["message"])
+        self.assert_still_held()
+        with mock.patch.object(flow, "CREATE_SETTLE", 0):
+            result = self.poll()
+        self.assertEqual("failed", result["status"])
+        self.assertIn("its result is not used", result["message"])
+        self.assert_undone(2)  # never started on the new volume
+        self.assertEqual("old", self.kube.object(self.DEP)["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+
+    def test_a_lost_answer_is_never_sent_again(self):
+        self.begin()
+        self.kube.fail(JOBS, TimeoutError("lost"), method="POST", applied=True)
+        self.assertEqual("running", self.poll()["status"])
+        with mock.patch.object(flow, "CREATE_SETTLE", 0):
+            self.assertEqual("running", self.poll()["status"])
+        self.assertEqual("copy_unowned", ops.stored()[0]["ref"]["phase"])
+        self.assertEqual(1, self.sent("POST", JOBS))
+
+
+class CopyCreateRefusedTests(WithoutTheCopyJob):
+    """The copy Job's create answered with an error (#1523). An answer that says
+    it was not created undoes the edit at once; a 409 is checked by name first."""
+
+    def test_a_create_refused_with_403_undoes_the_edit_at_once(self):
+        self.begin()
+        self.kube.fail(JOBS, 403, method="POST")
+        result = self.poll()
+        self.assertEqual("failed", result["status"])
+        self.assertIn("Kubernetes refused to create the copy Job (HTTP 403)", result["message"])
+        self.assert_undone(2)
+        self.assertEqual([], K.kget(JOBS)["items"])
+
+    def test_a_create_answered_409_is_checked_by_name_before_the_undo(self):
+        self.begin()
+        self.kube.fail(JOBS, 409, method="POST")
+        self.assertEqual("running", self.poll()["status"])
+        self.assert_still_held()
+        with mock.patch.object(flow, "CREATE_SETTLE", 0):
+            result = self.poll()
+        self.assertIn("no Job of that name exists", result["message"])
+        self.assert_undone(2)
+
+
+class CopyGoneReleaseTests(WithoutTheCopyJob):
+    """When the undo is refused, Release hold stays the way out, but only once no pod of the copy runs."""
+
+    def refused_undo(self):
+        job = self.started()
+        self.kube.discard(self.record_path())  # nothing to undo the edit with
+        self.gone(job)
+        return job
+
+    def test_release_hold_is_offered_when_the_undo_refused_and_no_copy_pod_runs(self):
+        self.refused_undo()
+        self.assert_kept_stopped(self.poll(), "is gone", "Edit it back")
+        self.assertTrue(self.plan()["can"])
+        ops.cancel(ops.stored()[0]["id"], {"ack": True}, "app")
+        self.poll()  # the jobs loop applies a copy job's cancel
+        dep = self.kube.object(self.DEP)
+        self.assertNotIn(flow.MARKER, dep["metadata"].get("annotations", {}))
+        self.assertEqual(0, dep["spec"]["replicas"])  # released, not started
+
+    def test_release_hold_waits_while_a_copy_pod_runs(self):
+        job = self.refused_undo()
+        self.copy_pod(job, owned=False)
+        self.assertEqual("running", self.poll()["status"])
+        plan = self.plan()
+        self.assertFalse(plan["can"])
+        self.assertIn("Copy pod copy-pod is still running", plan["why_not"])
+        self.kube.discard("/api/v1/namespaces/lab/pods/copy-pod")
+        self.assert_kept_stopped(self.poll(), "Edit it back")
+        self.assertTrue(self.plan()["can"])
 
 
 if __name__ == "__main__":
