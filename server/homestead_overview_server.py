@@ -49,6 +49,7 @@ import homestead_vip_registry as REG
 import homestead_node_probes as PROBES
 import homestead_nodes as NODES
 import homestead_operations as OPS
+import homestead_os_rollout as OS_ROLLOUT
 import homestead_outage as OUTAGE
 import homestead_outage_carry as OUTAGE_CARRY
 import homestead_outage_sweep as OUTAGE_SWEEP
@@ -344,6 +345,7 @@ def _alert_sources():
     take("watchdog", _watchdog_facts)
     take("disks", lambda: DISKS.alert_facts(cached("disks", keep, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
+    take("os-updates", OS_ROLLOUT.alert_facts)
     take("ports", lambda: PORTS.alert_facts(cached("ports", keep, NODES.ports_report)))
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())

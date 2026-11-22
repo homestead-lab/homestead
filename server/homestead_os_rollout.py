@@ -464,7 +464,8 @@ def step(state, now=None):
         if verdict == "go":
             rollout["canary_passed"], rollout["phase"] = True, "next"
         elif verdict == "stop":
-            rollout["stop"], rollout["failed"], rollout["phase"] = True, True, "next"
+            # A hold, not a host that broke: the run ends "stopped", the other hosts left as they are (#1527).
+            rollout["stop"], rollout["phase"] = True, "next"
             rollout["canary_failed"] = words
         changed = rollout.get("message") != words
         rollout["message"] = words[:300]
@@ -646,6 +647,11 @@ def _finish(state, rollout, now):
         (rollout["index"] < len(rollout["nodes"]) or rollout.get("stopped_waiting")) else "succeeded"
     rollout["finished"] = int(now)
     words = [f"{len(results)} host{'s' if len(results) != 1 else ''} done", f"{restarted} restarted"]
+    if rollout.get("canary_failed"):
+        # What happened to which host, first (#1527): the canary is the one host done.
+        first = results[0] if results else {}
+        words = [f"{rollout['canary']} was updated first{', and restarted' if first.get('restarted') else ''}. "
+                 f"Its check stopped the update: {rollout['canary_failed']}"]
     if waiting:
         # Why the first was not restarted - the review's reason - so the job
         # says what to fix, not only who waits.
@@ -658,8 +664,6 @@ def _finish(state, rollout, now):
     failed = [r for r in results if not r["ok"]]
     if failed:
         words.append(f"{failed[-1]['node']}: {failed[-1]['note']}")
-    if rollout.get("canary_failed"):
-        words.append(f"stopped: {rollout['canary_failed']}")
     for name, row in sorted((rollout.get("hold_failed") or {}).items()):
         words.append(f"automatic updates could not be held on {name} ({row.get('error')})")
     rollout["message"] = "; ".join(words)
@@ -823,8 +827,29 @@ def status(item):
             return JOB_STATUS.get(last.get("status"), last.get("status") or "succeeded"), 100, last.get("message") or ""
         return "failed", item.get("progress", 0), "this rollout's record is gone"
     total = max(1, len(rollout.get("nodes") or []))
-    progress = min(99, int(rollout.get("index", 0) * 100 / total)) if rollout.get("status") == "running" else 100
+    # A stopped run shows the share of its hosts it reached, not a full bar for every host (#1527).
+    progress = min(99, int(rollout.get("index", 0) * 100 / total)) if rollout.get("status") in ("running", "stopped") else 100
     return JOB_STATUS.get(rollout.get("status"), rollout.get("status", "running")), progress, rollout.get("message", "")
+
+
+def alert_facts():
+    """A run its first host's check stopped, as an alert (#1527) until a new run
+    starts or its job is dismissed. Raised after the stop and gone once a new run
+    begins, so it is never new during that run's check (homestead_os_canary)."""
+    rollout = _load().get("rollout") or {}
+    if rollout.get("status") != "stopped" or not rollout.get("canary_failed"):
+        return []
+    # Its job, found by its ref: start() saves the run before the job is made.
+    job = next((item.get("id") for item in OPS.stored() if item.get("kind") == "os-rollout"
+                and (item.get("ref") or {}).get("rollout") == rollout.get("id")), "")
+    if not job:
+        return []    # its job was dismissed
+    return [{"key": f"os-update-stopped:{rollout.get('id')}", "category": "degraded", "severity": "degraded",
+             "title": "An OS update stopped after its first host",
+             "resolved": "The stopped OS update no longer needs attention",
+             "body": f"{rollout.get('message') or rollout['canary_failed']}. Starting the update again checks the first host "
+                     "for another day before the other hosts. Dismissing its job clears this alert.",
+             "href": f"/?job={job}"}]
 
 
 def report():

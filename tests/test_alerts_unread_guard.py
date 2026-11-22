@@ -55,6 +55,7 @@ ALLOWED = {
     ("housekeeping", "*"): "the data volume's free space (statvfs)",
     ("jobs", "*"): "Homestead's own jobs, in memory (OPS.snapshot)",
     ("outage", "*"): "the outage loop's state file in the data dir",
+    ("os-updates", "*"): "an OS update stopped by its first host's check: the run's record and its job, in the data dir (#1527)",
     ("rootguard", "*"): "the root-disk guard's state file in the data dir",
     ("schedules", "*"): "scheduled stop/start results, from the data dir",
     ("self-data-grow", "*"): "the automatic move of Homestead's data to Longhorn, its record in the data dir",
