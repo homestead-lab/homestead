@@ -302,9 +302,14 @@ def plan(node):
                     ("two members need both: add a third soon" if after == 2 else
                      "losing any one keeps the cluster up" if after % 2 else "an even count adds no failure margin"))
     pods = [x for x in kget("/api/v1/pods").get("items", []) if (x.get("spec") or {}).get("nodeName") == node]
-    local = MAINTENANCE.inventory(kget, pods).get("local_storage") or []
+    stored = MAINTENANCE.inventory(kget, pods).get("local_storage") or []
+    local = [r for r in stored if MAINTENANCE.on_host(r)]
     if local:
         warnings.append("Kept on this host, waiting for it: " + ", ".join(str(r.get("pod") or r) for r in local[:6]))
+    shares = [f"{r.get('pod')} ({r.get('source')})" for r in stored if not MAINTENANCE.on_host(r)]
+    if shares:
+        warnings.append("These apps use a shared folder on another server. It must be reachable when they start again: "
+                        + ", ".join(shares[:6]))
     warnings.append(f"{node} is out of service for several minutes while k3s reinstalls")
     facts = {"uid": (host.get("metadata") or {}).get("uid", ""), "version": version,
              "server": (p.get("control_plane") or [""])[0], "settings": shared, "host_settings": host_settings,

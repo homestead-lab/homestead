@@ -21,6 +21,7 @@ import homestead_cordon as CORDON
 import homestead_history as HISTORY
 import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_leader as LEADER
+import homestead_maintenance as MAINTENANCE
 import homestead_node_actions as NODE_ACTIONS
 import homestead_names as NAMES
 import homestead_operations as OPS
@@ -950,7 +951,7 @@ def _unattended_plan(node, allow_single_copy):
         # Nor are the host's own sockets and devices data: Longhorn's CSI
         # attacher mounts /var/lib/kubelet/plugins/driver.longhorn.io.
         kept = [f"{row['pod']} ({row['source']})" for row in (power_plan.get("maintenance") or {}).get("local_storage") or []
-                if not str(row.get("kind", "")).startswith("emptyDir") and not _system_host_path(row)]
+                if MAINTENANCE.on_host(row) and not str(row.get("kind", "")).startswith("emptyDir") and not _system_host_path(row)]
         if kept:
             reasons.append("pods keep data on this host itself: " + ", ".join(kept[:4]))
             parts.append(_part("host-data", _counted(len(kept), "pod keeps", "pods keep") + " data on this host itself.",

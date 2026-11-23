@@ -285,7 +285,7 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
             "maintenance": maintenance,
             "drain_pods": drain_pods,
             "drain_blockers": drain_blockers, "requires_blocker_ack": bool(drain_blockers),
-            "requires_data_ack": storage_unknown or bool(maintenance["local_storage"]) or any(v["risk"] in ("unavailable", "single-copy") for v in affected),
+            "requires_data_ack": storage_unknown or any(MAINTENANCE.on_host(row) for row in maintenance["local_storage"]) or any(v["risk"] in ("unavailable", "single-copy") for v in affected),
             "blockers": blockers, "warnings": warnings, "ready": not blockers,
             "overridable": soft, "hard_blockers": hard, "force": bool(force), "planned_outage": planned_outage,
             "cordoned": bool((node_obj.get("spec") or {}).get("unschedulable"))}

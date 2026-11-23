@@ -100,6 +100,17 @@ def helper_blocker(pod):
     return guidance.get(task, "")
 
 
+# CSI drivers whose volumes are folders on a file server (#1545).
+NETWORK_SHARE_DRIVERS = ("nfs.csi.k8s.io", "smb.csi.k8s.io")
+
+
+def on_host(row):
+    """Whether a local_storage row is data kept on the host itself. An NFS or
+    SMB share keeps it on its server: listed, but no reason to hold the host.
+    A host path that is a share mounted on the host still counts (#1545)."""
+    return not row.get("network_share")
+
+
 def inventory(get, pods, namespace=None, draining=True):
     budgets = items(get, "/apis/policy/v1/poddisruptionbudgets")
     rows, blockers, storage, waiting = [], [], [], []
@@ -149,7 +160,7 @@ def inventory(get, pods, namespace=None, draining=True):
         if temporary:
             continue
         for volume in spec.get("volumes") or []:
-            kind, source = "", ""
+            kind, source, share = "", "", False
             if "emptyDir" in volume:
                 kind, source = ("emptyDir (deleted by drain)" if draining else "emptyDir (temporary pod storage)"), volume.get("name", "?")
             elif "hostPath" in volume:
@@ -167,10 +178,11 @@ def inventory(get, pods, namespace=None, draining=True):
                     continue
                 kind = "host-local PVC" if "local" in pv_spec or "hostPath" in pv_spec else "external PVC (availability unverified)"
                 source = str(claim)
+                share = "nfs" in pv_spec or (pv_spec.get("csi") or {}).get("driver") in NETWORK_SHARE_DRIVERS
             elif "nfs" in volume:
-                kind, source = "external NFS (availability unverified)", (volume["nfs"] or {}).get("server", "?")
+                kind, source, share = "external NFS (availability unverified)", (volume["nfs"] or {}).get("server", "?"), True
             elif any(key not in ("name", "configMap", "secret", "projected", "downwardAPI") for key in volume):
                 blockers.append(identity + ": unsupported storage source " + volume.get("name", "?"))
             if kind:
-                storage.append({"pod": identity, "kind": kind, "source": source})
+                storage.append({"pod": identity, "kind": kind, "source": source, **({"network_share": True} if share else {})})
     return {"budgets": rows, "local_storage": storage, "blockers": blockers, "waiting": waiting}
