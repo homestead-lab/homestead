@@ -1115,7 +1115,9 @@ window.hardwareFeatureEdit = async id => {
   if (!(STATE.data.nodes || STATE.data.ov?.nodes)?.length) {
     try { STATE.data.nodes = await api("/api/nodes"); } catch (e) { hostsUnread = e.message; }
   }
-  const nodes = STATE.data.nodes || STATE.data.ov?.nodes || [];
+  // A feature is this cluster's: its hosts only, never a linked cluster's rows (#1211).
+  const nodes = (STATE.data.nodes || STATE.data.ov?.nodes || []).filter(n => !remoteRow(n));
+  HW_BROWSE.clear();
   childModal((id ? "Edit" : "Add") + " hardware feature", `
     <div class="f2"><div class="f"><label>Feature ID ${tip("A fixed ID used by apps, VMs and host labels. It cannot be changed after it is created.")}</label><input id="hf_id" value="${esc(old.id)}" ${id ? "disabled" : ""} placeholder="hailo-8"></div>
       <div class="f"><label>Display name</label><input id="hf_name" value="${esc(old.name)}" placeholder="Hailo-8 accelerator"></div></div>
@@ -1137,10 +1139,27 @@ window.hardwareFeatureEdit = async id => {
     ${UI.actions(`<button class="btn pri" onclick="hardwareFeatureSave(${jsq(id || "")} )">Save feature</button><button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`, true);
   hardwareBrowseRender();
 };
-window.hardwareBrowseRender = () => {
+/* A host's devices come with its own read, not with the host list (#1211):
+   read once per host while the editor is open, again after a failure. */
+const HW_BROWSE = new Map();
+window.hardwareBrowseRender = async () => {
   const host = $("#hf_browse_node")?.value;
+  if (!host) return;
+  if (!HW_BROWSE.has(host)) {
+    HW_BROWSE.set(host, api("/api/node?name=" + encodeURIComponent(host)).then(node => ({ node }), e => ({ error: e.message })));
+    const wait = $("#hf_browse_results");
+    if (wait) wait.innerHTML = '<div class="empty small">Reading the devices on this host…</div>';
+  }
+  const read = await HW_BROWSE.get(host);
+  if ($("#hf_browse_node")?.value !== host) return;   // another host was chosen meanwhile
+  if (read.error) {
+    HW_BROWSE.delete(host);
+    const el = $("#hf_browse_results");
+    if (el) el.innerHTML = UI.callout("warn", "The devices on this host could not be read", esc(read.error));
+    return;
+  }
   const q = ($("#hf_browse_q")?.value || "").trim().toLowerCase();
-  const node = (STATE.data.nodes || STATE.data.ov?.nodes || []).find(n => n.name === host);
+  const node = read.node;
   const dev = node?.temps?.devices || {};
   const pathEntries = (dev.path_entries || (dev.paths || []).map(path => ({ path, type: "File" })))
     .map(x => ({ kind: "path", path: x.path, type: x.type || "File", search: `${x.path} ${x.type}`.toLowerCase() }));

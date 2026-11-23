@@ -9,6 +9,7 @@ import urllib.error
 import urllib.parse
 from datetime import datetime, timezone
 import homestead_alerts as ALERTS
+import homestead_host_rows as HOST_ROWS
 import homestead_roles as ROLES
 import homestead_routes
 
@@ -605,6 +606,7 @@ def events():
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/cluster"): ("viewer", lambda request: homestead_routes.cached("cluster", 15, inventory)),
-    ("GET", "/api/overview"): ("viewer", lambda request: homestead_routes.page_aged("ov", overview)),
+    # Its host rows as /api/nodes sends them (#1211).
+    ("GET", "/api/overview"): ("viewer", lambda request: HOST_ROWS.overview(homestead_routes.page_aged("ov", overview))),
     ("GET", "/api/events"): ("viewer", lambda request: homestead_routes.cached("ev", 10, events)),
 }
