@@ -15,7 +15,7 @@ function setup(plan, { role = "admin", removeFails = false } = {}) {
     $$: s => s === "input[data-drain-ack]" ? Object.values(fields).filter(f => f && f.dataset && "drainAck" in f.dataset) : [],
     can: need => need !== "admin" || role === "admin",
     childModal: (title, body) => { steps.push(`open ${title}`); html = body; }, modal: (_, body) => { html = body; },
-    modalBack: () => { steps.push("back"); }, toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {},
+    modalBack: () => { steps.push("back"); }, toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {}, clearTimeout() {},
     api: async (path, options) => {
       if (path.startsWith("/api/node/power/plan")) { steps.push("plan"); fetched.push(path); return state.plan; }
       if (path === "/api/node/orphans/remove") {

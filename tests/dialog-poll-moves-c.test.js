@@ -180,3 +180,62 @@ test("Starting elsewhere: a job that stopped shows Stopped and ends the reads", 
   await w.clock.advance(20000);
   assert.equal(w.reads.length, 1);
 });
+
+/* ---- host power job ---- */
+const powerJob = (status, extra = {}) => [{ id: "power-1", status, progress: 30, message: "Moving apps",
+  power: { action: "reboot", phase: status === "running" ? "draining" : "observing" }, ...extra }];
+for (const [name, check] of dialogLoopCases([{
+  name: "host power job", files: "views-lifecycle-node-power.js", path: "/api/operations", exact: true, every: 2000, host: "#pwProgress",
+  open: w => w.ctx.nodePowerFollow("power-1"),
+  running: () => powerJob("running"),
+  done: () => powerJob("succeeded"),
+  failed: /Waiting for Homestead to reconnect/, failedShowsCause: false, afterFailure: "retry",
+  // A host restart or shutdown is followed as it happens, in a hidden tab too (decided 12 Nov for dangerous operations).
+  background: true,
+}])) test(name, check);
+
+test("host power job: an access error says so and ends the reads", async () => {
+  const w = world("views-lifecycle-node-power.js");
+  w.ctx.nodePowerFollow("power-1"); await w.clock.settle();
+  w.reads[0].fail(Object.assign(new Error("forbidden"), { status: 403 })); await w.clock.settle();
+  assert.match(w.fields["#pwProgress"].innerHTML, /Sign in with access to Jobs/);
+  await w.clock.advance(20000);
+  assert.equal(w.reads.length, 1);
+  assert.equal(w.clock.pending(), 0);
+});
+
+test("host power job: following another job replaces the first, one read at a time", async () => {
+  const w = world("views-lifecycle-node-power.js");
+  w.ctx.nodePowerFollow("power-1"); await w.clock.settle();
+  const first = w.reads[0];
+  w.ctx.nodePowerFollow("power-2"); await w.clock.settle();
+  assert.equal(first.signal?.aborted, true, "the first job's read is cancelled");
+  w.answers.auto = r => r.answer([{ ...powerJob("running")[0], id: "power-2" }]);
+  w.reads[1].answer([{ ...powerJob("running")[0], id: "power-2" }]);
+  const before = w.reads.length;
+  await w.clock.advance(8000);
+  assert.equal(w.reads.length - before, 4, "one read every 2 s, not two");
+});
+
+test("host power job: the disconnected minutes count from the first failed read, through a read given up and a hidden tab", async () => {
+  const w = world("views-lifecycle-node-power.js");
+  w.ctx.Date = { now: () => 1e12 + w.clock.now() };   // the dialog's clock is the test's
+  const shown = () => w.fields["#pwProgress"].innerHTML;
+  w.ctx.nodePowerFollow("power-1"); await w.clock.settle();
+  w.reads[0].answer(powerJob("running")); await w.clock.advance(2000);
+  w.reads[1].fail(new Error("connection refused")); await w.clock.settle();      // lost at 2 s
+  assert.match(shown(), /Waiting for Homestead to reconnect/);
+  assert.doesNotMatch(shown(), /disconnected for/);
+  await w.clock.advance(2000);                                                    // the read at 4 s never answers
+  await w.clock.advance(30000);                                                   // given up at 34 s: still disconnected
+  assert.equal(w.reads[2].signal.aborted, true);
+  assert.match(shown(), /Waiting for Homestead to reconnect/);
+  w.answers.auto = r => r.fail(new Error("connection refused"));
+  w.document.show(false);
+  const hiddenFrom = w.reads.length;
+  // 962 s is 16 min after the loss at 2 s, but under 16 min after the give-up at 34 s.
+  await w.clock.advance(962000 - w.clock.now());
+  assert.ok(w.reads.length - hiddenFrom >= 400, "reads go on every 2 s in a hidden tab");
+  assert.match(shown(), /disconnected for 16 min/, "counted from the first failed read, hidden time included");
+  assert.match(shown(), /Still waiting for Homestead/);
+});

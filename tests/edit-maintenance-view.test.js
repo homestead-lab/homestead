@@ -1,6 +1,7 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const { fakeClock } = require("./helpers/dialog-poll-world");
 
 function setup(review) {
   let html = "", fail = false;
@@ -8,7 +9,7 @@ function setup(review) {
     "#mbody": { insertAdjacentHTML(_where,body) { html += body; } } };
   const c = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {}, getElementById: id => fields['#' + id] || null },
     $: s => fields[s], esc: s => String(s).replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
-    childModal: (_, body) => { html = body; }, modal: (_, body) => { html = body; }, toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {}, tip: () => "",
+    childModal: (_, body) => { html = body; }, modal: (_, body) => { html = body; }, toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {}, clearTimeout() {}, tip: () => "",
     api: async (path, options) => {
       if (path === "/api/edit/preview") return review;
       if (path.startsWith("/api/node/power/plan")) return review;
@@ -313,8 +314,9 @@ test('power follow reconnects to the same job and displays its confirmed result'
       if(++reads===1) throw new Error('offline');
       return status==='missing'?[]:[{...initial,status,progress:100,message:status==='succeeded'?'Host returned':'Power was not sent'}];
     };
-    t.c.setTimeout=resolve=>resolve();
-    await t.c.window.nodePowerFollow('power-1','',initial);
+    const clock=fakeClock(); t.c.setTimeout=clock.setTimeout; t.c.clearTimeout=clock.clearTimeout;
+    t.c.window.nodePowerFollow('power-1','',initial);
+    await clock.advance(2000);
     assert.match(seen[0],/Waiting for Homestead to reconnect/);
     assert.match(seen.at(-1),status==='succeeded'?/Finished/:status==='failed'?/Stopped/:/The job was not found/);
     assert.doesNotMatch(seen.at(-1),/Waiting for Homestead to reconnect/);
@@ -327,8 +329,9 @@ test('power follow renders loss before its first status and stops on access erro
   t.fields['#pwProgress']={set innerHTML(html){seen.push(html);}};
   let reads=0;
   t.c.api=async ()=>{throw Object.assign(new Error('unavailable'), ++reads===1?{}:{status:403});};
-  t.c.setTimeout=resolve=>resolve();
-  await t.c.window.nodePowerFollow('power-1');
+  const clock=fakeClock(); t.c.setTimeout=clock.setTimeout; t.c.clearTimeout=clock.clearTimeout;
+  t.c.window.nodePowerFollow('power-1');
+  await clock.advance(2000);
   assert.match(seen[0],/current state cannot be confirmed/);
   assert.doesNotMatch(seen[0],/Last confirmed progress|Starting/);
   assert.match(seen[1],/Sign in with access to Jobs/);
