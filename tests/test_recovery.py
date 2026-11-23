@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_audit as AUDIT
 import homestead_data_copies as DATA_COPIES
+import homestead_history as HISTORY
 import homestead_names as NAMES
 import homestead_priority as PRIORITY
 import homestead_recovery as recovery
@@ -1013,6 +1014,109 @@ class AutoStatusTests(AutoCase):
 
     def test_the_routes_are_registered(self):
         self.assertIn("homestead_recovery", homestead_routes.MODULES)
+
+
+class DeclaredMaintenanceTests(AutoCase):
+    """A host a person put in maintenance (Hosts -> Maintenance) holds moving
+    containers back like any host away, and the hold says so in the Hosts page's
+    words for the maintenance's state."""
+
+    def setUp(self):
+        super().setUp()
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        rebind(self, HISTORY, folder.name)
+
+    def c_in_maintenance_and_b_back(self, declared=True, until=at(20), c=None):
+        self.nodes = [node("a"), node("b"), node("c")]
+        recovery.tick(at(10))
+        if declared:
+            HISTORY.maintenance_declare("c", "Drive swap", "op-1", until, cordoned_before=False, node_uid="u-c",
+                                        now=at(10, 30))
+        c = c or node("c", cordoned=True)
+        self.nodes = [node("a"), node("b", ready=False), c]
+        recovery.tick(at(11))
+        self.nodes = [node("a"), node("b"), c]
+        recovery.tick(at(12))
+
+    def said(self):
+        """The stored reasons, Settings' list, and the alert's title and body."""
+        fact, = [f for f in recovery.alert_facts("auto", WINDOW) if f["key"] == "recovery:rebalance"]
+        return self.waiting(), " ".join(recovery.status()["waiting"]), fact["title"], fact["body"]
+
+    def test_open_maintenance_is_named_everywhere_the_hold_is_said(self):
+        self.c_in_maintenance_and_b_back()
+        self.go()
+        self.start.assert_not_called()
+        reasons, settings, title, body = self.said()
+        self.assertEqual("c is in maintenance", reasons)
+        self.assertEqual("c is in maintenance", settings)
+        self.assertEqual("b is back, but moving containers back waits: c is in maintenance", title)
+        self.assertIn("Waiting: c is in maintenance.", body)
+        self.assertNotIn("c is away", title + body)
+
+    def test_maintenance_that_ran_out_on_a_host_that_is_down_is_not_called_maintenance(self):
+        self.c_in_maintenance_and_b_back(until=at(11, 30), c=node("c", ready=False, cordoned=True))
+        self.go()
+        self.start.assert_not_called()
+        reasons, settings, title, body = self.said()
+        self.assertEqual("c is away, maintenance ran out", reasons)
+        self.assertEqual("b is back, but moving containers back waits: c is away, maintenance ran out", title)
+        self.assertNotIn("in maintenance", reasons + title + body)
+
+    def test_an_end_that_did_not_finish_says_so(self):
+        self.c_in_maintenance_and_b_back()
+        HISTORY.maintenance_end("op-1", now=at(12, 5))
+        self.go()
+        reasons, settings, title, body = self.said()
+        self.assertEqual("c is away, maintenance not finished", reasons)
+        self.assertIn("waits: c is away, maintenance not finished", title)
+
+    def test_a_host_away_beside_one_in_maintenance_keeps_its_words(self):
+        self.nodes = [node("a"), node("b"), node("c"), node("d")]
+        recovery.tick(at(10))
+        HISTORY.maintenance_declare("c", "Drive swap", "op-1", at(20), cordoned_before=False, node_uid="u-c",
+                                    now=at(10, 30))
+        self.nodes = [node("a"), node("b", ready=False), node("c", cordoned=True), node("d", ready=False)]
+        recovery.tick(at(11))
+        self.nodes = [node("a"), node("b"), node("c", cordoned=True), node("d", ready=False)]
+        recovery.tick(at(12))
+        self.go()
+        reasons, settings, title, body = self.said()
+        self.assertEqual("c is in maintenance d is away", reasons)
+        self.assertEqual("b is back, but moving containers back waits: d is away and c is in maintenance", title)
+
+    def test_a_cordoned_host_with_no_maintenance_is_still_away(self):
+        self.c_in_maintenance_and_b_back(declared=False)
+        self.go()
+        self.start.assert_not_called()
+        reasons, settings, title, body = self.said()
+        self.assertEqual("c is away", reasons)
+        self.assertEqual("b is back, but moving containers back waits: c is away", title)
+
+    def test_once_maintenance_is_released_it_is_away_again(self):
+        self.c_in_maintenance_and_b_back()
+        HISTORY.maintenance_release("op-1", now=at(12, 20))
+        self.go(at(12, 21))
+        self.assertEqual("c is away", self.waiting())
+
+    def test_the_store_is_read_only_while_a_host_is_away(self):
+        with mock.patch.object(HISTORY, "declared_view", wraps=HISTORY.declared_view) as read:
+            self.back_at_noon()
+            self.go()
+        read.assert_not_called()
+
+    def test_a_store_that_cannot_be_read_says_away_and_is_noted_once(self):
+        self.c_in_maintenance_and_b_back()
+        broken = mock.patch.object(HISTORY, "declared_view", side_effect=OSError("disk gone"))
+        with broken, mock.patch("builtins.print") as printed:
+            self.go()
+            self.go(at(12, 17))
+            self.go(at(12, 18))
+        self.assertEqual("c is away", self.waiting())
+        self.assertEqual(1, sum("declared maintenance was not read" in str(c) for c in printed.call_args_list))
+        self.go(at(12, 19))
+        self.assertEqual("c is in maintenance", self.waiting())
 
 
 class AutoAlertTests(AutoCase):
