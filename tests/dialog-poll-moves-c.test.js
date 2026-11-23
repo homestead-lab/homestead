@@ -132,3 +132,51 @@ test("Image store: drawn again while following (a filter, Keep, Try again), it r
   await w.clock.advance(20000);
   assert.equal(storeReads(w).length - before, 4, "one read every 5 s, not two");
 });
+
+/* ---- Starting elsewhere ---- */
+const restartJob = (status, extra = {}) => [{ id: "job-1", status, progress: status === "succeeded" ? 100 : 40, message: "Waiting for the pod on node-b", ...extra }];
+for (const [name, check] of dialogLoopCases([{
+  name: "Starting elsewhere", files: "set-restart.js", path: "/api/operations", exact: true, every: 2000, host: "#srProgress",
+  open: w => w.ctx.setRestartFollow("job-1", "db"),
+  running: () => restartJob("running"),
+  done: () => restartJob("succeeded"),
+  // Before the first answer a failed read leaves "Starting…" (below: after one, "Reconnecting").
+  failed: null, afterFailure: "retry",
+}])) test(name, check);
+
+async function restartOpened() {
+  const w = world("set-restart.js");
+  w.ctx.setRestartFollow("job-1", "db");
+  await w.clock.settle();
+  return w;
+}
+
+test("Starting elsewhere: after an answer, a failed read keeps the last progress, says Reconnecting, and tries again", async () => {
+  const w = await restartOpened();
+  w.reads[0].answer(restartJob("running")); await w.clock.advance(2000);
+  w.reads[1].fail(new Error("connection refused")); await w.clock.settle();
+  const shown = w.fields["#srProgress"].innerHTML;
+  assert.match(shown, /Reconnecting/);
+  assert.match(shown, /Waiting for the pod on node-b/, "the last progress stays");
+  await w.clock.advance(2000);
+  assert.equal(w.reads.length, 3);
+  w.reads[2].answer(restartJob("running", { message: "Pod started" })); await w.clock.settle();
+  assert.doesNotMatch(w.fields["#srProgress"].innerHTML, /Reconnecting/);
+});
+
+test("Starting elsewhere: a job that is not found says so and ends the reads", async () => {
+  const w = await restartOpened();
+  w.reads[0].answer([]); await w.clock.settle();
+  assert.match(w.fields["#srProgress"].innerHTML, /Job not found/);
+  await w.clock.advance(20000);
+  assert.equal(w.reads.length, 1);
+  assert.equal(w.clock.pending(), 0);
+});
+
+test("Starting elsewhere: a job that stopped shows Stopped and ends the reads", async () => {
+  const w = await restartOpened();
+  w.reads[0].answer(restartJob("failed", { message: "The pod did not start" })); await w.clock.settle();
+  assert.match(w.fields["#srProgress"].innerHTML, /Stopped/);
+  await w.clock.advance(20000);
+  assert.equal(w.reads.length, 1);
+});
