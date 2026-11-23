@@ -75,9 +75,15 @@ def _heal_icon(reference, annotations):
 
 
 def display_icon(annotations):
+    """An app's logo for a list row: its cached file's /api/icons/ reference,
+    which the browser fetches once and keeps (#1211), not the picture itself:
+    a list read every 15 seconds carried every logo again each time."""
     reference = NAMES.read(annotations, "icon")
     try:
-        return ICONS.data_url(_ICON_HEALED.get(reference, reference), DATA_DIR)
+        shown = _ICON_HEALED.get(reference, reference) or ""
+        if shown.startswith("/api/icons/"):
+            ICONS.resolve(shown, DATA_DIR)     # a file not here is no logo, and its repair is asked for
+        return shown
     except FileNotFoundError:
         if str(reference or "").startswith("/api/icons/") and                 time.time() - _ICON_TRIED.get(reference, 0) > ICON_RETRY_SECONDS:
             _ICON_TRIED[reference] = time.time()

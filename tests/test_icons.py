@@ -82,7 +82,7 @@ class IconCacheTests(unittest.TestCase):
         # core.js and its parts (#911): the icon loader and the repaints that call it.
         core = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "web" / "js").glob("core*.js")))
         self.assertIn('icon.startsWith("/api/icons/")', core)
-        self.assertIn('fetch(url, { credentials: "same-origin", cache: "no-store" })', core)
+        self.assertIn('fetch(url, { credentials: "same-origin" })', core)
         self.assertIn("URL.createObjectURL(blob)", core)
         self.assertIn("loadAppIcons(host)", core)
         self.assertIn('img.addEventListener("load", loaded', core)
@@ -99,7 +99,7 @@ class IconCacheTests(unittest.TestCase):
             reference = icons.persist("https://example.com/logo.png", data_dir)
             with mock.patch.object(server.NAMES_HELPERS, "DATA_DIR", data_dir):
                 rendered = server.NAMES_HELPERS.display_icon({"homestead.io/icon": reference})
-        self.assertTrue(rendered.startswith("data:image/png;base64,"))
+        self.assertEqual(reference, rendered)           # the cached copy, fetched by the browser (#1211)
         self.assertNotIn("example.com", rendered)
 
 

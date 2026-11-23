@@ -98,7 +98,9 @@ class HealIconTests(unittest.TestCase):
         self.assertEqual("", server.NAMES_HELPERS.display_icon(annotations))
         server.NAMES_HELPERS._heal_icon(REFERENCE, annotations)
 
-        self.assertTrue(server.NAMES_HELPERS.display_icon(annotations).startswith("data:image/png;base64,"))
+        healed = server.NAMES_HELPERS.display_icon(annotations)
+        self.assertRegex(healed, r"^/api/icons/[0-9a-f]{64}\.png$")
+        self.assertEqual(PNG, Path(ICONS.resolve(healed, self.tmp.name)[0]).read_bytes())
         self.assertEqual([("oldcluster", REFERENCE)], STATE.CLIENT.asked)
 
     def test_a_missing_logo_is_tried_once_then_left_a_while(self):

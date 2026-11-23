@@ -131,7 +131,9 @@ function loadAppIcons(root = document) {
     img.dataset.iconLoading = "1";
     let pending = ICON_BLOBS.get(url);
     if (!pending) {
-      pending = fetch(url, { credentials: "same-origin", cache: "no-store" }).then(response => {
+      // The address names the picture's content, so the browser keeps it for the next page load (#1211);
+      // a missing one is answered no-store, and asked for again after ICON_RETRY_MS.
+      pending = fetch(url, { credentials: "same-origin" }).then(response => {
         if (!response.ok) throw new Error(`icon request failed (${response.status})`);
         return response.blob();
       }).then(blob => URL.createObjectURL(blob));

@@ -198,15 +198,15 @@ test("iconRetryDue: an app showing initials for an icon from elsewhere does not 
 
 /* App icons */
 function iconWorld() {
-  const clock = { now: 1_000_000 }, fetches = [], failing = new Set();
+  const clock = { now: 1_000_000 }, fetches = [], options = [], failing = new Set();
   const ctx = { console, Map, Promise, Date: { now: () => clock.now }, esc: String, document: DOC,
-    fetch: url => { fetches.push(url); return failing.has(url) ? Promise.resolve({ ok: false, status: 404 }) : Promise.resolve({ ok: true, blob: async () => ({ url }) }); },
+    fetch: (url, init) => { fetches.push(url); options.push(init || {}); return failing.has(url) ? Promise.resolve({ ok: false, status: 404 }) : Promise.resolve({ ok: true, blob: async () => ({ url }) }); },
     URL: { createObjectURL: blob => `blob:${blob.url}` } };
   ctx.window = ctx; vm.createContext(ctx);
   vm.runInContext(between(coreSrc, "const ICON_", "function loadAppIcons", {}).replace(/const appAvatar[\s\S]*$/, "") + "\n" + between(coreSrc, "function loadAppIcons", "/* ---------------- settings"), ctx);
   const avatar = url => el("span", { class: "av appav" }, el("span", { class: "avfallback" }, "FR"), el("img", { "data-icon-src": url, alt: "" }));
   const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
-  return { ctx, clock, fetches, failing, avatar, settle, load: root => ctx.loadAppIcons(root) };
+  return { ctx, clock, fetches, options, failing, avatar, settle, load: root => ctx.loadAppIcons(root) };
 }
 const URL_A = "/api/icons/" + "a".repeat(64) + ".png";
 
@@ -258,6 +258,15 @@ test("an icon that loaded keeps its picture across repaints without being set ag
   assert.equal(img.src, "blob:" + URL_A);
   assert.equal(page.childNodes[0].childNodes[0].hidden, true, "the initials stay hidden behind it");
   assert.equal(w.fetches.length, 1);
+});
+
+test("a logo is fetched so the browser may keep it: its address names its content (#1211)", async () => {
+  const w = iconWorld();
+  w.load(mount(el("div", {}, w.avatar(URL_A)))); await w.settle();
+  assert.equal(w.fetches.length, 1);
+  assert.equal(w.options[0].credentials, "same-origin");
+  assert.ok(!["no-store", "reload", "no-cache"].includes(w.options[0].cache),
+    `asked with cache: ${w.options[0].cache}, so every page load would download it again`);
 });
 
 test("an icon whose address changes is fetched for the new address", async () => {
