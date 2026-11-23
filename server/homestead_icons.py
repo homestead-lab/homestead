@@ -475,6 +475,49 @@ def is_reference(value):
     return isinstance(value, str) and value.startswith(PREFIX) and bool(ICON_NAME.fullmatch(value[len(PREFIX):]))
 
 
+_PICTURE_DATA = re.compile(r"data:(" + "|".join(re.escape(m) for m in MIME_EXTENSIONS) + r");base64,[A-Za-z0-9+/]+={0,2}")
+
+
+def is_picture_data(value):
+    """Whether value is a picture inside the value, as an older Homestead's
+    rows carried each logo: data:<an allowed image type>;base64,... and nothing
+    else. The page shows it as an <img>, where an SVG's script never runs."""
+    return isinstance(value, str) and bool(_PICTURE_DATA.fullmatch(value))
+
+
+def is_address(value):
+    """An http(s) address, one token long: a logo as v1.9.0 to v1.14.1 wrote
+    it into the annotation, before logos were kept in the cache."""
+    return isinstance(value, str) and len(value) <= 2048 and bool(re.fullmatch(r"https?://[^\s\"'<>`]+", value))
+
+
+# Addresses whose copy into the cache failed (dead, too large, not an image,
+# or refused by _public_target): address -> when. Kept per replica, the
+# oldest dropped past UNCACHEABLE_MAX (it is then tried again).
+_UNCACHEABLE = {}
+UNCACHEABLE_MAX = 1024
+
+
+def uncacheable(address, failed=True):
+    """Note that an address could (not) be copied into the cache."""
+    if failed:
+        if address not in _UNCACHEABLE and len(_UNCACHEABLE) >= UNCACHEABLE_MAX:
+            _UNCACHEABLE.pop(min(_UNCACHEABLE, key=_UNCACHEABLE.get))
+        _UNCACHEABLE[address] = time.time()
+    else:
+        _UNCACHEABLE.pop(address, None)
+
+
+def has_logo(value):
+    """Whether a logo annotation names a logo that is shown or on its way:
+    a cached logo (its file may be being fetched back), a picture inside the
+    value, or an address not yet found impossible to copy. Anything else is
+    no logo, so Find logos offers the app again."""
+    if is_reference(value) or is_picture_data(value):
+        return True
+    return is_address(value) and value not in _UNCACHEABLE
+
+
 def resolve(path, data_dir):
     """Return (absolute path, MIME) for an exact cached icon route."""
     if not is_reference(path):

@@ -198,15 +198,18 @@ test("iconRetryDue: an app showing initials for an icon from elsewhere does not 
 
 /* App icons */
 function iconWorld() {
-  const clock = { now: 1_000_000 }, fetches = [], options = [], failing = new Set();
+  const clock = { now: 1_000_000 }, fetches = [], options = [], failing = new Set(), answers = new Map();
   const ctx = { console, Map, Promise, Date: { now: () => clock.now }, esc: String, document: DOC,
-    fetch: (url, init) => { fetches.push(url); options.push(init || {}); return failing.has(url) ? Promise.resolve({ ok: false, status: 404 }) : Promise.resolve({ ok: true, blob: async () => ({ url }) }); },
+    fetch: (url, init) => { fetches.push(url); options.push(init || {}); const answer = answers.get(url);
+      if (answer === "offline") return Promise.reject(new TypeError("Failed to fetch"));
+      if (answer) return Promise.resolve({ ok: answer.status < 400, status: answer.status, headers: { get: () => answer.type }, blob: async () => ({ url }) });
+      return failing.has(url) ? Promise.resolve({ ok: false, status: 404 }) : Promise.resolve({ ok: true, headers: { get: () => "image/png" }, blob: async () => ({ url }) }); },
     URL: { createObjectURL: blob => `blob:${blob.url}` } };
   ctx.window = ctx; vm.createContext(ctx);
   vm.runInContext(between(coreSrc, "const ICON_", "function loadAppIcons", {}).replace(/const appAvatar[\s\S]*$/, "") + "\n" + between(coreSrc, "function loadAppIcons", "/* ---------------- settings"), ctx);
   const avatar = url => el("span", { class: "av appav" }, el("span", { class: "avfallback" }, "FR"), el("img", { "data-icon-src": url, alt: "" }));
   const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
-  return { ctx, clock, fetches, options, failing, avatar, settle, load: root => ctx.loadAppIcons(root) };
+  return { ctx, clock, fetches, options, failing, answers, avatar, settle, load: root => ctx.loadAppIcons(root) };
 }
 const URL_A = "/api/icons/" + "a".repeat(64) + ".png";
 
@@ -283,6 +286,29 @@ test("only an exact /api/icons/<sha256>.<ext> logo is ever fetched (#1211)", asy
   vm.runInContext(between(coreSrc, "const appAvatar", "function loadAppIcons", {}), w.ctx);
   assert.ok(!vm.runInContext(`appAvatar("Frigate", ${JSON.stringify(bad[0])})`, w.ctx).includes("<img"), "appAvatar draws initials only");
   assert.ok(vm.runInContext(`appAvatar("Frigate", ${JSON.stringify(URL_A)})`, w.ctx).includes(`data-icon-src="${URL_A}"`));
+});
+
+test("a failure that may pass is tried again within seconds; only a 404 waits ten minutes (#1211)", async () => {
+  for (const [kind, answer] of [["no answer", "offline"], ["a 503", { status: 503, type: "application/json" }],
+    ["a sign-in page", { status: 200, type: "text/html; charset=utf-8" }]]) {
+    const w = iconWorld(), { morph } = paintWorld();
+    w.answers.set(URL_A, answer);
+    const page = mount(el("div", {}, w.avatar(URL_A)));
+    w.load(page); await w.settle();
+    assert.equal(page.childNodes[0].querySelectorAll("img").length, 0, `${kind}: initials, no broken picture`);
+    const tick = async () => { morph(page, el("div", {}, w.avatar(URL_A))); w.load(page); await w.settle(); };
+    w.clock.now += 14000; await tick();
+    assert.equal(w.fetches.length, 1, `${kind}: not on the very next refresh`);
+    w.answers.delete(URL_A); w.clock.now += 2000; await tick();
+    assert.equal(w.fetches.length, 2, `${kind}: asked again after 15 s`);
+    assert.equal(page.childNodes[0].querySelectorAll("img")[0].src, "blob:" + URL_A, `${kind}: shown once it answers`);
+  }
+  const w = iconWorld(), { morph } = paintWorld();
+  w.failing.add(URL_A);
+  const page = mount(el("div", {}, w.avatar(URL_A)));
+  w.load(page); await w.settle();
+  w.clock.now += 60000; morph(page, el("div", {}, w.avatar(URL_A))); w.load(page); await w.settle();
+  assert.equal(w.fetches.length, 1, "a 404 is not asked for again within ten minutes");
 });
 
 test("an icon whose address changes is fetched for the new address", async () => {

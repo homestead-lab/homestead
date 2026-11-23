@@ -650,7 +650,7 @@ def get_workloads(pods=None):
             "hardware": hardware,
             "icon": display_icon(annotations),
             # A logo whose cached copy is being fetched again still counts as one.
-            "has_logo": bool(NAMES.read(annotations, "icon")),
+            "has_logo": ICONS.has_logo(NAMES.read(annotations, "icon")),
             "logo_skipped": NAMES.read(annotations, "logo-skipped") == "true",
             # The Helm release it belongs to, whose chart may name a logo.
             "helm_release": annotations.get("meta.helm.sh/release-name", ""),

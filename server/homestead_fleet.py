@@ -1400,12 +1400,16 @@ def gather(what, local, user, role):
 def _their_logos(row, member_id, what):
     """A linked cluster's rows name its logos as /api/icons/ paths of its own
     (#1211): each is asked of that cluster (hs_cluster, as a console names it),
-    since this one's cache may not hold it. Copies: the kept answer is not changed."""
+    since this one's cache may not hold it. An older Homestead's picture inside
+    the value is kept; any other value is no logo, since the page would load
+    it. Copies: the kept answer is not changed."""
     def named(item):
-        icon = item.get("icon") if isinstance(item, dict) else None
-        if not ICONS.is_reference(icon):
+        if not isinstance(item, dict) or not item.get("icon") or ICONS.is_picture_data(item["icon"]):
             return item
-        return {**item, "icon": f"{icon}?hs_cluster={urllib.parse.quote(member_id, safe='')}"}
+        icon = item["icon"]
+        if ICONS.is_reference(icon):
+            return {**item, "icon": f"{icon}?hs_cluster={urllib.parse.quote(member_id, safe='')}"}
+        return {**item, "icon": ""}
     if what == "flow":
         return {**row, "workloads": [named(w) for w in row.get("workloads") or []]} if "workloads" in row else row
     return named(row)

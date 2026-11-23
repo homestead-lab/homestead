@@ -45,10 +45,15 @@ async function readClipboard() {
 }
 const HOMESTEAD_VERSION = "2.9.1-dev.3";
 const ICON_BLOBS = new Map();
+// The picture of each logo that has arrived: a panel or dialog drawn again sets it at once (#1211).
+const ICON_READY = new Map();
 /* An icon that could not be fetched is not asked for again on every refresh: its app shows its initials,
-   and it is tried again after ten minutes (or on a full reload, which forgets this). (#906) */
+   and it is tried again after ten minutes (or on a full reload, which forgets this). (#906) A failure
+   that may pass - no answer, a 5xx, or an answer that is not a picture, such as a proxy's sign-in
+   page - is tried again after ICON_RETRY_SOON_MS instead: only a 404 waits the ten minutes (#1211). */
 const ICON_FAILED = new Map();
 const ICON_RETRY_MS = 10 * 60 * 1000;
+const ICON_RETRY_SOON_MS = 15 * 1000;
 /* What the page fetches as an app's logo: exactly this Homestead's /api/icons/<sha256>.<ext> (the
    names homestead_icons.ICON_NAME allows), or a linked cluster's, named by ?hs_cluster= (#1211).
    A logo annotation is written by anyone who may edit the app, so nothing else is fetched. */
@@ -134,21 +139,39 @@ function loadAppIcons(root = document) {
       ICON_FAILED.delete(url);
     }
     img.dataset.iconLoading = "1";
+    if (ICON_READY.has(url)) { img.src = ICON_READY.get(url); return; }
     let pending = ICON_BLOBS.get(url);
     if (!pending) {
       // The address names the picture's content, so the browser keeps it for the next page load (#1211);
       // a missing one is answered no-store, and asked for again after ICON_RETRY_MS.
       pending = fetch(url, { credentials: "same-origin" }).then(response => {
-        if (!response.ok) throw new Error(`icon request failed (${response.status})`);
+        if (!response.ok) throw Object.assign(new Error(`icon request failed (${response.status})`), { missing: response.status === 404 });
+        if (!/^image\//i.test(response.headers?.get?.("content-type") || "")) throw new Error("the icon answer is not a picture");
         return response.blob();
-      }).then(blob => URL.createObjectURL(blob));
+      }).then(blob => { const objectUrl = URL.createObjectURL(blob); ICON_READY.set(url, objectUrl); return objectUrl; });
       ICON_BLOBS.set(url, pending);
       pending.catch(() => ICON_BLOBS.delete(url));
     }
     pending.then(objectUrl => { if (img.isConnected) img.src = objectUrl; })
-      .catch(() => { ICON_FAILED.set(url, Date.now()); if (img.isConnected) img.remove(); });
+      // Kept as when it failed, or as if it had failed ICON_RETRY_SOON_MS before the long wait ends.
+      .catch(error => { ICON_FAILED.set(url, error?.missing ? Date.now() : Date.now() - ICON_RETRY_MS + ICON_RETRY_SOON_MS); if (img.isConnected) img.remove(); });
   });
 }
+
+/* A logo is drawn wherever an app is: a page's paint, the details panel, a dialog body written in place,
+   a list in a section. Each of those would have to call loadAppIcons itself, so one watcher does it for
+   all of them: a change that adds an <img data-icon-src> has its logos loaded once the change is in (#1211). */
+(() => {
+  if (typeof MutationObserver !== "function" || typeof document === "undefined" || !document.documentElement) return;
+  let queued = false;
+  const adds = records => records.some(r => [...r.addedNodes].some(n => n.nodeType === 1 &&
+    (n.matches("img[data-icon-src]") || n.querySelector("img[data-icon-src]"))));
+  new MutationObserver(records => {
+    if (queued || !adds(records)) return;
+    queued = true;
+    queueMicrotask(() => { queued = false; loadAppIcons(document); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
+})();
 
 /* ---------------- settings ---------------- */
 const SET = { theme: "dark", bg: "soft", blur: 26, motion: "on", refresh: 15 };
@@ -169,7 +192,7 @@ applySettings();
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  $, $$, V, STATE, esc, jsArg, jsq, safeHref, copyText, readClipboard, HOMESTEAD_VERSION, ICON_BLOBS, ICON_FAILED,
-  ICON_RETRY_MS, ICON_PATH, HEALTH_DEFAULTS, HEALTH, healthPair, sev, gcls, worstMetricClass, loadHealthSettings, paintBrand,
+  $, $$, V, STATE, esc, jsArg, jsq, safeHref, copyText, readClipboard, HOMESTEAD_VERSION, ICON_BLOBS, ICON_READY, ICON_FAILED,
+  ICON_RETRY_MS, ICON_RETRY_SOON_MS, ICON_PATH, HEALTH_DEFAULTS, HEALTH, healthPair, sev, gcls, worstMetricClass, loadHealthSettings, paintBrand,
   pageTitle, tip, icon, appAvatar, loadAppIcons, SET, applySettings
 };
