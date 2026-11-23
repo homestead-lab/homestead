@@ -54,3 +54,12 @@ test("while the app store is still loading, the logo fixup says so and offers Tr
   assert.match(body.innerHTML, /Try again/);
   assert.match(body.innerHTML, /logoFixup\(\)/);
 });
+
+test("Remove logo is offered for a logo that is shown or on its way, not for one that could not be kept (#1211)", () => {
+  const can = ctx.window.logoRemovable;
+  assert.equal(can({ icon: "/api/icons/" + "a".repeat(64) + ".png", has_logo: true }), true, "shown");
+  assert.equal(can({ icon: "", has_logo: true }), true, "an old address being copied, or a file being fetched back");
+  assert.equal(can({ icon: "", has_logo: false }), false, "could not be copied: Find logos offers it, and a new one replaces it");
+  for (const w of [{ name: "a", icon: "x", has_logo: true }, { name: "a", icon: "", has_logo: true }, { name: "a", icon: "", has_logo: false }])
+    assert.ok(!(can(w) && ctx.window.logoCanHave(w)), `never both Remove and Find logos: ${JSON.stringify(w)}`);
+});

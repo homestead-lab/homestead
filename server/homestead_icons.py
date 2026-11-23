@@ -518,6 +518,62 @@ def has_logo(value):
     return is_address(value) and value not in _UNCACHEABLE
 
 
+# Old addresses copied into the cache, kept on the data volume beside the
+# icons so a restart or another replica names the copy at once, and the logo
+# outlives its host: {address: {"icon": reference, "at": when}}. The
+# annotation is left as it is (changing it would be a write to the cluster).
+ADDRESSES = "icon-addresses.json"
+ADDRESSES_MAX = 512
+_addresses_read = [None]          # ((path, mtime_ns, size), record): the last file read
+
+
+def address_copies(data_dir):
+    """{address: reference} from the lasting record; a missing, unreadable or
+    damaged file is an empty record."""
+    path = os.path.join(data_dir, ADDRESSES)
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return {}
+    key = (path, stat.st_mtime_ns, stat.st_size)
+    if _addresses_read[0] and _addresses_read[0][0] == key:
+        return _addresses_read[0][1]
+    try:
+        record = SHARED.load_json(path)
+    except (OSError, ValueError):
+        record = {}
+    copies = {address: entry["icon"] for address, entry in (record.items() if isinstance(record, dict) else ())
+              if is_address(address) and isinstance(entry, dict) and is_reference(entry.get("icon"))}
+    _addresses_read[0] = (key, copies)
+    return copies
+
+
+def copied(address, data_dir):
+    """The cached logo an old address was copied to, when its file is here."""
+    reference = address_copies(data_dir).get(address, "")
+    return reference if reference and exists(reference, data_dir) else ""
+
+
+def remember_copy(address, reference, data_dir):
+    """Keep address -> reference in the lasting record, the oldest dropped
+    past ADDRESSES_MAX. A damaged record is started again."""
+    path = os.path.join(data_dir, ADDRESSES)
+
+    def change(record):
+        record.pop(address, None)
+        record[address] = {"icon": reference, "at": int(time.time())}
+        while len(record) > ADDRESSES_MAX:
+            record.pop(min(record, key=lambda a: record[a].get("at", 0) if isinstance(record[a], dict) else 0))
+    lock = SHARED.SharedLock("icon-addresses", directory=lambda: data_dir)
+    try:
+        SHARED.update_file(path, change, lock, {})
+    except SHARED.Unreadable:
+        with lock:
+            fresh = {}
+            change(fresh)
+            SHARED.write_json(path, fresh)
+
+
 def resolve(path, data_dir):
     """Return (absolute path, MIME) for an exact cached icon route."""
     if not is_reference(path):

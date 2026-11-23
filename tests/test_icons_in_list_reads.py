@@ -76,6 +76,7 @@ class Served(unittest.TestCase):
         server.NAMES_HELPERS._ICON_HEALED.clear()
         server.NAMES_HELPERS._ICON_TRIED.clear()
         self.enterContext(mock.patch.object(ICONS, "_UNCACHEABLE", {}, create=True))
+        self.enterContext(mock.patch.object(ICONS, "_addresses_read", [None], create=True))
         self.addCleanup(server.NAMES_HELPERS._ICON_HEALED.clear)
         self.addCleanup(server.NAMES_HELPERS._ICON_TRIED.clear)
 
@@ -202,6 +203,86 @@ class ListReadTests(Served):
             server.NAMES_HELPERS._ICON_TRIED[self.OLD] -= server.NAMES_HELPERS.ICON_RETRY_SECONDS + 1
             server.NAMES_HELPERS.display_icon(annotations)
         self.assertEqual(2, len(started), "tried again after ICON_RETRY_SECONDS")
+
+    def copy_old_address(self, picture):
+        """The background copy of OLD, as it runs: the reference it was kept as."""
+        _, _, asked = self.read_with_old_address()
+        with mock.patch.object(ICONS, "_download", return_value=(picture, "image/png")):
+            server.NAMES_HELPERS._heal_icon(*asked[0])
+        return self.read_with_old_address()[0]["icon"]
+
+    def restart(self):
+        """What a restart, or another replica on the same data volume, starts with."""
+        server.NAMES_HELPERS._ICON_HEALED.clear()
+        server.NAMES_HELPERS._ICON_TRIED.clear()
+        ICONS._addresses_read[0] = None
+
+    def test_an_old_logo_address_once_copied_is_named_at_once_after_a_restart_or_on_another_replica(self):
+        reference = self.copy_old_address(png("kept", 1500))
+        self.assertTrue(ICONS.is_reference(reference))
+        self.restart()
+        with mock.patch.object(ICONS, "_download", side_effect=AssertionError("not fetched again")):
+            row, body, asked = self.read_with_old_address()
+        self.assertEqual((reference, True, []), (row["icon"], row["has_logo"], asked), "named at once, nothing fetched")
+        self.assertNotIn(b"old.png", body)
+        self.assertIn(self.OLD, json.loads(Path(self.data, ICONS.ADDRESSES).read_text()), "kept beside the icons")
+
+    def test_a_damaged_or_missing_record_is_an_empty_one(self):
+        for content in (None, "{not json", "[1, 2]", '{"https://example.com/old.png": {"icon": "/api/icons/../x"}}'):
+            with self.subTest(content=content):
+                self.restart()
+                path = Path(self.data, ICONS.ADDRESSES)
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_text(content)
+                self.assertEqual({}, ICONS.address_copies(self.data))
+                row, body, asked = self.read_with_old_address()
+                self.assertEqual(("", [self.OLD]), (row["icon"], [ref for ref, _ in asked]), "copied again")
+        reference = self.copy_old_address(png("again", 900))
+        self.assertTrue(ICONS.is_reference(reference), "a damaged record is started again")
+
+    def test_the_record_keeps_at_most_addresses_max(self):
+        with mock.patch.object(ICONS, "ADDRESSES_MAX", 3):
+            refs = [self.logo(png(f"r{i}", 300)) for i in range(5)]
+            for i, ref in enumerate(refs):
+                with mock.patch.object(ICONS.time, "time", return_value=1000 + i):
+                    ICONS.remember_copy(f"https://example.com/{i}.png", ref, self.data)
+        self.assertEqual([f"https://example.com/{i}.png" for i in (2, 3, 4)], sorted(ICONS.address_copies(self.data)))
+
+    def test_a_copied_logo_is_kept_by_the_housekeeping_while_its_app_names_the_address(self):
+        reference = self.copy_old_address(png("housekept", 800))
+        housekeeping = sys.modules["homestead_housekeeping"]
+        with Kube(deployment("frigate", {NAMES.key("icon"): self.OLD})), \
+                mock.patch.object(housekeeping, "DATA_DIR", self.data), \
+                mock.patch.dict(housekeeping._bound, {"portal_links": lambda: []}):
+            used = housekeeping.referenced_icons()
+        self.assertIn(reference, used)
+
+    def test_two_reads_at_once_start_one_copy(self):
+        started, gate = [], threading.Barrier(8)
+        annotations = {NAMES.key("icon"): self.OLD}
+
+        def read():
+            gate.wait()
+            server.NAMES_HELPERS._heal_soon(self.OLD, annotations)
+        readers = [threading.Thread(target=read) for _ in range(8)]
+        with mock.patch.object(server.NAMES_HELPERS.threading, "Thread",
+                               lambda **kw: type("T", (), {"start": lambda self: started.append(kw)})()):
+            for reader in readers:
+                reader.start()
+            for reader in readers:
+                reader.join()
+        self.assertEqual(1, len(started))
+
+    def test_the_copy_attempts_kept_are_bounded(self):
+        with mock.patch.object(server.NAMES_HELPERS, "ICON_TRIED_MAX", 4), \
+                mock.patch.object(server.NAMES_HELPERS.threading, "Thread",
+                                  lambda **kw: type("T", (), {"start": lambda self: None})()):
+            for i in range(10):
+                with mock.patch.object(server.NAMES_HELPERS.time, "time", return_value=5000 + i):
+                    server.NAMES_HELPERS._heal_soon(f"https://example.com/{i}.png", {})
+        self.assertEqual([f"https://example.com/{i}.png" for i in (6, 7, 8, 9)], sorted(server.NAMES_HELPERS._ICON_TRIED))
 
     def test_only_an_exact_logo_path_is_taken_as_a_cached_logo(self):
         good = self.logo(png("exact", 300))

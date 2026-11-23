@@ -311,6 +311,22 @@ test("a failure that may pass is tried again within seconds; only a 404 waits te
   assert.equal(w.fetches.length, 1, "a 404 is not asked for again within ten minutes");
 });
 
+test("a logo that keeps failing is asked for less and less often, up to ten minutes; an answer resets it (#1211)", async () => {
+  const w = iconWorld(), { morph } = paintWorld();
+  w.answers.set(URL_A, "offline");
+  const page = mount(el("div", {}, w.avatar(URL_A)));
+  const tick = async seconds => { w.clock.now += seconds * 1000; morph(page, el("div", {}, w.avatar(URL_A))); w.load(page); await w.settle(); };
+  w.load(page); await w.settle();
+  const asked = [];
+  for (let s = 1; s <= 1500; s++) { const before = w.fetches.length; await tick(1); if (w.fetches.length > before) asked.push(s); }
+  // 15, 30, 60, 120, 240, 480 s apart, then ten minutes.
+  assert.deepEqual(asked.map((s, i) => s - (asked[i - 1] || 0)), [15, 30, 60, 120, 240, 480, 600].slice(0, asked.length),
+    `asked at ${asked.join(", ")} s`);
+  w.answers.delete(URL_A); await tick(600);
+  assert.equal(page.childNodes[0].querySelectorAll("img")[0].src, "blob:" + URL_A, "shown once it answers");
+  assert.equal(vm.runInContext("ICON_FAILS.size", w.ctx), 0, "an answer resets the count");
+});
+
 test("an icon whose address changes is fetched for the new address", async () => {
   const w = iconWorld(), { morph } = paintWorld();
   const page = mount(el("div", {}, w.avatar(URL_A)));

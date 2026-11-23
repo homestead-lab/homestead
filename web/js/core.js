@@ -50,10 +50,12 @@ const ICON_READY = new Map();
 /* An icon that could not be fetched is not asked for again on every refresh: its app shows its initials,
    and it is tried again after ten minutes (or on a full reload, which forgets this). (#906) A failure
    that may pass - no answer, a 5xx, or an answer that is not a picture, such as a proxy's sign-in
-   page - is tried again after ICON_RETRY_SOON_MS instead: only a 404 waits the ten minutes (#1211). */
+   page - is tried again after ICON_RETRY_SOON_MS instead, then twice as long each time it fails again
+   up to the ten minutes; a 404 waits the ten minutes at once (#1211). */
 const ICON_FAILED = new Map();
 const ICON_RETRY_MS = 10 * 60 * 1000;
 const ICON_RETRY_SOON_MS = 15 * 1000;
+const ICON_FAILS = new Map();      // a logo's failures in a row that may pass: its wait doubles with each
 /* What the page fetches as an app's logo: exactly this Homestead's /api/icons/<sha256>.<ext> (the
    names homestead_icons.ICON_NAME allows), or a linked cluster's, named by ?hs_cluster= (#1211).
    A logo annotation is written by anyone who may edit the app, so nothing else is fetched. */
@@ -148,13 +150,21 @@ function loadAppIcons(root = document) {
         if (!response.ok) throw Object.assign(new Error(`icon request failed (${response.status})`), { missing: response.status === 404 });
         if (!/^image\//i.test(response.headers?.get?.("content-type") || "")) throw new Error("the icon answer is not a picture");
         return response.blob();
-      }).then(blob => { const objectUrl = URL.createObjectURL(blob); ICON_READY.set(url, objectUrl); return objectUrl; });
+      }).then(blob => { const objectUrl = URL.createObjectURL(blob); ICON_READY.set(url, objectUrl); ICON_FAILS.delete(url); return objectUrl; });
       ICON_BLOBS.set(url, pending);
-      pending.catch(() => ICON_BLOBS.delete(url));
+      // Once per failure, however many images wait on it: a 404 waits ICON_RETRY_MS; a failure that may
+      // pass waits ICON_RETRY_SOON_MS, twice as long each time it fails again, up to ICON_RETRY_MS. It is
+      // kept as if it had failed that long before the long wait ends, which is what iconRetryDue reads.
+      pending.catch(error => {
+        ICON_BLOBS.delete(url);
+        const fails = error?.missing ? 0 : (ICON_FAILS.get(url) || 0) + 1;
+        if (fails) ICON_FAILS.set(url, fails); else ICON_FAILS.delete(url);
+        const wait = fails ? Math.min(ICON_RETRY_SOON_MS * 2 ** (fails - 1), ICON_RETRY_MS) : ICON_RETRY_MS;
+        ICON_FAILED.set(url, Date.now() - ICON_RETRY_MS + wait);
+      });
     }
     pending.then(objectUrl => { if (img.isConnected) img.src = objectUrl; })
-      // Kept as when it failed, or as if it had failed ICON_RETRY_SOON_MS before the long wait ends.
-      .catch(error => { ICON_FAILED.set(url, error?.missing ? Date.now() : Date.now() - ICON_RETRY_MS + ICON_RETRY_SOON_MS); if (img.isConnected) img.remove(); });
+      .catch(() => { if (img.isConnected) img.remove(); });
   });
 }
 
@@ -193,6 +203,6 @@ applySettings();
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
   $, $$, V, STATE, esc, jsArg, jsq, safeHref, copyText, readClipboard, HOMESTEAD_VERSION, ICON_BLOBS, ICON_READY, ICON_FAILED,
-  ICON_RETRY_MS, ICON_RETRY_SOON_MS, ICON_PATH, HEALTH_DEFAULTS, HEALTH, healthPair, sev, gcls, worstMetricClass, loadHealthSettings, paintBrand,
+  ICON_RETRY_MS, ICON_RETRY_SOON_MS, ICON_FAILS, ICON_PATH, HEALTH_DEFAULTS, HEALTH, healthPair, sev, gcls, worstMetricClass, loadHealthSettings, paintBrand,
   pageTitle, tip, icon, appAvatar, loadAppIcons, SET, applySettings
 };

@@ -53,6 +53,8 @@ def _dns_name(value, label="name"):
 _ICON_HEALED = {}
 _ICON_TRIED = {}
 ICON_RETRY_SECONDS = 15 * 60
+ICON_TRIED_MAX = 1024             # the oldest attempt is forgotten past this
+_ICON_TRIED_LOCK = threading.Lock()
 
 
 def _heal_icon(reference, annotations):
@@ -77,16 +79,23 @@ def _heal_icon(reference, annotations):
     if found:
         _ICON_HEALED[reference] = found
     if ICONS.is_address(reference):
+        if ICONS.is_reference(found):
+            ICONS.remember_copy(reference, found, DATA_DIR)    # lasting: a restart or another replica reads it
         ICONS.uncacheable(reference, failed=not ICONS.is_reference(found))
 
 
 def _heal_soon(reference, annotations):
     """Copy the logo into this Homestead's cache in the background, at most
     every ICON_RETRY_SECONDS for one reference."""
-    if time.time() - _ICON_TRIED.get(reference, 0) > ICON_RETRY_SECONDS:
-        _ICON_TRIED[reference] = time.time()
-        threading.Thread(target=_heal_icon, args=(reference, dict(annotations or {})),
-                         daemon=True, name="icon-heal").start()
+    with _ICON_TRIED_LOCK:
+        now = time.time()
+        if now - _ICON_TRIED.get(reference, 0) <= ICON_RETRY_SECONDS:
+            return
+        if reference not in _ICON_TRIED and len(_ICON_TRIED) >= ICON_TRIED_MAX:
+            _ICON_TRIED.pop(min(_ICON_TRIED, key=_ICON_TRIED.get))
+        _ICON_TRIED[reference] = now
+    threading.Thread(target=_heal_icon, args=(reference, dict(annotations or {})),
+                     daemon=True, name="icon-heal").start()
 
 
 def display_icon(annotations):
@@ -107,6 +116,9 @@ def display_icon(annotations):
     if ICONS.is_picture_data(reference):
         return reference
     if ICONS.is_address(reference):
+        copy = ICONS.copied(reference, DATA_DIR)
+        if copy:
+            return copy
         _heal_soon(reference, annotations)     # at most every ICON_RETRY_SECONDS for one address
         return ""
     if not ICONS.is_reference(reference):
