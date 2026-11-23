@@ -3,8 +3,10 @@ held the lock every Fleet read and change takes, so one slow cluster held
 them all. Asked outside the lock, what was decided before asking is checked
 again when the link is saved; when it no longer holds, the cluster that
 accepted is told to stand alone again."""
+import base64
 import http.server
 import json
+import secrets
 import threading
 import unittest
 
@@ -175,6 +177,69 @@ class JoinRaceTests(unittest.TestCase):
         said = str(caught.exception)
         self.assertIn("Shed", said)
         self.assertIn("could not be told", said)
+        self.assertIn("unlink it there", said)
+        self.assertEqual({"loft"}, self.stored_handles())
+
+    def linked_from_elsewhere(self, store_key=True):
+        """A third Homestead links this one (it stands alone) on the other copy.
+        store_key False: the list is saved, its key not yet (the second of the two writes)."""
+        def accept():
+            if not store_key:
+                self.a2.fleet._store_key = lambda key, attempts=4: True
+            self.a2.fleet.accept({"key": base64.b64encode(secrets.token_bytes(32)).decode(), "revision": 7,
+                                  "url": self.a.url, "members": [{"id": "f00d", "handle": "yard", "name": "Yard",
+                                                                  "url": "https://192.0.2.9:8088"}]})
+        return accept
+
+    def test_a_key_saved_meanwhile_but_not_yet_stored_undoes_the_link(self):
+        self.meanwhile(self.linked_from_elsewhere(store_key=False))
+        with self.assertRaises(ValueError) as caught:
+            self.a.fleet.join(self.b.url, "admin", "secret")
+        self.assertIn("key changed", str(caught.exception))
+        self.assertIn("told to stand alone again", str(caught.exception))
+        self.assertEqual({"loft", "yard"}, self.stored_handles())
+        self.assertEqual({"shed"}, {m["handle"] for m in self.b.fleet.members()})
+
+    def test_an_accept_from_a_third_cluster_meanwhile_undoes_the_link(self):
+        self.meanwhile(self.linked_from_elsewhere())
+        with self.assertRaises(ValueError) as caught:
+            self.a.fleet.join(self.b.url, "admin", "secret")
+        self.assertIn("key changed", str(caught.exception))
+        self.assertEqual({"loft", "yard"}, self.stored_handles())
+        self.assertEqual({"shed"}, {m["handle"] for m in self.b.fleet.members()})
+
+    def test_the_address_linked_meanwhile_undoes_the_link(self):
+        self.a.fleet.join(self.c.url, "admin", "secret")
+        moved = lambda state, _key: (dict(state, revision=state["revision"] + 1, members=[
+            dict(m, url=self.b.url) if m["handle"] == "garage" else m for m in state["members"]]), None)
+        self.meanwhile(lambda: self.a2.fleet._change(moved))     # garage's new address, saved on the other copy
+        with self.assertRaises(ValueError) as caught:
+            self.a.fleet.join(self.b.url, "admin", "secret")
+        self.assertIn("that address was linked", str(caught.exception))
+        self.assertEqual({"loft", "garage"}, self.stored_handles())
+        self.assertEqual({"shed"}, {m["handle"] for m in self.b.fleet.members()})
+
+    def test_the_list_removed_meanwhile_saves_nothing_and_says_to_unlink_there(self):
+        path = "/api/v1/namespaces/lab/configmaps/" + self.a.fleet.CONFIG
+        self.meanwhile(lambda: self.a.kube.send("DELETE", path))
+        with self.assertRaises(ValueError) as caught:
+            self.a.fleet.join(self.b.url, "admin", "secret")
+        said = str(caught.exception)
+        self.assertIn("the list of linked clusters was removed", said)
+        self.assertIn("unlink it there", said)
+
+    def test_a_cluster_already_past_the_undo_is_told_to_be_unlinked_there(self):
+        self.a.fleet.join(self.c.url, "admin", "secret")
+
+        def leave_while_b_moves_on():
+            self.a2.fleet.leave()
+            there = self.b.fleet._load(fresh=True)[0]
+            self.b.fleet.adopt({"revision": 50, "updated": 1, "members": there["members"]})
+        self.meanwhile(leave_while_b_moves_on)
+        with self.assertRaises(ValueError) as caught:
+            self.a.fleet.join(self.b.url, "admin", "secret")
+        said = str(caught.exception)
+        self.assertIn("did not stand alone", said)
         self.assertIn("unlink it there", said)
         self.assertEqual({"loft"}, self.stored_handles())
 

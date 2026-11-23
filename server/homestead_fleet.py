@@ -960,7 +960,10 @@ def join(url, username, password, own_url="", plain_ok=False):
         # and the new member hears the list as saved.
         if state.get("self") != me:
             raise _Stale("the list of linked clusters was removed")
-        if not stored_key or not hmac.compare_digest(stored_key, key):
+        # The list names its key (KEY_ID) before the key itself is stored: a
+        # list saved meanwhile with a new key, whose key is not written yet.
+        if (not stored_key or not hmac.compare_digest(stored_key, key)
+                or state.get(KEY_ID) not in (None, _key_id(key))):
             raise _Stale("the linked clusters' key changed")
         if not {m["id"] for m in rows} <= {m.get("id") for m in state.get("members", [])}:
             raise _Stale("a linked cluster was unlinked")
