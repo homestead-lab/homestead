@@ -16,6 +16,7 @@ import homestead_mqtt as MQTT
 import homestead_network_server as NET
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fakes.kube import no_cluster
+from rebind import keep_bound
 
 UNPLACEABLE = {"type": "Scheduled", "status": "False", "reason": "ReplicaSchedulingFailure", "message": "replica scheduling failed"}
 
@@ -79,17 +80,16 @@ class AlertTests(unittest.TestCase):
 
 class MqttTests(unittest.TestCase):
     def setUp(self):
-        self.saved = {name: getattr(NET, name, None) for name in ("cached", "kget", "get_overview", "SYS_NS")}
-
-    def tearDown(self):
-        for name, value in self.saved.items():
-            setattr(NET, name, value)
+        # server.py binds these at start (bind_routes); put back exactly what was there,
+        # unbound included, so the test passes alone and leaves nothing to the next file.
+        keep_bound(self, NET)
 
     def test_a_sensor_counts_the_volumes_short_of_hosts(self):
         self.assertIn("vol_one_host", [key for key, *_ in MQTT.CLUSTER_SENSORS])
         overview = {"nodes": [], "nodes_ready": 1, "nodes_total": 1, "volumes": 3, "vol_degraded": 2,
                     "vol_faulted": 0, "vol_one_host": 2, "cpu_pct": 1, "mem_pct": 1}
-        NET.cached = lambda key, ttl, fn: overview
+        NET.get_overview = lambda: overview
+        NET.cached = lambda key, ttl, fn: fn()
         NET.kget = lambda path: {"items": []}
         NET.SYS_NS = set()
         self.assertEqual(2, NET.mqtt_snapshot()["cluster"]["vol_one_host"])
