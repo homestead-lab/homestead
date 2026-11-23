@@ -104,6 +104,13 @@ class ReadingTests(Served):
         summary.assert_called_once_with(via=None)
         self.assertEqual([], self.cookies(self.ask("GET", "/api/fleet")[1]))
 
+    def test_the_fleet_notice_is_for_those_who_can_unlink(self):
+        shown = {"title": "A change of the clusters' key is not finished.", "detail": "Homestead tries again."}
+        self.enterContext(mock.patch.object(FLEET, "summary", return_value={"members": [], "notice": shown}))
+        self.assertEqual((200, {"members": [], "notice": None}), self.ask("GET", "/api/fleet")[::2])
+        self.who["role"] = "admin"
+        self.assertEqual((200, {"members": [], "notice": shown}), self.ask("GET", "/api/fleet")[::2])
+
     def test_a_relayed_summary_names_who_relayed_it(self):
         self.relay_as("viewer")
         summary = self.enterContext(mock.patch.object(FLEET, "summary", return_value={"members": []}))

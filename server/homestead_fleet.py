@@ -159,11 +159,41 @@ def _read_key():
 # In fleet.json: which key the list was saved with, so a key write that comes
 # late cannot put an older list's key beside a newer list.
 KEY_ID = "keyId"
+# Also in fleet.json, beside keyId: when this Homestead saved the list naming
+# that key (its own clock), and, for a key change made here, what finishes it
+# (KEY_MADE: the change, the members it is for, the attempts made, and a MAC
+# under the key stored before it; never a key). A list that names a key not
+# stored after KEY_RESUME_AFTER seconds is finished by finish_key_change()
+# when KEY_MADE says how, and shown on the Fleet page otherwise. KEY_UNTOLD:
+# the members a finished change could not reach yet.
+KEY_AT = "keyAt"
+KEY_MADE = "keyMade"
+KEY_UNTOLD = "keyUntold"
+KEY_RESUME_AFTER = 60
+# How soon after that the leader's platform loop, every ten minutes
+# (homestead_storage_server._host_fix_loop), runs finish_key_change().
+FINISHED_WITHIN = "within 15 minutes"
+_unagreed = {}      # the keyId this copy saw named and not stored, for a list without KEY_AT, and since when
+
+
+class KeyNotStored(RuntimeError):
+    """The list naming a new key was saved, and the key was not stored."""
 
 
 def _key_id(key):
     """Names a key without giving it away."""
     return hmac.new(key, b"homestead-fleet-key-id", hashlib.sha256).hexdigest()[:16]
+
+
+def _mark_mac(key, mark, key_id):
+    """Binds a KEY_MADE to the key stored when it was saved and to the keyId beside it."""
+    body = json.dumps({**{k: v for k, v in mark.items() if k != "mac"}, KEY_ID: key_id}, sort_keys=True)
+    return hmac.new(key, b"homestead-fleet-key-made\n" + body.encode(), hashlib.sha256).hexdigest()
+
+
+# In the key's Secret, beside it: the key it replaced, while a finished key
+# change still has members to send the new one to (KEY_UNTOLD).
+PREVIOUS = "previous"
 
 
 class _Unchanged(Exception):
@@ -175,12 +205,15 @@ def _change(fn):
 
     fn(state, key) gets the list and key as stored now and returns the
     (state, key) to save - key None keeps the stored one - or None when there
-    is nothing to save. The list is written with the version read, so a change
-    another copy of Homestead saved meanwhile makes this one read again and
-    call fn again on that. A list or key that cannot be read stops the change:
-    nothing is ever saved over them. A new key is written after the list,
-    and only while the list stored is still the one saved with it.
-    Returns the (state, key) stored."""
+    is nothing to save. A change made here that has a new key returns
+    (state, key, made): made is saved as KEY_MADE, so the change is finished
+    even when its key is not stored. The list is written with the version
+    read, so a change another copy of Homestead saved meanwhile makes this one
+    read again and call fn again on that. A list or key that cannot be read
+    stops the change: nothing is ever saved over them. A new key is written
+    after the list, and only while the list stored is still the one saved with
+    it, and for a change made here only while the key stored is still the
+    one read with the list; KeyNotStored when that write fails. Returns the (state, key) stored."""
     import homestead_kube as KUBE
     with _lock:
         made = {}
@@ -194,12 +227,24 @@ def _change(fn):
             if result is None:
                 made.update(state=state, key=key, new=None)
                 raise _Unchanged
-            new_state, new_key = result
-            new_state = {k: v for k, v in new_state.items() if k != KEY_ID}
-            mark = _key_id(new_key) if new_key is not None else state.get(KEY_ID)
-            if mark:
-                new_state[KEY_ID] = mark
-            made.update(state=new_state, key=key if new_key is None else new_key, new=new_key)
+            new_state, new_key, *started = result
+            own = {k: new_state[k] for k in (KEY_ID, KEY_AT, KEY_MADE, KEY_UNTOLD) if k in new_state}
+            new_state = {k: v for k, v in new_state.items() if k not in own}
+            if new_key is not None:
+                new_state.update({KEY_ID: _key_id(new_key), KEY_AT: time.time()})
+                if started and started[0] and key:
+                    mark = {k: v for k, v in started[0].items() if k != "mac"}
+                    new_state[KEY_MADE] = dict(mark, mac=_mark_mac(key, mark, new_state[KEY_ID]))
+            else:
+                new_state.update({k: state[k] for k in (KEY_ID, KEY_AT, KEY_MADE) if state.get(k)})
+                untold = own[KEY_UNTOLD] if KEY_UNTOLD in own else state.get(KEY_UNTOLD)
+                if untold:
+                    new_state[KEY_UNTOLD] = untold
+            # A change made here signs with the key read here, so its key is
+            # stored only while that key is (expect); a key taken from another
+            # member is stored as before.
+            made.update(state=new_state, key=key if new_key is None else new_key, new=new_key,
+                        prior=key if KEY_MADE in new_state and new_key is not None else b"")
             return new_state
         try:
             try:
@@ -207,7 +252,12 @@ def _change(fn):
                                  read=kget, write=ksend, indent=2)
             except _Unchanged:
                 pass
-            if made["new"] is not None and not _store_key(made["new"]):
+            try:
+                stored = made["new"] is None or _store_key(made["new"], expect=made["prior"])
+            except Exception as error:
+                reason = str(error).rstrip(".")[:160]
+                raise KeyNotStored(f"The linked clusters' new key could not be stored ({reason}).") from error
+            if not stored:
                 # A list saved since with another key won: this copy uses those.
                 made["state"], made["key"] = _read()
         except BaseException:
@@ -217,10 +267,13 @@ def _change(fn):
         return made["state"], made["key"]
 
 
-def _store_key(key, attempts=4):
+def _store_key(key, attempts=4, expect=b"", previous=None):
     """Write the key a list was just saved with. The Secret is written with the
     version read; a list saved since with another key wins, and its own
-    writer stores that key."""
+    writer stores that key. expect: the key stored when the list was saved;
+    a key another writer stored since is never replaced. previous: kept
+    beside the key (PREVIOUS) for members still to be sent it; any other
+    write drops it."""
     path = f"/api/v1/namespaces/{NS}/secrets/{SECRET}"
     encoded = base64.b64encode(key).decode()
     for _ in range(attempts):
@@ -240,22 +293,28 @@ def _store_key(key, attempts=4):
         # at all - has its own writer, whose key this must not replace.
         if not isinstance(listed, dict) or listed.get(KEY_ID) != _key_id(key):
             return False
-        if current is not None and stored_key == key:
+        if current is not None and stored_key == key and previous is None \
+                and PREVIOUS not in (current.get("data") or {}):
             return True
+        if expect and current is not None and stored_key not in (expect, key):
+            raise RuntimeError("another change stored a different key meanwhile")
+        data = {k: v for k, v in ((current or {}).get("data") or {}).items() if k != PREVIOUS}
+        data["key"] = encoded
+        if previous:
+            data[PREVIOUS] = base64.b64encode(previous).decode()
         try:
             if current is None:
                 ksend("POST", path.rsplit("/", 1)[0], {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-                                                     "metadata": {"name": SECRET, "namespace": NS},
-                                                     "data": {"key": encoded}})
+                                                     "metadata": {"name": SECRET, "namespace": NS}, "data": data})
             else:
-                ksend("PUT", path, dict(current, data={**(current.get("data") or {}), "key": encoded}))
+                ksend("PUT", path, dict(current, data=data))
             return True
         except urllib.error.HTTPError as error:
             # 409: written or created meanwhile; 404 on the update: deleted meanwhile.
             if error.code != 409 and not (error.code == 404 and current is not None):
                 raise
             error.close()
-    raise RuntimeError("The linked clusters' key kept changing while it was being saved. Try again.")
+    raise RuntimeError("the linked clusters' key kept changing while it was being saved")
 
 
 def _settled(state):
@@ -802,7 +861,8 @@ def summary(via=None):
                     "answered": True if mine else "at" in seen})
     return {"self": me, "protocol": PROTOCOL, "linked": len(out) > 1, "members": out,
             "via": (via or {}).get("name", ""), "via_id": (via or {}).get("id", ""),
-            "address": _self_record(state)["url"], "suggested_address": _address()}
+            "address": _self_record(state)["url"], "suggested_address": _address(),
+            "notice": _key_notice(*_load())}
 
 
 def adopt(incoming, sender=None):
@@ -827,7 +887,7 @@ def adopt(incoming, sender=None):
                      "members": [_self_record(state)]}
             outcome.clear()
             outcome.update(changed=True, left=True, revision=fresh["revision"])
-            return fresh, secrets.token_bytes(32)
+            return fresh, secrets.token_bytes(32), {"change": "leave", "rest": [], "revision": 0}
         outcome.clear()
         outcome.update(changed=True, revision=revision)
         return {"self": state["self"], "revision": revision, "updated": incoming.get("updated") or time.time(),
@@ -840,8 +900,10 @@ def adopt(incoming, sender=None):
         return dict(outcome)
 
 
-def _broadcast(state, skip=(), key=None, signing_key=None):
-    """Tell every other member about a change. Returns who could not be told."""
+def _broadcast(state, skip=(), key=None, signing_key=None, missed_ids=None, must_take=False):
+    """Tell every other member about a change. Returns who could not be told
+    (and adds their ids to missed_ids). must_take: a member that answers
+    without taking the list sent (it holds a newer one) counts as not told."""
     payload = {"revision": state["revision"], "updated": state["updated"], "members": state["members"]}
     if key:
         payload["key"] = base64.b64encode(key).decode()
@@ -850,9 +912,13 @@ def _broadcast(state, skip=(), key=None, signing_key=None):
         if m["id"] == state["self"] or m["id"] in skip:
             continue
         try:
-            call(m, "POST", "/api/fleet/sync", payload, timeout=8, signing_key=signing_key)
+            answer = call(m, "POST", "/api/fleet/sync", payload, timeout=8, signing_key=signing_key)
+            if must_take and not (isinstance(answer, dict) and answer.get("changed") is True):
+                raise ValueError("it did not take the list sent")
         except Exception as error:
             missed.append(f"{m.get('name')}: {str(error)[:160]}")
+            if missed_ids is not None:
+                missed_ids.append(m["id"])
     return missed
 
 
@@ -1060,10 +1126,19 @@ def remove(ref, plain_ok=False):
         _settled(state)
         rows = [m for m in state.get("members", []) if m["id"] != target["id"]]
         _refuse_plain([m for m in rows if m["id"] != state["self"]], "the clusters' new key", plain_ok)
+        sent_to = [[m["id"], m.get("url")] for m in rows if m["id"] != state["self"]]
+        agreed = [pair for pair in sent_to if plain_ok is True and _plain(pair[1])]
         held["key"] = key
         return {"self": state["self"], "revision": max(int(state.get("revision") or 0) + 1, told_revision),
-                "updated": time.time(), "members": rows}, fresh
-    saved, in_force = _change(fn)
+                "updated": time.time(), "members": rows}, fresh, {"change": "remove", "removed": target["id"],
+                                                         "for": sent_to, "plainAgreed": agreed}
+    try:
+        saved, in_force = _change(fn)
+    except KeyNotStored as error:
+        _status.pop(target["id"], None)
+        forget_answers(target["id"])
+        raise ValueError(f"{target.get('name') or ref} is unlinked here. {error} Homestead stores a new key "
+                         f"and sends it to the other clusters on its own {FINISHED_WITHIN}.") from None
     # Saved first, then sent, signed with the key the members still hold: the
     # key never reaches a member another copy unlinked meanwhile. When a list
     # saved since with another key won, that list's own writer sends its key.
@@ -1092,8 +1167,16 @@ def leave(plain_ok=False):
         rest.update(held=key, group={"self": state["self"], "revision": revision, "updated": time.time(),
                                      "members": others})
         return {"self": state["self"], "revision": revision + 1, "updated": time.time(),
-                "members": [_self_record(state)]}, secrets.token_bytes(32)
-    _change(fn)
+                "members": [_self_record(state)]}, secrets.token_bytes(32), \
+            {"change": "leave", "rest": others, "revision": revision,
+             "plainAgreed": [[m["id"], m.get("url")] for m in others if plain_ok is True and _plain(m.get("url"))]}
+    try:
+        _change(fn)
+    except KeyNotStored as error:
+        _status.clear()
+        forget_answers()
+        raise ValueError(f"This cluster stands alone here. {error} Homestead finishes unlinking it and tells "
+                         f"the other clusters on its own {FINISHED_WITHIN}.") from None
     # The rest get a key this one forgets, so it cannot speak for them after;
     # signed with the key they still hold, as this one now has its own.
     missed = _broadcast(rest["group"], key=secrets.token_bytes(32), signing_key=rest["held"]) \
@@ -1101,6 +1184,231 @@ def leave(plain_ok=False):
     _status.clear()
     forget_answers()
     return {"ok": True, "missed": missed}
+
+
+def _unfinished_for(state, key):
+    """How long, in seconds, the list has named a key other than the one
+    stored; None when they agree, or when no key is stored (_ensure() creates
+    one). Timed from KEY_AT, this Homestead's own clock; for a list without it
+    (saved by an older release), from when this copy first saw it."""
+    named = state.get(KEY_ID)
+    if not key or not named or named == _key_id(key):
+        return None
+    at = state.get(KEY_AT)
+    if isinstance(at, (int, float)) and time.time() >= at:
+        return time.time() - at
+    with _lock:
+        if named not in _unagreed:
+            _unagreed.clear()
+            _unagreed[named] = time.monotonic()
+        return time.monotonic() - _unagreed[named]
+
+
+def _resumable(state, key):
+    """(made, members to tell) when the list's KEY_MADE says how to finish its
+    key change here, else None. KEY_MADE must carry a MAC under the key stored
+    now (the one stored when it was saved), and apply: an unlink while this
+    Homestead is on the list and the cluster unlinked is not, or a leave while
+    it stands alone. A plain http:// member only when the person agreed to
+    that member for the change."""
+    made, me = state.get(KEY_MADE), state.get("self")
+    if not isinstance(made, dict) or not me or not key or not state.get(KEY_ID):
+        return None
+    if not hmac.compare_digest(str(made.get("mac") or ""), _mark_mac(key, made, state[KEY_ID])):
+        return None
+    members = [m for m in state.get("members") or [] if isinstance(m, dict)]
+    ids = [m.get("id") for m in members]
+    if made.get("change") == "remove" and me in ids and made.get("removed") and made["removed"] not in ids:
+        # Only the members the unlink was for, at the addresses they had: a
+        # member linked or moved since needs a person.
+        rest = [m for m in members if m.get("id") != me]
+        if not all(_may_send(made, m) for m in rest):
+            return None
+    elif made.get("change") == "leave" and ids == [me]:
+        rest = [m for m in made.get("rest") or [] if isinstance(m, dict) and m.get("id") not in (None, "", me)]
+        if not all(_may_send(made, m, [[r["id"], r.get("url")] for r in rest]) for m in rest):
+            return None
+    else:
+        return None
+    return made, rest
+
+
+def _may_send(made, m, recorded=None):
+    """A key change's key may go to member m: m was one the change was for,
+    at the address it has now, and a plain http:// address only when the
+    person agreed to it for that member at that address."""
+    pair = [m.get("id"), m.get("url")]
+    if pair not in (recorded if recorded is not None else made.get("for") or []):
+        return False
+    return not _plain(pair[1]) or pair in (made.get("plainAgreed") or [])
+
+
+def _tell_untold():
+    """Send the key in force to the members a finished unlink could not reach
+    (KEY_UNTOLD), signed with the key they hold (PREVIOUS). Each one reached is
+    taken off the list; once none is left, PREVIOUS is deleted."""
+    state, key = _read()
+    untold, made = state.get(KEY_UNTOLD) or [], state.get(KEY_MADE) or {}
+    if not untold or made.get("change") != "remove" or not key or state.get(KEY_ID) != _key_id(key):
+        return ""
+    _, secret = _read_key()
+    previous = base64.b64decode(((secret or {}).get("data") or {}).get(PREVIOUS) or "")
+    if not previous or not hmac.compare_digest(str(made.get("mac") or ""), _mark_mac(previous, made, state[KEY_ID])):
+        return ""
+    named = state[KEY_ID]
+    # Checked again before each send: a member at another address, or at a
+    # plain http:// one nobody agreed to, stays untold and shown.
+    listed = {m.get("id") for m in state.get("members", [])}
+    sending = [m["id"] for m in state.get("members", []) if m.get("id") in untold and _may_send(made, m)]
+    # A member whose answer was lost may hold the key already: one that
+    # accepts a read signed with it is counted as told.
+    for m in state.get("members", []):
+        if m.get("id") in sending:
+            try:
+                call(m, "GET", "/api/fleet/hello", timeout=4)
+                sending.remove(m["id"])
+                untold = [i for i in untold if i != m["id"]]
+            except Exception:
+                pass
+    told_before = len(state.get(KEY_UNTOLD) or []) - len(untold)
+    missed = []
+    _broadcast(state, skip=[m["id"] for m in state.get("members", []) if m.get("id") not in sending],
+               key=key, signing_key=previous, missed_ids=missed, must_take=True)
+    # A member no longer listed is dropped: it is not one of the clusters any more.
+    still = [i for i in untold if i in listed and (i in missed or i not in sending)]
+
+    def fn(state, _key):
+        if state.get(KEY_ID) != named or state.get(KEY_UNTOLD) == still:
+            return None
+        return dict(state, **{KEY_UNTOLD: [i for i in state.get(KEY_UNTOLD) or [] if i in still]}), None
+    _change(fn)
+    if not still:
+        _store_key(key)             # the same key, without PREVIOUS
+    told = told_before + len(untold) - len(still)
+    return f"the clusters' key reached {told} more member(s)" if told else ""
+
+
+def finish_key_change():
+    """Finish a key change made here whose key was not stored: a new key,
+    stored, then sent to the members the change was for, signed with the key
+    they hold (the one stored). Only once the list has named the key not
+    stored for KEY_RESUME_AFTER, and only on the list as it is when saved: a
+    key change another copy stored, finished or made meanwhile is left as it
+    is. A member not reached is kept in KEY_UNTOLD: after an unlink it is sent
+    the key again on each later run (_tell_untold), after a leave it is shown.
+    Attempts are counted in KEY_MADE, and the revision moves only once.
+    Returns what was done, for the log, or "" when nothing was."""
+    told = _tell_untold()
+    state, key = _read()
+    age = _unfinished_for(state, key)
+    if age is None or age < KEY_RESUME_AFTER or not _resumable(state, key):
+        return told
+    named, fresh, done = state[KEY_ID], secrets.token_bytes(32), {}
+
+    def fn(state, key):
+        done.clear()
+        found = _resumable(state, key)
+        if state.get(KEY_ID) != named or _unfinished_for(state, key) is None or not found:
+            return None
+        made, rest = found
+        current, target = int(state.get("revision") or 0), made.get("to")
+        if not isinstance(target, int) or current > target:
+            target = current + 1
+        made = dict(made, tries=int(made.get("tries") or 0) + 1, to=target)
+        done.update(held=key, made=made, rest=rest)
+        return dict(state, revision=target, updated=time.time()), fresh, made
+    saved, in_force = _change(fn)
+    if not done or in_force != fresh:
+        return told
+    made, rest, missed = done["made"], done["rest"], []
+    if made["change"] == "remove":
+        _broadcast(saved, skip=[m["id"] for m in saved["members"] if m["id"] not in {r["id"] for r in rest}],
+                   key=fresh, signing_key=done["held"], missed_ids=missed, must_take=True)
+    else:
+        group = {"self": saved["self"], "revision": int(made.get("revision") or 0), "updated": time.time(),
+                 "members": rest}
+        _broadcast(group, key=secrets.token_bytes(32), signing_key=done["held"], missed_ids=missed, must_take=True)
+    if missed:
+        # Recorded first, so a member not reached is shown even if keeping
+        # the key it holds then fails.
+        _change(lambda state, _key: (dict(state, **{KEY_UNTOLD: missed}), None)
+                if state.get(KEY_ID) == _key_id(fresh) else None)
+        if made["change"] == "remove":
+            _store_key(fresh, previous=done["held"])
+    _status.clear()
+    return "an unfinished key change was finished" + (f"; {len(missed)} member(s) not reached yet" if missed else "")
+
+
+def _mark(state, key):
+    """The list's KEY_MADE when its MAC holds under key, else None."""
+    made = state.get(KEY_MADE)
+    if not isinstance(made, dict) or not key or not state.get(KEY_ID):
+        return None
+    return made if hmac.compare_digest(str(made.get("mac") or ""), _mark_mac(key, made, state[KEY_ID])) else None
+
+
+def _key_notice(state, key):
+    """What the Fleet page shows: a key change that cannot be finished here
+    (the key the other members hold is not known here, or the cluster an
+    unlink was for is listed again), one whose finish keeps failing, or
+    members a finished one has not reached yet."""
+    age = _unfinished_for(state, key)
+    members = [m for m in state.get("members") or [] if isinstance(m, dict)]
+    if age is not None:
+        if age < KEY_RESUME_AFTER:
+            return None
+        found = _resumable(state, key)
+        made = found[0] if found else _mark(state, key)
+        again = next((m for m in members if made and made.get("change") == "remove"
+                      and m.get("id") == made.get("removed")), None)
+        if again:
+            name = again.get("name") or again.get("id")
+            return {"title": f"{name} is listed again after it was unlinked.",
+                    "detail": f"Another cluster still listed {name}, so its unlink was not finished. "
+                              f"Unlink {name} again."}
+        me = state.get("self")
+        moved = [m for m in members if made and made.get("change") == "remove" and not found
+                 and m.get("id") != me and not _may_send(made, m)]
+        if moved:
+            names = ", ".join(m.get("name") or m.get("id") for m in moved)
+            return {"title": "An unlink is not finished, because the linked clusters changed since.",
+                    "detail": "Homestead sends the new key on its own only to the clusters the unlink was for, "
+                              f"at the addresses they had then. {names} is not one of them now. "
+                              f"Unlink {names} here, then link it again."}
+        if not found:
+            return {"title": "This cluster does not hold the same key as the other linked clusters.",
+                    "detail": "A change of the clusters' key was not stored here, so the other clusters may not "
+                              "accept this one. Unlink this cluster here, and on another cluster that lists it, "
+                              "then link it again."}
+        if int(found[0].get("tries") or 0) >= 1:
+            return {"title": "A change of the clusters' key is not finished.",
+                    "detail": "Homestead could not store the new key, and tries again every ten minutes. "
+                              "If this notice stays, check that Homestead can save its settings in the cluster."}
+        return None
+    untold, made = state.get(KEY_UNTOLD) or [], state.get(KEY_MADE) or {}
+    if made.get("change") == "leave":
+        names = ", ".join(m.get("name") or m.get("id") for m in made.get("rest") or []
+                          if isinstance(m, dict) and m.get("id") in untold)
+        return {"title": "Some clusters still list this cluster as linked.",
+                "detail": f"{names} did not hear that this cluster left. Unlink this cluster on each of them. "
+                          "This notice stays until the clusters' key next changes here, such as when another "
+                          "cluster links this one."} if names else None
+    shown = [m for m in members if m.get("id") in untold]
+    if not shown:
+        return None
+    names = ", ".join(m.get("name") or m.get("id") for m in shown)
+    try:
+        _, secret = _read_key()
+    except Exception:
+        secret = None           # not read: nothing is promised
+    # Tried again only while the earlier key is kept, and only for a member
+    # still at the address the unlink was for (_tell_untold).
+    again = [m.get("name") or m.get("id") for m in shown if _may_send(made, m)] \
+        if PREVIOUS in ((secret or {}).get("data") or {}) else []
+    return {"title": "The clusters' new key did not reach every linked cluster.",
+            "detail": f"Not received by {names}. "
+                      + (f"Homestead tries again every ten minutes for {', '.join(again)}. " if again else "")
+                      + "Unlink a cluster that stays on this list, then link it again."}
 
 
 def set_address(url, only_if=None):
