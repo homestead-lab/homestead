@@ -62,12 +62,56 @@ window.vmListLayout = select => {
 /* ---------------- the image store ----------------
    Cloud images from the people who make them. On Harvester one is kept as a
    Harvester image and can keep itself current; elsewhere a VM always starts
-   from the publisher's newest build. */
+   from the publisher's newest build.
+   While a download runs, a poll (UI.poll, #1406) reads the store every 5 s
+   and repaints only the two lists, so the filter box and the rest of the
+   dialog stay as they are. It reads nothing in a hidden tab, gives up on a
+   read with no answer after 30 s, and stops when the dialog closes. A failed
+   read shows the error with Try again and ends it, as it did before. */
+let VM_STORE_POLL = null;
+const vmStoreDownloading = s => [...s.images.flatMap(r => r.versions), ...(s.own || [])].some(v => !v.ready && !v.failed);
+const vmStoreFailed = (e, check) => { $("#mbody").innerHTML = UI.error(e, { retry: `vmStore(${check ? "true" : "false"})`, dialog: true }); };
+/* The dialog around the lists: drawn once per opening, so a poll leaves the filter box alone. */
+const vmStoreFrame = s => `
+    <p class="small" style="margin-top:0">Publisher images for <b>${esc(s.arch)}</b> hosts. ${tip("Cloud-init sets the password for the user shown and expands the image to the size of the VM disk.")}</p>
+    ${s.harvester ? `${UI.more("Image downloads and updates", "Kept images are downloaded once and copied for each VM. Automatic updates check twice a day. Older builds are removed only when no disk was made from them.")}` : `<div class="note">${esc(s.note)}</div>`}
+    <div id="vmStoreOwn"></div>
+    <div class="between" style="margin-top:14px;gap:10px;flex-wrap:wrap"><div class="sec" style="margin:0">From their publishers</div>
+      <input id="vmStoreFilter" type="search" aria-label="Filter images" placeholder="Filter: minimal, debian, lvm..." value="${esc(STATE.vmStoreFilter || "")}"
+        oninput="STATE.vmStoreFilter=this.value; clearTimeout(window.__vsf); window.__vsf=setTimeout(() => vmStore(), 250)" style="max-width:260px"></div>
+    <div id="vmStoreRows" class="card flat pad0" style="margin-top:8px"></div>
+    <div class="row between" style="margin-top:12px;flex-wrap:wrap;gap:8px">
+      <span class="dim xs">Import a disk image under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
+      ${s.harvester ? `<button class="btn sm" data-need="admin" onclick="vmStoreRefresh()">${icon("refresh")}Check for newer builds</button>` : ""}</div>`;
 window.vmStore = async (check = false) => {
+  VM_STORE_POLL?.stop(); VM_STORE_POLL = null;
   if (!$("#mbody") || $("#modal").classList.contains("hidden")) modal("Image store", '<div class="empty"><span class="spin2"></span>asking the publishers</div>', true);
   let s;
-  try { s = await api("/api/vm/store" + (check ? "?check=1" : "")); } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmStore(${check ? "true" : "false"})`, dialog: true }); return; }
+  try { s = await api("/api/vm/store" + (check ? "?check=1" : "")); } catch (e) { vmStoreFailed(e, check); return; }
   STATE.data.vmStore = s;
+  const filter = (STATE.vmStoreFilter || "").toLowerCase();
+  $("#mbody").innerHTML = vmStoreFrame(s);
+  vmStoreList(s);
+  const box = $("#vmStoreFilter");
+  if (box && filter) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+  if (!vmStoreDownloading(s)) return;
+  VM_STORE_POLL?.stop();
+  const poll = VM_STORE_POLL = UI.poll(async signal => {
+    if (poll !== VM_STORE_POLL || $("#mtitle")?.textContent !== "Image store" || !$("#vmStoreRows")) return false;
+    let next;
+    try { next = await api("/api/vm/store", { signal }); }
+    catch (e) {
+      if (UI.pollCancelled(signal) || poll !== VM_STORE_POLL) return false;
+      poll.stop(); vmStoreFailed(e, false); return false;
+    }
+    if (UI.pollCancelled(signal) || poll !== VM_STORE_POLL || !$("#vmStoreRows")) return false;
+    STATE.data.vmStore = next;
+    vmStoreList(next);
+    return vmStoreDownloading(next);
+  }, 5000, { later: true });
+};
+/* The two lists of the store: the images on this cluster and the publishers' images, filtered. */
+function vmStoreList(s) {
   const mb = bytes => bytes ? (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GiB` : `${Math.round(bytes / 1024 ** 2)} MiB`) : "—";
   const day = t => t ? fmtDay(t) : "";
   const state = r => {
@@ -92,21 +136,15 @@ window.vmStore = async (check = false) => {
   const distros = [...new Set(rows.map(r => r.distro))];
   const filter = (STATE.vmStoreFilter || "").toLowerCase();
   const shown = rows.filter(r => !filter || `${r.distro} ${r.name} ${r.variant} ${r.about}`.toLowerCase().includes(filter));
-  $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">Publisher images for <b>${esc(s.arch)}</b> hosts. ${tip("Cloud-init sets the password for the user shown and expands the image to the size of the VM disk.")}</p>
-    ${s.harvester ? `${UI.more("Image downloads and updates", "Kept images are downloaded once and copied for each VM. Automatic updates check twice a day. Older builds are removed only when no disk was made from them.")}` : `<div class="note">${esc(s.note)}</div>`}
-    ${(s.own || []).length ? `<div class="sec">Images on this cluster</div>
+  $("#vmStoreOwn").innerHTML = (s.own || []).length ? `<div class="sec">Images on this cluster</div>
       <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Image</th><th>From</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
         <td class="small" data-label="From">${esc(o.from)}${o.created ? `<div class="dim xs">${esc(day(o.created))}</div>` : ""}</td>
         <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GiB` : o.failed ? UI.chip("failed", "bad", { size: "slim" }) : UI.chip(`${Math.round(o.progress || 0)}%`, "warn", { size: "slim" })}</td>
         <td data-actions>${actionBar([o.ready ? { label: "New VM", run: `vmStoreNew(${jsq("image:" + o.image)})`, need: "operator", pri: true } : null,
           { label: "Image cache", run: "closeModal();go('images')", tip: "Sizes, copies and deletion are on the Image cache page." }])}</td></tr>`).join("")}
-      </tbody></table></div></div>` : ""}
-    <div class="between" style="margin-top:14px;gap:10px;flex-wrap:wrap"><div class="sec" style="margin:0">From their publishers</div>
-      <input id="vmStoreFilter" type="search" aria-label="Filter images" placeholder="Filter: minimal, debian, lvm..." value="${esc(STATE.vmStoreFilter || "")}"
-        oninput="STATE.vmStoreFilter=this.value; clearTimeout(window.__vsf); window.__vsf=setTimeout(() => vmStore(), 250)" style="max-width:260px"></div>
-    <div class="card flat pad0" style="margin-top:8px"><div class="tblwrap"><table class="tbl stack dense vmstore"><thead><tr>
+      </tbody></table></div></div>` : "";
+  $("#vmStoreRows").innerHTML = `<div class="tblwrap"><table class="tbl stack dense vmstore"><thead><tr>
       <th>Image</th><th>Variant</th><th>Download</th><th>Sign in as</th>${s.harvester ? "<th>Here</th>" : ""}<th></th></tr></thead>
       ${distros.map(d => {
         const group = shown.filter(r => r.distro === d);
@@ -116,19 +154,9 @@ window.vmStore = async (check = false) => {
             <td class="mono small" data-label="Download">${mb(r.size)}</td>
             <td class="mono small" data-label="Sign in as">${esc(r.user)}</td>
             ${s.harvester ? `<td data-label="Here">${state(r)}${current(r)}</td>` : ""}<td data-actions>${actions(r)}</td></tr>`).join("")}</tbody>` : "";
-      }).join("") || `<tbody><tr><td colspan="6" class="empty">Nothing matches that filter.</td></tr></tbody>`}</table></div></div>
-    <div class="row between" style="margin-top:12px;flex-wrap:wrap;gap:8px">
-      <span class="dim xs">Import a disk image under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
-      ${s.harvester ? `<button class="btn sm" data-need="admin" onclick="vmStoreRefresh()">${icon("refresh")}Check for newer builds</button>` : ""}</div>`;
+      }).join("") || `<tbody><tr><td colspan="6" class="empty">Nothing matches that filter.</td></tr></tbody>`}</table></div>`;
   if (window.applyRole) applyRole();
-  const box = $("#vmStoreFilter");
-  if (box && filter) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
-  // Downloads under way: follow them.
-  if ([...s.images.flatMap(r => r.versions), ...(s.own || [])].some(v => !v.ready && !v.failed)) {
-    clearTimeout(window.__vmStoreTimer);
-    window.__vmStoreTimer = setTimeout(() => { if ($("#mtitle")?.textContent === "Image store") vmStore(); }, 5000);
-  }
-};
+}
 const vmStorePost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 window.vmStoreKeep = async id => {
   try { toast((await vmStorePost("/api/vm/store/keep", { id, auto: true })).detail, "ok"); vmStore(); }
