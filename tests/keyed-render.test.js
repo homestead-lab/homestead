@@ -327,6 +327,21 @@ test("a logo that keeps failing is asked for less and less often, up to ten minu
   assert.equal(vm.runInContext("ICON_FAILS.size", w.ctx), 0, "an answer resets the count");
 });
 
+test("appAvatar draws a picture only for a cached logo, a picture inside the value or an OS logo", () => {
+  const w = iconWorld(), hash = "d".repeat(64);
+  vm.runInContext(between(coreSrc, "const appAvatar", "function loadAppIcons", {}), w.ctx);
+  const draw = (icon, opts) => vm.runInContext(`appAvatar("Frigate", ${JSON.stringify(icon)}, "", ${JSON.stringify(opts || {})})`, w.ctx);
+  for (const icon of [`/api/icons/${hash}.png`, `/api/icons/${hash}.svg?hs_cluster=shed%201`, "data:image/png;base64,iVBORw0KGgo=",
+    "data:image/svg+xml;base64,PHN2Zy8+", "/assets/os-debian.svg"]) assert.ok(draw(icon).includes("<img"), icon);
+  for (const icon of ["https://example.com/logo.png", "http://192.0.2.9/a.png", "//example.com/a.png", "javascript:alert(1)",
+    "data:text/html;base64,PGI+", "data:image/svg+xml,%3Csvg%2F%3E", "/api/icons/../auth/keys", "/assets/../api/x", "/other.png"])
+    assert.ok(!draw(icon).includes("<img"), `${icon}: initials only`);
+  // A caller that shows a catalogue's or a chart's own address says so.
+  for (const icon of ["https://example.com/logo.png", "http://example.com/a.png", "data:image/svg+xml,%3Csvg%2F%3E"])
+    assert.ok(draw(icon, { remote: true }).includes(`src="${icon}"`), `${icon} with remote`);
+  assert.ok(!draw("javascript:alert(1)", { remote: true }).includes("<img"));
+});
+
 test("an icon whose address changes is fetched for the new address", async () => {
   const w = iconWorld(), { morph } = paintWorld();
   const page = mount(el("div", {}, w.avatar(URL_A)));

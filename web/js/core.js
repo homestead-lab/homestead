@@ -60,6 +60,15 @@ const ICON_FAILS = new Map();      // a logo's failures in a row that may pass: 
    names homestead_icons.ICON_NAME allows), or a linked cluster's, named by ?hs_cluster= (#1211).
    A logo annotation is written by anyone who may edit the app, so nothing else is fetched. */
 const ICON_PATH = /^\/api\/icons\/[0-9a-f]{64}\.(png|jpg|gif|webp|ico|svg)(\?hs_cluster=[A-Za-z0-9._~%-]+)?$/;
+/* The other pictures appAvatar draws: one inside the value, as an older linked Homestead's rows carry a
+   logo (the types homestead_icons.MIME_EXTENSIONS allows; an SVG in an <img> runs no script), and a VM's
+   OS logo from the page's own assets. A caller that shows a catalogue's or a chart's own address says so
+   ({ remote: true }); nothing else becomes an <img>. A row's http(s) logo address (an older version wrote
+   one) shows initials until the server has cached it, which the next read names. */
+const ICON_DATA = /^data:(image\/png|image\/jpeg|image\/gif|image\/webp|image\/x-icon|image\/vnd\.microsoft\.icon|image\/svg\+xml);base64,[A-Za-z0-9+/]+={0,2}$/;
+const ICON_ASSET = /^\/assets\/os-[a-z0-9-]+\.svg$/;
+const ICON_REMOTE = /^(https?:\/\/|data:image\/)/;
+const avatarShows = (icon, remote) => ICON_PATH.test(icon) || ICON_DATA.test(icon) || ICON_ASSET.test(icon) || (remote && ICON_REMOTE.test(icon));
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
   disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
@@ -114,7 +123,7 @@ function pageTitle(view) {
 window.pageTitle = pageTitle;
 const tip = (text, label = "?") => `<span class="tip" tabindex="0" aria-label="${esc(text)}" data-tip="${esc(text)}">${esc(label)}</span>`;
 const icon = name => `<svg class="btnicon" aria-hidden="true"><use href="#i-${esc(name)}"/></svg>`;
-const appAvatar = (name, icon, cls = "") => icon && (ICON_PATH.test(icon) || !icon.startsWith("/api/icons/"))
+const appAvatar = (name, icon, cls = "", { remote = false } = {}) => icon && avatarShows(String(icon), remote)
   ? `<span class="av appav ${cls}"><span class="avfallback">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span><img ${ICON_PATH.test(icon) ? `data-icon-src="${esc(icon)}"` : `src="${esc(icon)}"`} alt="" referrerpolicy="no-referrer"></span>`
   : `<span class="av ${cls}">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span>`;
 
@@ -203,6 +212,6 @@ applySettings();
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
   $, $$, V, STATE, esc, jsArg, jsq, safeHref, copyText, readClipboard, HOMESTEAD_VERSION, ICON_BLOBS, ICON_READY, ICON_FAILED,
-  ICON_RETRY_MS, ICON_RETRY_SOON_MS, ICON_FAILS, ICON_PATH, HEALTH_DEFAULTS, HEALTH, healthPair, sev, gcls, worstMetricClass, loadHealthSettings, paintBrand,
+  ICON_RETRY_MS, ICON_RETRY_SOON_MS, ICON_FAILS, ICON_PATH, ICON_DATA, ICON_ASSET, ICON_REMOTE, avatarShows, HEALTH_DEFAULTS, HEALTH, healthPair, sev, gcls, worstMetricClass, loadHealthSettings, paintBrand,
   pageTitle, tip, icon, appAvatar, loadAppIcons, SET, applySettings
 };

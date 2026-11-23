@@ -49,7 +49,7 @@ function logoTilesHtml(tiles, chosen, onpick) {
   if (!tiles.length) return '<div class="empty">Nothing in the app store matches. Try another name, or paste a URL.</div>';
   return `<div class="logo-tiles" role="listbox" aria-label="Logos">${tiles.map((t, i) => `<button type="button" role="option"
     class="logo-tile${i === chosen ? " on" : ""}" aria-selected="${i === chosen}"${logoMatchOf(t.match)[2] ? ` title="${esc(logoMatchOf(t.match)[2])}"` : ""} onclick="${onpick}(${i})">
-    ${appAvatar(t.name, t.icon, t.os ? "av-logo os-logo" : "av-logo")}<span class="logo-name">${esc(t.name)}</span>${logoMatchTag(t.match, { tipped: false })}</button>`).join("")}</div>`;
+    ${appAvatar(t.name, t.icon, t.os ? "av-logo os-logo" : "av-logo", { remote: true })}<span class="logo-name">${esc(t.name)}</span>${logoMatchTag(t.match, { tipped: false })}</button>`).join("")}</div>`;
 }
 
 async function logoLoad(q, paintTo, onpick) {
@@ -197,7 +197,7 @@ window.logoFixup = async () => {
       return `<div class="logo-fix-row">
         <label class="logo-fix-pick">${s ? `<input type="checkbox" data-i="${i}" ${sure(r) ? "checked" : ""} onchange="logoFixCount()">` : '<span class="logo-fix-nobox" aria-hidden="true"></span>'}
           ${appAvatar(r.name, "")}<span class="logo-fix-name"><b>${esc(r.name)}</b><span class="dim xs mono">${esc(r.images[0] || r.ns)}</span></span></label>
-        <span class="logo-fix-guess">${s ? `${appAvatar(s.name, s.icon)}<span class="logo-fix-name"><b>${esc(s.name)}</b>${logoMatchTag(s.match)}</span>` : '<span class="dim small">No match</span>'}</span>
+        <span class="logo-fix-guess">${s ? `${appAvatar(s.name, s.icon, "", { remote: true })}<span class="logo-fix-name"><b>${esc(s.name)}</b>${logoMatchTag(s.match)}</span>` : '<span class="dim small">No match</span>'}</span>
         <span class="logo-fix-acts">${UI.button("Choose…", `wlLogo(${jsArg(r.ns)},${jsArg(r.name)},logoFixup)`, { attrs: 'data-need="operator"' })}
           ${UI.button("No logo", `logoSkip(${i})`, { attrs: `data-need="operator" title="Leave ${esc(r.name)} without a logo and stop counting it"` })}</span></div>`;
     }).join("")}</div>
