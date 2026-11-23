@@ -198,22 +198,26 @@ class UnattendedRestartTests(Cluster):
         return server.POWER_JOBS.rollout_check("node-a")
 
     def test_a_network_share_does_not_hold_an_os_update_restart(self):
-        self.assertEqual(("", False), self.check([NFS]))
+        self.assertEqual(("", False, []), self.check([NFS]))
         self.setUp()
         claim, spec = "nfs-csi", SHARES["nfs-csi"]
-        self.assertEqual(("", False), self.check([claim_volume(claim)], *bound(claim, spec)))
+        self.assertEqual(("", False, []), self.check([claim_volume(claim)], *bound(claim, spec)))
 
     def test_nor_next_to_the_hosts_own_plumbing(self):
         # The plumbing alone asks the review for acceptance; the share must
         # not be what is left to refuse with.
         plumbing = {"name": "sockets", "hostPath": {"path": "/var/lib/kubelet/plugins"}}
-        self.assertEqual(("", False), self.check([plumbing, NFS]))
+        self.assertEqual(("", False, []), self.check([plumbing, NFS]))
 
     def test_data_on_the_host_still_holds_it_until_a_person_acts(self):
-        refusal, may_clear = self.check([{"name": "files", "hostPath": {"path": "/srv/files"}}, NFS])
+        refusal, may_clear, reasons = self.check([{"name": "files", "hostPath": {"path": "/srv/files"}}, NFS])
         self.assertRegex(refusal, r"pods keep data on this host itself: lab/app \(/srv/files\)")
         self.assertNotIn(NAS, refusal)
         self.assertFalse(may_clear)
+        # The update review's line for it names the host data only.
+        host_data = [r for r in reasons if r["kind"] == "host-data"]
+        self.assertEqual([(1, ["lab/app (/srv/files)"])], [(r["count"], r["names"]) for r in host_data])
+        self.assertNotIn(NAS, str(reasons))
 
 
 class MakeServerTests(PlanBase):
