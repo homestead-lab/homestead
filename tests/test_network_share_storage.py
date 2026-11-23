@@ -122,6 +122,59 @@ class RestartReviewTests(Cluster):
         self.assertTrue(plan["requires_data_ack"])
 
 
+class ShareOnThisHostTests(Cluster):
+    """A share this same host serves keeps its data on the host being restarted."""
+    def setUp(self):
+        super().setUp()
+        node = self.kube.object("/api/v1/nodes/node-a")
+        node["status"]["addresses"] = [{"type": "InternalIP", "address": "192.0.2.11"},
+                                       {"type": "InternalIP", "address": "2001:DB8::11"},
+                                       {"type": "Hostname", "address": "node-a.example.com"}]
+        self.kube.add(node)
+
+    def asks(self, volumes, *objects):
+        self.run_with(volumes, *objects)
+        plan = power.plan("node-a", "reboot")
+        self.assertFalse(plan["storage_unknown"])
+        return plan["requires_data_ack"]
+
+    def nfs(self, server):
+        return [{"name": "media", "nfs": {"server": server, "path": "/export/media"}}]
+
+    def test_an_nfs_export_of_this_host_is_data_on_the_host(self):
+        for server_name in ("192.0.2.11", "2001:db8::11", "[2001:db8::11]", "node-a", "NODE-A.example.com.",
+                            "node-a.example.com", "localhost", "LOCALHOST.", "127.0.0.1", "127.0.1.1", "::1", "[::1]", "", "  "):
+            with self.subTest(server_name):
+                self.setUp()
+                self.assertTrue(self.asks(self.nfs(server_name)))
+
+    def test_a_csi_volume_this_host_serves_is_data_on_the_host(self):
+        cases = {"nfs-csi": {"csi": {"driver": "nfs.csi.k8s.io", "volumeHandle": "h",
+                                     "volumeAttributes": {"server": "192.0.2.11", "share": "/export"}}},
+                 "nfs-csi-no-server": {"csi": {"driver": "nfs.csi.k8s.io", "volumeHandle": "h"}},
+                 "smb-csi": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h",
+                                     "volumeAttributes": {"source": "//node-a/share"}}},
+                 "smb-csi-backslash": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h",
+                                               "volumeAttributes": {"source": "\\\\localhost\\share"}}},
+                 "smb-csi-no-source": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h"}},
+                 "nfs-pv": {"nfs": {"server": "node-a.example.com", "path": "/export"}}}
+        for claim, spec in cases.items():
+            with self.subTest(claim):
+                self.setUp()
+                self.assertTrue(self.asks([claim_volume(claim)], *bound(claim, spec)))
+
+    def test_a_share_on_another_server_is_still_not_counted(self):
+        # 192.0.2.20 starts like this host's address; nas-a starts like its name.
+        for server_name in (NAS, "nas-a.example.com", "192.0.2.110"):
+            with self.subTest(server_name):
+                self.setUp()
+                self.assertFalse(self.asks(self.nfs(server_name)))
+        for claim, spec in SHARES.items():
+            with self.subTest(claim):
+                self.setUp()
+                self.assertFalse(self.asks([claim_volume(claim)], *bound(claim, spec)))
+
+
 class UnattendedRestartTests(Cluster):
     def check(self, volumes, *objects):
         self.run_with(volumes, *objects)
@@ -160,7 +213,7 @@ class MakeServerTests(PlanBase):
         self.assertEqual(["Kept on this host, waiting for it: lab/db"], kept)
         share = [w for w in warnings if "lab/player" in w]
         self.assertEqual(1, len(share), warnings)
-        self.assertIn("shared folder on another server", share[0])
+        self.assertIn("shared folder on a file server", share[0])
         self.assertIn(NAS, share[0])
 
 

@@ -308,7 +308,7 @@ def plan(node):
         warnings.append("Kept on this host, waiting for it: " + ", ".join(str(r.get("pod") or r) for r in local[:6]))
     shares = [f"{r.get('pod')} ({r.get('source')})" for r in stored if not MAINTENANCE.on_host(r)]
     if shares:
-        warnings.append("These apps use a shared folder on another server. It must be reachable when they start again: "
+        warnings.append("These apps use a shared folder on a file server. Each must be able to reach it when it starts again: "
                         + ", ".join(shares[:6]))
     warnings.append(f"{node} is out of service for several minutes while k3s reinstalls")
     facts = {"uid": (host.get("metadata") or {}).get("uid", ""), "version": version,

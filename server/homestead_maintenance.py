@@ -1,5 +1,6 @@
 """Read-only drain inventory. Eviction API remains authoritative for PDBs."""
 import hashlib
+import ipaddress
 import json
 from homestead_topology import selected
 import homestead_pullwatch as PULLWATCH
@@ -100,15 +101,65 @@ def helper_blocker(pod):
     return guidance.get(task, "")
 
 
-# CSI drivers whose volumes are folders on a file server (#1545).
-NETWORK_SHARE_DRIVERS = ("nfs.csi.k8s.io", "smb.csi.k8s.io")
-
-
 def on_host(row):
     """Whether a local_storage row is data kept on the host itself. An NFS or
-    SMB share keeps it on its server: listed, but no reason to hold the host.
-    A host path that is a share mounted on the host still counts (#1545)."""
+    SMB share on another server keeps it there: listed, but no reason to hold
+    the host. A share this host serves, a host path that is a share mounted on
+    the host, and any other driver still count (#1545)."""
     return not row.get("network_share")
+
+
+def _bare(name):
+    """A server name as compared: lower case, no trailing dot, no IPv6 brackets."""
+    name = str(name or "").strip().lower().rstrip(".")
+    return name[1:-1] if name.startswith("[") and name.endswith("]") else name
+
+
+def _host_names(get, node):
+    """The names and addresses the Node answers to, or None when it cannot be read."""
+    try:
+        obj = get(f"/api/v1/nodes/{node}") if node else None
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    addresses = ((obj.get("status") or {}).get("addresses")) or []
+    names = {_bare(node)} | {_bare(a.get("address")) for a in addresses if isinstance(a, dict)}
+    names.discard("")
+    return names
+
+
+def _elsewhere(server, names):
+    """Whether a share's server is known to be another machine than the host.
+    A server that is the host itself (an address, its name, a loopback), or one
+    that is missing or the host that cannot be read, counts as the host: the safe side."""
+    server = _bare(server)
+    if not server or names is None or any(c.isspace() for c in server):
+        return False
+    try:
+        ip = ipaddress.ip_address(server)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        mapped = getattr(ip, "ipv4_mapped", None) or ip
+        return not (ip.is_loopback or mapped.is_loopback) and \
+            str(ip) not in {str(ipaddress.ip_address(n)) for n in names if _is_ip(n)}
+    # node-a and node-a.example.com are one host: compare the first label too.
+    label = server.split(".")[0]
+    return label != "localhost" and server not in names and label not in {n.split(".")[0] for n in names if not _is_ip(n)}
+
+
+def _is_ip(name):
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return False
+
+
+def _smb_server(source):
+    """The server of an SMB source, //server/share or \\\\server\\share."""
+    return str(source or "").replace("\\", "/").lstrip("/").split("/")[0]
 
 
 def inventory(get, pods, namespace=None, draining=True):
@@ -159,6 +210,14 @@ def inventory(get, pods, namespace=None, draining=True):
         # They remain in the reviewed snapshot, PDB checks and eviction targets.
         if temporary:
             continue
+        known = {}
+
+        def host_names(node=spec.get("nodeName")):
+            # Read once per pod, and only when it has a share.
+            if "names" not in known:
+                known["names"] = _host_names(get, node)
+            return known["names"]
+
         for volume in spec.get("volumes") or []:
             kind, source, share = "", "", False
             if "emptyDir" in volume:
@@ -178,9 +237,15 @@ def inventory(get, pods, namespace=None, draining=True):
                     continue
                 kind = "host-local PVC" if "local" in pv_spec or "hostPath" in pv_spec else "external PVC (availability unverified)"
                 source = str(claim)
-                share = "nfs" in pv_spec or (pv_spec.get("csi") or {}).get("driver") in NETWORK_SHARE_DRIVERS
+                csi = pv_spec.get("csi") or {}
+                attributes = csi.get("volumeAttributes") or {}
+                server = ((pv_spec["nfs"] or {}).get("server") if "nfs" in pv_spec else
+                          attributes.get("server") if csi.get("driver") == "nfs.csi.k8s.io" else
+                          _smb_server(attributes.get("source")) if csi.get("driver") == "smb.csi.k8s.io" else "")
+                share = bool(server) and _elsewhere(server, host_names())
             elif "nfs" in volume:
-                kind, source, share = "external NFS (availability unverified)", (volume["nfs"] or {}).get("server", "?"), True
+                kind, source = "external NFS (availability unverified)", (volume["nfs"] or {}).get("server", "?")
+                share = _elsewhere((volume["nfs"] or {}).get("server"), host_names())  # a missing server: on the host
             elif any(key not in ("name", "configMap", "secret", "projected", "downwardAPI") for key in volume):
                 blockers.append(identity + ": unsupported storage source " + volume.get("name", "?"))
             if kind:
