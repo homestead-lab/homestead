@@ -887,6 +887,24 @@ def _refuse_plain(sent_to, what, plain_ok):
                          "Agree to send it unencrypted, or give it an https:// address. Nothing was sent.")
 
 
+# How long a link waits for a key change saved on another copy to store its
+# key: its list (naming the key) is written first, the key a moment after.
+KEY_SETTLE = 3
+
+
+def _agreed_key():
+    """The list and key as stored, once the list names the key stored. When
+    they still differ after KEY_SETTLE, that key change never stored its key
+    (the Secret write failed, or the copy stopped between the two writes): it
+    was sent to no member, so the stored key is the one they hold, and it is used."""
+    end = time.monotonic() + KEY_SETTLE
+    state, key = _ensure()
+    while state.get(KEY_ID) not in (None, _key_id(key)) and time.monotonic() < end:
+        time.sleep(0.1)
+        state, key = _ensure()
+    return state, key
+
+
 class _Stale(Exception):
     """What a link was sent on changed before it was saved."""
 
@@ -938,8 +956,8 @@ def join(url, username, password, own_url="", plain_ok=False):
                          "Unlink it there first, or link this one from there.")
     if int(there.get("protocol") or 0) != PROTOCOL:
         raise ValueError("That Homestead links clusters differently. Update both to the same release first.")
-    state, key = _ensure()
-    me = state["self"]
+    state, key = _agreed_key()
+    me, sent_mark = state["self"], state.get(KEY_ID)
     rows = [dict(m, url=own) if m["id"] == me else m for m in state["members"]]
     revision = int(state.get("revision") or 0) + 1
     # Asked without the lock (#1546): every Fleet read and change takes it,
@@ -961,9 +979,9 @@ def join(url, username, password, own_url="", plain_ok=False):
         if state.get("self") != me:
             raise _Stale("the list of linked clusters was removed")
         # The list names its key (KEY_ID) before the key itself is stored: a
-        # list saved meanwhile with a new key, whose key is not written yet.
+        # list saved meanwhile with a new key shows here before its key does.
         if (not stored_key or not hmac.compare_digest(stored_key, key)
-                or state.get(KEY_ID) not in (None, _key_id(key))):
+                or state.get(KEY_ID) not in (None, sent_mark)):
             raise _Stale("the linked clusters' key changed")
         if not {m["id"] for m in rows} <= {m.get("id") for m in state.get("members", [])}:
             raise _Stale("a linked cluster was unlinked")

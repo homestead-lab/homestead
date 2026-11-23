@@ -8,7 +8,9 @@ import http.server
 import json
 import secrets
 import threading
+import time
 import unittest
+from unittest import mock
 
 from test_fleet import Cluster, wire
 
@@ -227,6 +229,53 @@ class JoinRaceTests(unittest.TestCase):
         said = str(caught.exception)
         self.assertIn("the list of linked clusters was removed", said)
         self.assertIn("unlink it there", said)
+        self.assertEqual({}, self.a.fleet._read()[0], "a list was saved after it was removed")
+
+    def test_a_key_change_that_never_stored_its_key_still_links_with_the_key_the_members_hold(self):
+        # A remove saved its list (naming a new key) and then failed to store
+        # that key: the list and the Secret disagree for good, and the members
+        # still hold the stored key.
+        self.a.fleet.join(self.c.url, "admin", "secret")
+        held = self.a.fleet._load(fresh=True)[1]
+
+        def fails(key, attempts=4):
+            raise RuntimeError("the Secret could not be written")
+        self.a2.fleet._store_key = fails
+        with self.assertRaises(RuntimeError):
+            self.a2.fleet.remove("garage")
+        state, key = self.a.fleet._load(fresh=True)
+        self.assertEqual(held, key)
+        self.assertNotEqual(self.a.fleet._key_id(key), state[self.a.fleet.KEY_ID])
+        with mock.patch.object(self.a.fleet, "KEY_SETTLE", 0.3, create=True):
+            result = self.a.fleet.join(self.b.url, "admin", "secret")
+        self.assertTrue(result["ok"])
+        self.assertEqual({"loft", "shed"}, self.stored_handles())
+        self.assertEqual(held, self.b.fleet._load(fresh=True)[1])
+        headers = self.b.fleet.sign("GET", "/api/fleet/hello")
+        self.assertEqual("fleet:shed", self.a.fleet.verify(headers, "GET", "/api/fleet/hello")["user"])
+
+    def test_a_key_change_whose_key_is_stored_while_the_link_starts_links_with_the_new_key(self):
+        # The other copy saved its list (naming its new key) just before this
+        # join read it, and stores the key a moment later.
+        self.a.fleet._ensure()      # this Homestead's own list and key, stored
+        deferred = []
+        self.a2.fleet._store_key = lambda key, attempts=4: deferred.append(key) or True
+        self.linked_from_elsewhere()()
+        written = second_copy(self.a).fleet._store_key
+        clock = mock.Mock(wraps=time)
+
+        def pause(seconds):
+            while deferred:
+                written(deferred.pop())     # the other copy's second write lands
+            time.sleep(seconds)
+        clock.sleep = pause
+        with mock.patch.object(self.a.fleet, "time", clock):
+            result = self.a.fleet.join(self.b.url, "admin", "secret")
+        self.assertTrue(result["ok"])
+        self.assertEqual({"loft", "yard", "shed"}, self.stored_handles())
+        state, key = self.a.fleet._load(fresh=True)
+        self.assertEqual(self.a.fleet._key_id(key), state[self.a.fleet.KEY_ID])
+        self.assertEqual(key, self.b.fleet._load(fresh=True)[1], "the new member holds another key")
 
     def test_a_cluster_already_past_the_undo_is_told_to_be_unlinked_there(self):
         self.a.fleet.join(self.c.url, "admin", "secret")
