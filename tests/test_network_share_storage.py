@@ -143,7 +143,9 @@ class ShareOnThisHostTests(Cluster):
 
     def test_an_nfs_export_of_this_host_is_data_on_the_host(self):
         for server_name in ("192.0.2.11", "2001:db8::11", "[2001:db8::11]", "node-a", "NODE-A.example.com.",
-                            "node-a.example.com", "localhost", "LOCALHOST.", "127.0.0.1", "127.0.1.1", "::1", "[::1]", "", "  "):
+                            "node-a.example.com", "localhost", "LOCALHOST.", "127.0.0.1", "127.0.1.1", "::1", "[::1]", "", "  ",
+                            "::ffff:192.0.2.11", "[::ffff:192.0.2.11]", "::ffff:127.0.0.1", "0.0.0.0", "::", "[::]",
+                            "192.0.2.11:2049", "[2001:db8::11]:2049", "node-a:2049", "localhost:2049"):
             with self.subTest(server_name):
                 self.setUp()
                 self.assertTrue(self.asks(self.nfs(server_name)))
@@ -154,6 +156,8 @@ class ShareOnThisHostTests(Cluster):
                  "nfs-csi-no-server": {"csi": {"driver": "nfs.csi.k8s.io", "volumeHandle": "h"}},
                  "smb-csi": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h",
                                      "volumeAttributes": {"source": "//node-a/share"}}},
+                 "smb-csi-port": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h",
+                                          "volumeAttributes": {"source": "//192.0.2.11:445/share"}}},
                  "smb-csi-backslash": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h",
                                                "volumeAttributes": {"source": "\\\\localhost\\share"}}},
                  "smb-csi-no-source": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h"}},
@@ -165,7 +169,8 @@ class ShareOnThisHostTests(Cluster):
 
     def test_a_share_on_another_server_is_still_not_counted(self):
         # 192.0.2.20 starts like this host's address; nas-a starts like its name.
-        for server_name in (NAS, "nas-a.example.com", "192.0.2.110"):
+        for server_name in (NAS, "nas-a.example.com", "192.0.2.110", "node-ab.example.com", "::ffff:192.0.2.20",
+                            NAS + ":2049", "[2001:db8::20]:2049", "nas-a:445"):
             with self.subTest(server_name):
                 self.setUp()
                 self.assertFalse(self.asks(self.nfs(server_name)))
@@ -173,6 +178,18 @@ class ShareOnThisHostTests(Cluster):
             with self.subTest(claim):
                 self.setUp()
                 self.assertFalse(self.asks([claim_volume(claim)], *bound(claim, spec)))
+
+
+    def test_the_host_is_read_once_for_many_share_pods(self):
+        for n in range(4):
+            self.kube.add(app_pod(f"app-{n}", self.nfs(NAS)))
+        plan = power.plan("node-a", "reboot")
+        self.assertEqual(4, sum(1 for r in plan["maintenance"]["local_storage"] if not MAINTENANCE.on_host(r)))
+        reads = [path for path, _ in self.kube.reads if path == "/api/v1/nodes/node-a"]
+        before = len(reads)
+        self.kube.reads.clear()
+        MAINTENANCE.inventory(K.kget, [self.kube.object(f"/api/v1/namespaces/lab/pods/app-{n}") for n in range(4)])
+        self.assertEqual(1, sum(1 for path, _ in self.kube.reads if path == "/api/v1/nodes/node-a"), before)
 
 
 class UnattendedRestartTests(Cluster):

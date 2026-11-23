@@ -110,9 +110,19 @@ def on_host(row):
 
 
 def _bare(name):
-    """A server name as compared: lower case, no trailing dot, no IPv6 brackets."""
-    name = str(name or "").strip().lower().rstrip(".")
-    return name[1:-1] if name.startswith("[") and name.endswith("]") else name
+    """A server name as compared: lower case, no port, no IPv6 brackets, no
+    trailing dot; an address in one form (::ffff:192.0.2.1 is 192.0.2.1)."""
+    name = str(name or "").strip().lower()
+    if name.startswith("[") and "]" in name:
+        name = name[1:name.index("]")]
+    elif name.count(":") == 1 and name.rsplit(":", 1)[1].isdigit():
+        name = name.rsplit(":", 1)[0]
+    name = name.rstrip(".")
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        return name
+    return str(getattr(ip, "ipv4_mapped", None) or ip)
 
 
 def _host_names(get, node):
@@ -130,20 +140,16 @@ def _host_names(get, node):
 
 
 def _elsewhere(server, names):
-    """Whether a share's server is known to be another machine than the host.
-    A server that is the host itself (an address, its name, a loopback), or one
-    that is missing or the host that cannot be read, counts as the host: the safe side."""
+    """Whether a share's server is another machine than the host. One the Node
+    reports as its own (an address, its name), a loopback or unspecified address,
+    a missing server or a host that cannot be read counts as the host. Nothing is
+    resolved: an alias or an address the Node does not report counts as another."""
     server = _bare(server)
     if not server or names is None or any(c.isspace() for c in server):
         return False
-    try:
+    if _is_ip(server):
         ip = ipaddress.ip_address(server)
-    except ValueError:
-        ip = None
-    if ip is not None:
-        mapped = getattr(ip, "ipv4_mapped", None) or ip
-        return not (ip.is_loopback or mapped.is_loopback) and \
-            str(ip) not in {str(ipaddress.ip_address(n)) for n in names if _is_ip(n)}
+        return not (ip.is_loopback or ip.is_unspecified) and server not in names
     # node-a and node-a.example.com are one host: compare the first label too.
     label = server.split(".")[0]
     return label != "localhost" and server not in names and label not in {n.split(".")[0] for n in names if not _is_ip(n)}
@@ -165,6 +171,7 @@ def _smb_server(source):
 def inventory(get, pods, namespace=None, draining=True):
     budgets = items(get, "/apis/policy/v1/poddisruptionbudgets")
     rows, blockers, storage, waiting = [], [], [], []
+    hosts = {}
     for pod in pods:
         meta, spec, status = pod.get("metadata") or {}, pod.get("spec") or {}, pod.get("status") or {}
         if not drainable(pod):
@@ -210,13 +217,12 @@ def inventory(get, pods, namespace=None, draining=True):
         # They remain in the reviewed snapshot, PDB checks and eviction targets.
         if temporary:
             continue
-        known = {}
 
         def host_names(node=spec.get("nodeName")):
-            # Read once per pod, and only when it has a share.
-            if "names" not in known:
-                known["names"] = _host_names(get, node)
-            return known["names"]
+            # Read once per host, and only when a pod on it has a share.
+            if node not in hosts:
+                hosts[node] = _host_names(get, node)
+            return hosts[node]
 
         for volume in spec.get("volumes") or []:
             kind, source, share = "", "", False
