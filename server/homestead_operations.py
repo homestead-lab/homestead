@@ -594,11 +594,11 @@ def _recovery_needed(item):
 HISTORY_KEEP = 40
 
 
-def _note(item, status, progress, message):
+def _note(item, status, progress, message, limit=240):
     history = item.setdefault("history", [])
     if history and (history[-1].get("m"), history[-1].get("s")) == (message, status):
         return
-    history.append({"t": _now(), "s": status, "p": progress, "m": str(message or "")[:240]})
+    history.append({"t": _now(), "s": status, "p": progress, "m": str(message or "")[:limit]})
     del history[:-HISTORY_KEEP]
 
 
@@ -1860,7 +1860,15 @@ def _apply_cancel(operation_id):
                 _write(items)
                 advance_soon()
                 return True
-            match.update(updated_at=_now(), message=f"Cancel not applied: {error}"[:500])
+            refused = f"Cancel not applied: {error}"[:500]
+            if match.get("status") in TERMINAL:
+                # The step it waited for ended the job: its message is the job's
+                # result and stays. The refusal goes in the job's log.
+                # Whole, as the message would have had it: the log is the only place it is said.
+                _note(match, match["status"], match.get("progress", 0), refused, limit=500)
+                match["updated_at"] = _now()
+            else:
+                match.update(updated_at=_now(), message=refused)
             _write(items)
             return True
         before = _mark_cancelling(match, plan, chosen, request.get("by", ""))
