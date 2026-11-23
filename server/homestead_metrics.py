@@ -120,7 +120,10 @@ def _jobs():
 
 
 def _alerts():
-    return _count("homestead_alerts_open", "severity", SEVERITIES, (row.get("severity") for row in ALERTS.active()))
+    # Raised alerts only, as the bell counts them (GET /api/alerts): a
+    # condition still inside its hold has announced 0 and is not shown yet.
+    return _count("homestead_alerts_open", "severity", SEVERITIES,
+                  (row.get("severity") for row in ALERTS.active() if row.get("announced", 0) > 0))
 
 
 def _node_counts():

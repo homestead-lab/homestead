@@ -4,6 +4,7 @@ route rule, in tests/test_module_routes.py (ModuleRoutesNeedCredentials)."""
 import os
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -12,6 +13,8 @@ sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__
 import server
 import homestead_routes as MODULE_ROUTES
 import homestead_metrics as METRICS
+
+REAL_ACTIVE = METRICS.ALERTS.active
 
 
 VIEWER = {"user": "viewer1", "role": "viewer", "remember": False, "started": 0}
@@ -56,8 +59,11 @@ class Fixture(unittest.TestCase):
                     {"status": "running", "kind": "move", "ref": {"app": "secret-app"}},
                     {"status": "failed", "kind": "restore", "message": "secret-app failed"}]),
                 mock.patch.object(METRICS.ALERTS, "active", return_value=[
-                    {"severity": "critical", "subject": "secret-app"}, {"severity": "warning", "subject": "secret-node-1"},
-                    {"severity": "info", "subject": "secret-vol"}]),
+                    {"severity": "critical", "subject": "secret-app", "announced": 7},
+                    {"severity": "warning", "subject": "secret-node-1", "announced": 8},
+                    {"severity": "info", "subject": "secret-vol", "announced": 9},
+                    # Still in its hold: the bell does not show it, so neither does the count.
+                    {"severity": "critical", "subject": "secret-held", "announced": 0}]),
                 mock.patch.object(METRICS, "_nodes", return_value=[
                     {"name": "secret-node-1", "status": "Ready"}, {"name": "secret-node-2", "status": "NotReady"}]),
                 mock.patch.object(METRICS, "_apps", return_value=[
@@ -214,6 +220,40 @@ class WhatItSays(Fixture):
             for _ in range(5):
                 METRICS.answer(None)
         self.assertEqual(1, build.call_count)
+
+
+class AlertsOpenCountsWhatTheBellShows(Fixture):
+    """homestead_alerts_open counts the alerts the bell lists: raised ones.
+    A condition still inside its hold is not raised yet; the real alert store
+    is used here, not a list of rows."""
+
+    def setUp(self):
+        super().setUp()
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        for patch in (mock.patch.object(METRICS.ALERTS, "active", REAL_ACTIVE),
+                      mock.patch.object(METRICS.ALERTS, "DATA_DIR", directory.name)):
+            patch.start(); self.addCleanup(patch.stop)
+
+    def look(self, at):
+        METRICS.ALERTS.observe({"nodes": [{"key": "nodes:node-a", "category": "nodes", "severity": "critical",
+                                           "title": "Host node-a is not ready", "body": ""}]}, now=at)
+
+    def bell(self):
+        return [a for a in METRICS.ALERTS.active() if a.get("announced", 0) > 0]
+
+    def critical(self):
+        return self.samples(METRICS.build())['homestead_alerts_open{severity="critical"}']
+
+    def test_a_condition_in_its_hold_is_not_counted(self):
+        self.look(1000)
+        self.assertEqual([], self.bell())
+        self.assertEqual(0, self.critical())
+
+    def test_it_is_counted_once_raised(self):
+        self.look(1000)
+        self.look(1000 + METRICS.ALERTS.HOLD)
+        self.assertEqual(1, len(self.bell()))
+        self.assertEqual(1, self.critical())
 
 
 class Setting(unittest.TestCase):
