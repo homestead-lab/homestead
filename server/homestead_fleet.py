@@ -895,8 +895,11 @@ KEY_SETTLE = 3
 def _agreed_key():
     """The list and key as stored, once the list names the key stored. When
     they still differ after KEY_SETTLE, that key change never stored its key
-    (the Secret write failed, or the copy stopped between the two writes): it
-    was sent to no member, so the stored key is the one they hold, and it is used."""
+    (the Secret write failed, or the copy stopped between the two writes), and
+    the stored key is used, as before. After a remove or leave here the members
+    still hold it: they are sent a new key only once it is stored. After a key
+    taken from another member (adopt), they already hold the new one, and the
+    link is made with the stored key, as before."""
     end = time.monotonic() + KEY_SETTLE
     state, key = _ensure()
     while state.get(KEY_ID) not in (None, _key_id(key)) and time.monotonic() < end:

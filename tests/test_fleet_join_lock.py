@@ -246,7 +246,7 @@ class JoinRaceTests(unittest.TestCase):
         state, key = self.a.fleet._load(fresh=True)
         self.assertEqual(held, key)
         self.assertNotEqual(self.a.fleet._key_id(key), state[self.a.fleet.KEY_ID])
-        with mock.patch.object(self.a.fleet, "KEY_SETTLE", 0.3, create=True):
+        with mock.patch.object(self.a.fleet, "KEY_SETTLE", 0.3):
             result = self.a.fleet.join(self.b.url, "admin", "secret")
         self.assertTrue(result["ok"])
         self.assertEqual({"loft", "shed"}, self.stored_handles())
