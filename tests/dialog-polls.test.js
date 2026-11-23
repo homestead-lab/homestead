@@ -404,19 +404,63 @@ test("going to another page stops that page's polls at once", async () => {
    list is what is left today, by file and function; moving one to UI.poll
    takes it off (the list must match exactly, so a move cannot be forgotten).
    Since the page loops moved (#1406) it is empty: any find fails.
-   It sees a setTimeout whose callback calls the function it sits in (the
-   nearest function before it), where that function or the callback reads:
-   api(), mustRead(), fetch(), post(), refresh() or a view*() page. */
+   It sees a setTimeout whose callback calls the function it sits in, where
+   that function or the callback reads: api(), mustRead(), fetch(), post(),
+   refresh() or a view*() page. "The function it sits in" is the nearest
+   function before it, and since #1406 also every function whose body holds
+   it: the image store re-armed itself from below a few helpers of its own
+   (`const state = r => ...`), and the nearest-only rule missed it. */
 const HAND_POLLS_LEFT = [];
+
+// Where the code starting at src[i] ends, skipping strings, template literals
+// and comments: just past the bracket that closes the one at i, or, for an
+// expression, at the first `;`, `,`, line end or unmatched closer at depth 0.
+function codeEnd(src, i) {
+  const block = "([{".includes(src[i]);
+  let depth = 0;
+  for (; i < src.length; i++) {
+    const c = src[i];
+    if (c === "'" || c === '"') { i = stringEnd(src, i); continue; }
+    if (c === "`") { i = templateEnd(src, i); continue; }
+    if (c === "/" && src[i + 1] === "/") { const eol = src.indexOf("\n", i); if (eol < 0) return src.length; i = eol; if (!block && depth === 0) return i; continue; }
+    if (c === "/" && src[i + 1] === "*") { const close = src.indexOf("*/", i + 2); if (close < 0) return src.length; i = close + 1; continue; }
+    if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c)) { depth--; if (block && depth === 0) return i + 1; if (depth < 0) return i; }
+    else if (!block && depth === 0 && (c === ";" || c === "," || c === "\n")) return i;
+  }
+  return src.length;
+}
+function stringEnd(src, i) {
+  const quote = src[i];
+  for (i++; i < src.length && src[i] !== quote && src[i] !== "\n"; i++) if (src[i] === "\\") i++;
+  return i;
+}
+function templateEnd(src, i) {
+  for (i++; i < src.length; i++) {
+    if (src[i] === "\\") { i++; continue; }
+    if (src[i] === "`") return i;
+    if (src[i] === "$" && src[i + 1] === "{") i = codeEnd(src, i + 1) - 1;
+  }
+  return i;
+}
+// Every named function in a file, with where its body starts and ends.
+const HEAD = /(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(|(?:const|let|var)?\s*([A-Za-z_$][\w$.]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>/g;
+function functionsOf(src) {
+  return [...src.matchAll(HEAD)].map(h => {
+    let i = h.index + h[0].length;
+    if (h[1]) { i = codeEnd(src, i - 1); }               // past the parameters
+    while (/\s/.test(src[i] || "")) i++;
+    return { name: h[1] || h[2], at: h.index, start: i, end: codeEnd(src, i) };
+  });
+}
+
 function handPolls(file, src) {
-  const head = /(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(|(?:const|let|var)?\s*([A-Za-z_$][\w$.]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>/g;
+  const fns = functionsOf(src);
   const found = [];
   for (const m of src.matchAll(/\bsetTimeout\(\s*/g)) {
-    const before = src.slice(0, m.index);
-    let name = null, at = 0;
-    for (const h of before.matchAll(head)) { name = h[1] || h[2]; at = h.index; }
-    if (!name) continue;
-    const self = name.split(".").pop().replace(/\$/g, "\\$");
+    const nearest = fns.filter(f => f.at < m.index).at(-1);
+    if (!nearest) continue;
+    const around = fns.filter(f => f.start <= m.index && m.index < f.end);
     let depth = 0, end = m.index + m[0].length;
     for (; end < src.length; end++) {
       const c = src[end];
@@ -425,16 +469,56 @@ function handPolls(file, src) {
       else if (c === "," && depth === 0) break;
     }
     const callback = src.slice(m.index + m[0].length, end).trim();
-    const again = callback === name.split(".").pop() || new RegExp(`(?:^|[^\\w$.])${self}\\s*\\(`).test(callback);
-    const reads = /(?:^|[^\w$.])(?:api|mustRead|fetch|post|refresh|view[A-Z]\w*)\(/.test(src.slice(at, m.index) + callback);
-    if (again && reads) found.push(`${file} ${name}`);
+    for (const f of [nearest, ...around.filter(f => f !== nearest)]) {
+      const own = f.name.split(".").pop(), self = own.replace(/\$/g, "\\$");
+      const again = callback === own || new RegExp(`(?:^|[^\\w$.])${self}\\s*\\(`).test(callback);
+      const reads = /(?:^|[^\w$.])(?:api|mustRead|fetch|post|refresh|view[A-Z]\w*)\(/.test(src.slice(f.at, m.index) + callback);
+      if (again && reads) { found.push(`${file} ${f.name}`); break; }
+    }
   }
   return found;
 }
 
+/* The third shape (#1406): a loop that waits in place between its reads,
+   `while (...) { await api(...); await new Promise(r => setTimeout(r, 2000)); }`.
+   It keeps its own state from one read to the next, and reads on in a hidden
+   tab. A sleep awaited inside a while, for or do loop is listed by file and
+   the function it sits in. What is left are waits inside one action, which
+   the issue leaves as they are: a copy or restore followed until its job ends
+   (no deadline), a rollout with a deadline, eight looks after a shutdown, an
+   element to appear. A new one fails until it is moved to UI.poll or argued
+   onto this list. Known limits of both checks: a sleep behind a named helper
+   (`await sleep(2000)`) in a loop is not seen, and a one-off repaint from a
+   helper nested in its own view would be flagged. */
+const LOOP_SLEEPS_LEFT = [
+  "filemanager.js window.fmTransfer",            // a copy or move, inside its action until its job ends
+  "filemanager.js window.fmRestoreRun",          // a restore from a snapshot, the same (no deadline)
+  "views-network.js window.networkShow",         // 30 looks, 100 ms apart, for an element to appear; no read
+  "views-vms.js window.uvmShutdown",             // 8 looks after a shutdown, while the page is open
+  "views-workloads-updates.js watch",            // the scan's progress, while the check's own request runs
+  "views-workloads-updates.js run",              // an update run: Homestead restarting, then the rollout,
+  "views-workloads-updates.js run",              //   each with a deadline
+];
+function loopSleeps(file, src) {
+  const fns = functionsOf(src);
+  const loops = [...src.matchAll(/\b(?:while|for)\s*\(|\bdo\s*\{/g)].map(l => {
+    let i = l.index + l[0].length - 1;                    // at the "(" or the "{"
+    if (src[i] === "(") { i = codeEnd(src, i); while (/\s/.test(src[i] || "")) i++; }
+    return { at: l.index, end: codeEnd(src, i) };
+  });
+  const found = [];
+  for (const m of src.matchAll(/\bawait\s+new\s+Promise\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*setTimeout\(\s*\1\s*,/g)) {
+    if (!loops.some(l => l.at < m.index && m.index < l.end)) continue;
+    const inside = fns.filter(f => f.start <= m.index && m.index < f.end).at(-1);
+    found.push(`${file} ${inside ? inside.name : "(top level)"}`);
+  }
+  return found;
+}
+
+const webFiles = () => fs.readdirSync("web/js").filter(f => f.endsWith(".js") && f !== "demo.js" && f !== "ui.js").sort();
+
 test("no new hand-written read loop of the shapes it can see in web/js (use UI.poll); the list left only shrinks", () => {
-  const found = fs.readdirSync("web/js").filter(f => f.endsWith(".js") && f !== "demo.js" && f !== "ui.js").sort()
-    .flatMap(file => handPolls(file, fs.readFileSync(`web/js/${file}`, "utf8")));
+  const found = webFiles().flatMap(file => handPolls(file, fs.readFileSync(`web/js/${file}`, "utf8")));
   assert.deepEqual(found, HAND_POLLS_LEFT);
 });
 
@@ -444,10 +528,32 @@ test("the hand-poll ratchet sees each shape of a read that re-arms itself", () =
     "function watch() { refresh(); timer = setTimeout(() => watch(), 4000); }": 1,
     "const tick = async () => { await mustRead('/x', 'x'); setTimeout(tick, 2000); };": 1,
     "function viewThings() { setTimeout(() => { if (ok) viewThings(); }, 3000); }": 1,
+    // The image store's shape before #1406: helpers of its own between it and the timer.
+    "window.vmStore = async (check = false) => { const s = await api('/x'); const state = r => r.ok ? `a, b` : ''; const tip = r => `(${state(r)}`;\n  if (s.busy) setTimeout(() => { if (open) vmStore(); }, 5000);\n};": 1,
     "function step() { send(); setTimeout(step, 30); }": 0,
     "async function save() { await api('/x', { method: 'POST' }); setTimeout(() => refresh(true), 1500); }": 0,
+    "async function load() { await api('/x'); const late = () => 1; }\nfunction later() { setTimeout(() => load(), 1500); }": 0,
   };
   for (const [src, n] of Object.entries(cases)) assert.equal(handPolls("x.js", src).length, n, src);
+});
+
+test("no read loop in web/js waits in place between its reads (use UI.poll); only the bounded waits are left", () => {
+  const found = webFiles().flatMap(file => loopSleeps(file, fs.readFileSync(`web/js/${file}`, "utf8")));
+  assert.deepEqual(found, LOOP_SLEEPS_LEFT);
+});
+
+test("the loop-sleep ratchet sees each shape of a loop that waits in place", () => {
+  const cases = {
+    // "Starting elsewhere" and the host power job before #1406.
+    "window.follow = async id => {\n  while (seq === SEQ && $('#p')) {\n    try { last = await api('/x', { timeout: 10000 }); } catch { offline = true; }\n    if (last.done) return;\n    await new Promise(resolve => setTimeout(resolve, 2000));\n  }\n};": 1,
+    "async function poll() { for (;;) { await api('/x'); await new Promise(r => setTimeout(r, 2000)); } }": 1,
+    "async function poll() { do { await api('/x'); await new Promise((r) => setTimeout(r, 2000)); } while (on); }": 1,
+    "async function wait() { for (let i = 0; i < 30 && !ready(); i++) await new Promise(r => setTimeout(r, 100)); }": 1,
+    "async function once() { await api('/x'); await new Promise(r => setTimeout(r, 1500)); refresh(); }": 0,
+    "async function after() { for (const x of xs) paint(x); await new Promise(r => setTimeout(r, 1500)); }": 0,
+    "async function quiet() { while (busy) { await tick(); } await new Promise(r => setTimeout(r, 1)); }": 0,
+  };
+  for (const [src, n] of Object.entries(cases)) assert.equal(loopSleeps("x.js", src).length, n, src);
 });
 
 /* background: true, for a dialog that follows a long operation that can go
