@@ -9,15 +9,23 @@ builds its forwarding rules from: a packet for an address no Service lists
 reaches the node and is refused.
 
 kube-vip does both for a Service of its own, but the second does not always
-last. On k3s, ServiceLB rebuilds status.loadBalancer from its own svclb pods
-on every EndpointSlice change, without looking at loadBalancerClass: a
-kube-vip Service has none, so each restart of its pods empties the status,
-and kube-vip does not write it again (#365; k3s pkg/cloudprovider/
-servicelb.go). Ping answers and every port is refused. So Homestead checks,
-and where kube-vip is plainly answering for an address that a Service asks
-for but does not carry, records it - what kube-vip would have written
-(`keep`). A quick look every few seconds (`missing`) runs it as soon as an
-address goes missing, not on the next full pass.
+last. On k3s 1.26.2 and later, where ServiceLB runs beside kube-vip (and on
+RKE2 with ServiceLB on), ServiceLB's status worker empties
+status.loadBalancer of the kube-vip Services too, although they carry
+kube-vip's loadBalancerClass: updateStatus checks only the Service type,
+finds no svclb pods for them, writes an empty list and records an
+UnAvailableLoadBalancer event (#365; k3s pkg/cloudprovider/servicelb.go).
+It does so on every change to a Service's EndpointSlices - a pod restart, a
+rollout - and on every resync of its informer, every 10 hours. kube-vip
+writes a Service's status only when it takes the Service or wins its lease,
+so it does not write it back (read up to 1.2.4). The address still answers ping, but kube-proxy
+has no rule for it, so new connections to the Service's ports can be
+refused. So Homestead checks, and where kube-vip is plainly answering for an
+address that a Service asks for but does not carry, records it - what
+kube-vip would have written (`keep`). A quick look every few seconds
+(`missing`) runs it as soon as an address goes missing, not on the next full
+pass. Measured once at a resync: each status was empty for 0.5 to 3 seconds,
+and new connections to some ports of a shared address failed for about 2 s.
 
 `address_map` is the picture every page draws from: each node with its own
 addresses and the VIPs it answers for, every address with the ports on it,
@@ -395,7 +403,8 @@ def missing(platform):
 
 
 def keep(platform):
-    """Record what kube-vip announced and left off its Services, and restart
+    """Record the addresses kube-vip announces that its Services no longer
+    carry (ServiceLB empties them, see above), and restart
     kube-vip where it stopped electing for a shared lease. Returns what was
     recorded."""
     if (platform or {}).get("load_balancer") != "kube-vip":
@@ -419,7 +428,7 @@ def keep(platform):
                   f"{str(error)[:160]}", flush=True)
             continue
         print(f"VIPs: {fix['namespace']}/{fix['name']} had lost {', '.join(fix['ips'])} from its status "
-              f"(ServiceLB clears it when the pods change) while {fix['node']} answers for it; recorded it again",
+              f"while {fix['node']} answers for it; recorded it again",
               flush=True)
         record = {"at": int(time.time()), "namespace": fix["namespace"], "name": fix["name"],
                   "ips": fix["ips"], "node": fix["node"]}
@@ -446,7 +455,7 @@ def alert_facts(addresses):
     for row in (addresses or {}).get("addresses") or []:
         if row.get("state") not in ("unrouted", "unannounced"):
             continue
-        # kube-vip electing again and Homestead recording what it left off
+        # kube-vip electing again and Homestead recording what went missing
         # take a few minutes after the cluster starts: held that long.
         facts.append({"key": f"address:{row['ip']}", "category": "degraded", "severity": "degraded", "hold": ADDRESS_HOLD,
                       "title": f"Service address {row['ip']} has no route",

@@ -474,11 +474,19 @@ that node holds (per Service, the shared `kube-vip.io/leaseName` lease, or
 its Services carry it in `status.loadBalancer.ingress`, which kube-proxy builds
 its rules from. States: working, not reachable (announced, not carried), no
 node answers (endpoints ready, not announced), nothing running, port taken
-(ServiceLB). kube-vip 1.2.3 can announce a shared address without recording
-it; the leader checks every 30 seconds and patches the missing status where a
-live lease shows a node answering, logs it, and shows it on the page. An
-address still unreachable after a minute raises an alert. Node cards and the
-Architecture view show the same placement.
+(ServiceLB). On k3s 1.26.2 and later, where ServiceLB runs beside kube-vip
+(and on RKE2 with ServiceLB on), ServiceLB empties the status of the kube-vip
+Services too, although they carry kube-vip's `loadBalancerClass`: on every
+change to a Service's EndpointSlices (a pod restart, a rollout) and on every
+resync, every 10 hours, each time with an `UnAvailableLoadBalancer` event.
+kube-vip (read up to 1.2.4) writes a Service's status only when it takes the
+Service or wins its lease, so it does not write it back. The leader looks every
+5 seconds, with a full pass every 30, and writes the missing status back where
+a live lease shows a node answering, logs it, and shows it on the page.
+Meanwhile new connections to some ports of the address can fail: about 2
+seconds, measured at one resync. An address still unreachable after five
+minutes raises an alert. Node cards and the Architecture view show the same
+placement.
 
 **Expose workload** creates either a cluster-only Service or a LAN-facing
 LoadBalancer Service. Automatic allocation chooses an unused IPv4 address from

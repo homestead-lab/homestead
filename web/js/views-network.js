@@ -126,7 +126,7 @@ function networkAddressesHtml(data) {
       <div class="addr-node-head"><div><b>No host</b><span class="dim xs">addresses nothing answers for</span></div></div>
       ${loose.map(row => addressRow(row, data)).join("")}</article>`);
   const kept = (map.kept || []).slice(-3);
-  return `    ${kept.length ? `<div class="note small addr-kept">${kept.map(k => `kube-vip held <span class="mono">${esc(k.ips.join(", "))}</span> on ${esc(k.node)} but did not connect it to <span class="mono">${esc(k.namespace)}/${esc(k.name)}</span>, so its ports were refused. Homestead recorded this ${esc(fmtAgo(Math.max(1, Math.round(Date.now() / 1000 - k.at))))}.`).join("<br>")}</div>` : ""}
+  return `    ${kept.length ? `<div class="note small addr-kept">${kept.map(k => `<span class="mono">${esc(k.namespace)}/${esc(k.name)}</span> was no longer listed at <span class="mono">${esc(k.ips.join(", "))}</span> while ${esc(k.node)} answered for that address, so new connections could fail. Homestead added it back ${esc(fmtAgo(Math.max(1, Math.round(Date.now() / 1000 - k.at))))}.`).join("<br>")}</div>` : ""}
     <div class="addr-nodes">${nodes.join("") || '<div class="card flat empty">No hosts</div>'}</div>`;
 }
 

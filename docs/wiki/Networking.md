@@ -59,11 +59,14 @@ addresses a Service lists. Each address says which half is missing:
 | nothing running | Nothing behind it is running, so nothing announces it; not a fault |
 | port taken | ServiceLB could not publish a Service on the nodes' addresses because another holds the port |
 
-**Not reachable** is a kube-vip fault: with several Services sharing one
-address it can announce the address and never record it on them. Homestead
-checks every 30 seconds and records it itself - what kube-vip would have
-written - and says so above the cards. If it stays unreachable for a minute,
-you get an alert.
+**Not reachable** happens on k3s 1.26.2 and later when ServiceLB runs beside
+kube-vip, as Homestead installs it. ServiceLB empties the address from the
+kube-vip Services each time their pods change (a restart, a rollout) and once
+every 10 hours, and kube-vip (up to 1.2.4 at least) does not record it again. Homestead looks every
+few seconds and records it itself - what kube-vip would have written - and
+says so above the cards. Meanwhile new connections to some ports of the
+address can fail for a second or two. If it stays unreachable for five
+minutes, you get an alert.
 
 kube-vip can also stop answering for a shared address altogether: when one
 Service on it loses its pods for a moment - an update, a restart - kube-vip
