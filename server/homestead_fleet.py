@@ -34,6 +34,7 @@ import urllib.request
 
 import homestead_audit as AUDIT_LOG
 import homestead_fetch as FETCH
+import homestead_icons as ICONS
 import homestead_names as NAMES
 import homestead_sessions as SESSIONS
 
@@ -1396,16 +1397,13 @@ def gather(what, local, user, role):
     return ({"clusters": rows, "missing": missing} if what == "flow" else rows), missing
 
 
-_LOGO = re.compile(r"/api/icons/[0-9a-f]{64}\.(png|jpg|gif|webp|ico|svg)")
-
-
 def _their_logos(row, member_id, what):
     """A linked cluster's rows name its logos as /api/icons/ paths of its own
     (#1211): each is asked of that cluster (hs_cluster, as a console names it),
     since this one's cache may not hold it. Copies: the kept answer is not changed."""
     def named(item):
         icon = item.get("icon") if isinstance(item, dict) else None
-        if not isinstance(icon, str) or not _LOGO.fullmatch(icon):
+        if not ICONS.is_reference(icon):
             return item
         return {**item, "icon": f"{icon}?hs_cluster={urllib.parse.quote(member_id, safe='')}"}
     if what == "flow":

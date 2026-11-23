@@ -49,6 +49,10 @@ const ICON_BLOBS = new Map();
    and it is tried again after ten minutes (or on a full reload, which forgets this). (#906) */
 const ICON_FAILED = new Map();
 const ICON_RETRY_MS = 10 * 60 * 1000;
+/* What the page fetches as an app's logo: exactly this Homestead's /api/icons/<sha256>.<ext> (the
+   names homestead_icons.ICON_NAME allows), or a linked cluster's, named by ?hs_cluster= (#1211).
+   A logo annotation is written by anyone who may edit the app, so nothing else is fetched. */
+const ICON_PATH = /^\/api\/icons\/[0-9a-f]{64}\.(png|jpg|gif|webp|ico|svg)(\?hs_cluster=[A-Za-z0-9._~%-]+)?$/;
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
   disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
@@ -103,8 +107,8 @@ function pageTitle(view) {
 window.pageTitle = pageTitle;
 const tip = (text, label = "?") => `<span class="tip" tabindex="0" aria-label="${esc(text)}" data-tip="${esc(text)}">${esc(label)}</span>`;
 const icon = name => `<svg class="btnicon" aria-hidden="true"><use href="#i-${esc(name)}"/></svg>`;
-const appAvatar = (name, icon, cls = "") => icon
-  ? `<span class="av appav ${cls}"><span class="avfallback">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span><img ${icon.startsWith("/api/icons/") ? `data-icon-src="${esc(icon)}"` : `src="${esc(icon)}"`} alt="" referrerpolicy="no-referrer"></span>`
+const appAvatar = (name, icon, cls = "") => icon && (ICON_PATH.test(icon) || !icon.startsWith("/api/icons/"))
+  ? `<span class="av appav ${cls}"><span class="avfallback">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span><img ${ICON_PATH.test(icon) ? `data-icon-src="${esc(icon)}"` : `src="${esc(icon)}"`} alt="" referrerpolicy="no-referrer"></span>`
   : `<span class="av ${cls}">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span>`;
 
 function loadAppIcons(root = document) {
@@ -123,6 +127,7 @@ function loadAppIcons(root = document) {
   root.querySelectorAll("img[data-icon-src]").forEach(img => {
     if (img.dataset.iconLoading) return;
     const url = img.dataset.iconSrc;
+    if (!ICON_PATH.test(url)) { img.remove(); return; }
     const failedAt = ICON_FAILED.get(url);
     if (failedAt !== undefined) {
       if (Date.now() - failedAt < ICON_RETRY_MS) { img.remove(); return; }
@@ -165,6 +170,6 @@ applySettings();
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
   $, $$, V, STATE, esc, jsArg, jsq, safeHref, copyText, readClipboard, HOMESTEAD_VERSION, ICON_BLOBS, ICON_FAILED,
-  ICON_RETRY_MS, HEALTH_DEFAULTS, HEALTH, healthPair, sev, gcls, worstMetricClass, loadHealthSettings, paintBrand,
+  ICON_RETRY_MS, ICON_PATH, HEALTH_DEFAULTS, HEALTH, healthPair, sev, gcls, worstMetricClass, loadHealthSettings, paintBrand,
   pageTitle, tip, icon, appAvatar, loadAppIcons, SET, applySettings
 };

@@ -137,10 +137,42 @@ class ListReadTests(Served):
             row = json.loads(self.ask("/api/workloads")[1])[0]
         self.assertEqual(("", True), (row["icon"], row["has_logo"]))
 
-    def test_a_logo_address_that_is_not_cached_here_is_passed_on_as_it_is(self):
-        with Kube(deployment("frigate", {NAMES.key("icon"): "https://example.com/logo.png"})):
-            row = json.loads(self.ask("/api/workloads")[1])[0]
-        self.assertEqual("https://example.com/logo.png", row["icon"])
+    def test_a_logo_annotation_edited_by_hand_to_point_elsewhere_is_no_logo(self):
+        # Anyone who may edit the app may write its annotation (kubectl): the
+        # page fetches what a row names, so only an exact cached logo is named.
+        good = self.logo(png("good", 300))
+        name = good[len("/api/icons/"):]
+        bad = {"dots": "/api/icons/../auth/keys", "dots-hash": f"/api/icons/../icons/{name}",
+               "query": f"{good}?x=1", "fragment": f"{good}#x", "host": f"//example.com{good}",
+               "http": "https://example.com/logo.png", "deeper": f"/api/icons/x/{name}",
+               "upper": good.upper(), "data": "data:image/png;base64,iVBORw0KGgo="}
+        apps = [deployment(key, {NAMES.key("icon"): value}) for key, value in bad.items()]
+        with Kube(deployment("good", {NAMES.key("icon"): good}), *apps):
+            rows = {row["name"]: row["icon"] for row in json.loads(self.ask("/api/workloads")[1])}
+        self.assertEqual({"good": good, **{key: "" for key in bad}}, rows)
+        self.assertFalse(set(bad.values()) & set(server.NAMES_HELPERS._ICON_TRIED), "no repair is asked for them")
+
+    def test_only_an_exact_logo_path_is_taken_as_a_cached_logo(self):
+        good = self.logo(png("exact", 300))
+        name = good[len("/api/icons/"):]
+        for value in (f"/api/icons/../icons/{name}", f"/api/icons/x/{name}", f"/x/{name}", name,
+                      f"{good}?x=1", f"//example.com{good}"):
+            with self.subTest(value=value):
+                self.assertFalse(ICONS.is_reference(value))
+                with self.assertRaises(FileNotFoundError):
+                    ICONS.resolve(value, self.data)
+                with self.assertRaises((FileNotFoundError, ValueError)), \
+                        mock.patch.object(ICONS, "_download", side_effect=ValueError("not fetched")):
+                    ICONS.persist(value, self.data)
+        self.assertTrue(ICONS.is_reference(good))
+        self.assertEqual(good, ICONS.persist(good, self.data))
+
+    def test_the_page_fetches_logos_of_exactly_the_names_the_server_allows(self):
+        import re
+        core = (Path(__file__).resolve().parents[1] / "web" / "js" / "core.js").read_text(encoding="utf-8")
+        page = re.search(r"const ICON_PATH = /\^\\/api\\/icons\\/\[0-9a-f\]\{64\}\\\.\(([a-z|]+)\)", core)
+        self.assertIsNotNone(page, "core.js names the logo path it fetches")
+        self.assertEqual(ICONS.ICON_NAME.pattern, r"[0-9a-f]{64}\.(" + page.group(1) + ")")
 
     def test_the_list_is_still_refused_to_someone_signed_out(self):
         with Kube(deployment("frigate", {NAMES.key("icon"): self.logo(png("f", 100))})):

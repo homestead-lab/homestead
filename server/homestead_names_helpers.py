@@ -79,13 +79,16 @@ def display_icon(annotations):
     which the browser fetches once and keeps (#1211), not the picture itself:
     a list read every 15 seconds carried every logo again each time."""
     reference = NAMES.read(annotations, "icon")
+    if not ICONS.is_reference(reference):
+        # Anything else - another path or host, an address, a query - was
+        # written by hand: the page fetches what a row names, so it is no logo.
+        return ""
     try:
-        shown = _ICON_HEALED.get(reference, reference) or ""
-        if shown.startswith("/api/icons/"):
-            ICONS.resolve(shown, DATA_DIR)     # a file not here is no logo, and its repair is asked for
+        shown = _ICON_HEALED.get(reference, reference)
+        ICONS.resolve(shown, DATA_DIR)         # a file not here is no logo, and its repair is asked for
         return shown
     except FileNotFoundError:
-        if str(reference or "").startswith("/api/icons/") and                 time.time() - _ICON_TRIED.get(reference, 0) > ICON_RETRY_SECONDS:
+        if time.time() - _ICON_TRIED.get(reference, 0) > ICON_RETRY_SECONDS:
             _ICON_TRIED[reference] = time.time()
             threading.Thread(target=_heal_icon, args=(reference, dict(annotations or {})),
                              daemon=True, name="icon-heal").start()

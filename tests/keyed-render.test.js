@@ -269,6 +269,22 @@ test("a logo is fetched so the browser may keep it: its address names its conten
     `asked with cache: ${w.options[0].cache}, so every page load would download it again`);
 });
 
+test("only an exact /api/icons/<sha256>.<ext> logo is ever fetched (#1211)", async () => {
+  const w = iconWorld(), hash = "a".repeat(64);
+  const bad = ["/api/icons/../auth/keys", `/api/icons/${hash}.png?x=1`, `//example.com/api/icons/${hash}.png`,
+    "https://example.com/logo.png", `/api/icons/../icons/${hash}.png`, `/api/icons/${hash}.png#x`, `/api/icons/${hash}.exe`];
+  const page = mount(el("div", {}, ...bad.map(url => w.avatar(url))));
+  w.load(page); await w.settle();
+  assert.deepEqual(w.fetches, [], "nothing fetched");
+  assert.equal(page.querySelectorAll("img").length, 0, "each shows its app's initials");
+  const good = [URL_A, `/api/icons/${hash}.svg?hs_cluster=shed%201`];
+  w.load(mount(el("div", {}, ...good.map(url => w.avatar(url))))); await w.settle();
+  assert.deepEqual(w.fetches, good, "an exact logo, and a linked cluster's, are fetched");
+  vm.runInContext(between(coreSrc, "const appAvatar", "function loadAppIcons", {}), w.ctx);
+  assert.ok(!vm.runInContext(`appAvatar("Frigate", ${JSON.stringify(bad[0])})`, w.ctx).includes("<img"), "appAvatar draws initials only");
+  assert.ok(vm.runInContext(`appAvatar("Frigate", ${JSON.stringify(URL_A)})`, w.ctx).includes(`data-icon-src="${URL_A}"`));
+});
+
 test("an icon whose address changes is fetched for the new address", async () => {
   const w = iconWorld(), { morph } = paintWorld();
   const page = mount(el("div", {}, w.avatar(URL_A)));

@@ -44,6 +44,7 @@ MIME_EXTENSIONS = {
 }
 
 ICON_NAME = re.compile(r"[0-9a-f]{64}\.(png|jpg|gif|webp|ico|svg)")
+PREFIX = "/api/icons/"
 SVG_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 
 SVG_NS, XLINK_NS = "http://www.w3.org/2000/svg", "http://www.w3.org/1999/xlink"
@@ -466,11 +467,19 @@ def exists(reference, data_dir):
         return False
 
 
+def is_reference(value):
+    """Whether value is exactly a cached logo's path, /api/icons/<sha256>.<ext>,
+    with nothing before or after it: no other folder, host, query or fragment.
+    A workload's logo annotation is written by anyone who may edit the
+    workload, and the page fetches what a list row names (#1211)."""
+    return isinstance(value, str) and value.startswith(PREFIX) and bool(ICON_NAME.fullmatch(value[len(PREFIX):]))
+
+
 def resolve(path, data_dir):
     """Return (absolute path, MIME) for an exact cached icon route."""
-    name = (path or "").rsplit("/", 1)[-1]
-    if not ICON_NAME.fullmatch(name):
+    if not is_reference(path):
         raise FileNotFoundError("invalid icon")
+    name = path[len(PREFIX):]
     ext = name.rsplit(".", 1)[1]
     mime = next(k for k, value in MIME_EXTENSIONS.items() if value == ext)
     target = os.path.abspath(os.path.join(data_dir, "icons", name))
