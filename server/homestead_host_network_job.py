@@ -585,7 +585,9 @@ def _confirmed(spec, item, node, elapsed, now):
                 if code is None:
                     unsure = True
                 else:
-                    refused = (err or out or f"exit code {code}")[-160:]
+                    # What the host printed goes to the job's Log; the message names the exit code.
+                    OPS.note_output(item, [(err or out)[-160:]])
+                    refused = f"exit code {code}" + (", its output is in the job's Log" if (err or out).strip() else "")
                     ref.pop("restart_asked")
                     _save(item)
     if "restart_asked" in ref:

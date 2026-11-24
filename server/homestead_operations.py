@@ -22,6 +22,7 @@ import json
 import re
 import contextlib
 import copy
+import functools
 import os
 import pickle
 import secrets
@@ -215,12 +216,96 @@ def transaction():
         yield Transaction()
 
 
+# A job's message and the steps of its Log are shown in the job tray, the
+# API and alerts. Text from outside Homestead in them (a disk import's status,
+# a status check's error) is shown as /api/vm-disks shows a disk import's
+# status (MASKS.strip_url_secrets) and as alerts show an error
+# (homestead_alerts' rules for values named like a password, key or token);
+# names, addresses and the reason stay. Both are best effort. Whitespace is
+# squeezed first, as the rules read words; only the first MESSAGE_READ
+# characters are read, so a long text costs no more than a short one, and a
+# text read again is looked up, not read again.
+MESSAGE_CUT = 500
+MESSAGE_READ = 4 * MESSAGE_CUT
+
+
+@functools.lru_cache(maxsize=1024)
+def _plain(text):
+    import homestead_alerts as ALERTS
+    return ALERTS._hidden_more(MASKS.strip_url_secrets(text))
+
+
+def plain_message(message):
+    """message as a job may say it: made plain (above) and cut to MESSAGE_CUT.
+    Making the result plain again never shows more of it."""
+    return _plain(MASKS.cut(MASKS.squeeze(message), MESSAGE_READ))[:MESSAGE_CUT]
+
+
+# A line that ends with a name and its separator (password:, TOKEN=, key: |):
+# its value is on the next line, so the two are one step and are made plain together.
+_NAME_ENDS = re.compile(r"[:=](?:\s*[|>][-+]?)?$")
+
+
+def output_lines(lines, keep=None):
+    """What a host or pod printed, as the lines a job's Log shows: each on one
+    line, blank ones left out, a line ending in a name and its separator joined
+    to the next; the last keep of them."""
+    out, carry = [], ""
+    for line in (part for given in lines or () for part in str(given or "").splitlines()):
+        line = " ".join(line.split())
+        if not line:
+            continue
+        line = f"{carry} {line}" if carry else line
+        carry = line if _NAME_ENDS.search(line) else ""
+        if not carry:
+            out.append(line)
+    if carry:
+        out.append(carry)
+    return out[-keep:] if keep else out
+
+
+class HostOutput(ValueError):
+    """An error of Homestead's own words (str) that came with what a host
+    printed (output: its lines). A job notes the output in its Log
+    (said_with_output); whole is the old single text, for an answer to the
+    person who asked, outside the job list."""
+    def __init__(self, sentence, output=""):
+        super().__init__(sentence)
+        self.output = output_lines(output if isinstance(output, (list, tuple)) else [output], keep=8)
+        self.whole = sentence + (": " + " ".join(self.output) if self.output else "")
+
+
+def with_output(sentence, error):
+    """A job's message that quotes error: sentence (which may hold str(error),
+    Homestead's words), carrying the output error came with, if any, for the
+    write points to put in the job's Log."""
+    lines, sentence = getattr(error, "output", None), str(sentence).rstrip(". ")
+    return HostOutput(sentence, lines) if lines else sentence + "."
+
+
+def _said(item, message):
+    """A message as a job's write points take it: an error that came with a
+    host's output (HostOutput) is its sentence, and the output goes to the Log."""
+    return said_with_output(item, message) if isinstance(message, HostOutput) else message
+
+
+def said_with_output(item, error):
+    """str(error), and where it came with a host's output, that output noted in
+    item's Log and the message saying so."""
+    lines = getattr(error, "output", None)
+    if not lines:
+        return str(error)
+    note_output(item, lines)
+    return f"{error}. The host's output is in the job's Log."
+
+
 def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", unless=()):
     """Persist a newly started operation and return its public representation.
     unless: kinds of job that, while one is not finished, refuse this one -
     checked under the same lock as the start, so two loops starting in the
     same minute cannot both pass the check."""
     now = _now()
+    message = plain_message(message)
     item = {
         "id": secrets.token_hex(12), "kind": kind, "title": str(title)[:180],
         "resource": {
@@ -229,9 +314,9 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", un
             "namespace": str((resource or {}).get("namespace", ""))[:253],
         },
         "href": str(href or "/")[:500], "ref": dict(ref or {}),
-        "status": "queued", "progress": 0, "message": str(message)[:500],
+        "status": "queued", "progress": 0, "message": message,
         "started_at": now, "updated_at": now, "finished_at": "",
-        "history": [{"t": now, "s": "queued", "p": 0, "m": str(message)[:240]}],
+        "history": [{"t": now, "s": "queued", "p": 0, "m": message[:240]}],
     }
     with _lock:
         items = _read()
@@ -429,6 +514,8 @@ def _public(item):
     out = {key: value for key, value in item.items()
            if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store", "cancel_request", "cancel_record",
                           CADENCE.KEY, ERRORS.KEY)}
+    if "message" in out:            # one saved before messages were made plain, or written directly
+        out["message"] = plain_message(out["message"])
     # Every job still going can be cancelled unless its kind refuses (the same
     # refusals _plan_for gives; they read only the job). What cancelling does
     # is asked for separately, as it reads Kubernetes and the tray is polled often.
@@ -595,18 +682,39 @@ HISTORY_KEEP = 40
 
 
 def _note(item, status, progress, message, limit=240):
+    message = plain_message(_said(item, message))
     history = item.setdefault("history", [])
-    if history and (history[-1].get("m"), history[-1].get("s")) == (message, status):
+    said = next((step for step in reversed(history) if not step.get("output")), None)   # output noted since is no new step
+    if said and (said.get("m"), said.get("s")) == (message, status):
         return
     history.append({"t": _now(), "s": status, "p": progress, "m": str(message or "")[:limit]})
     del history[:-HISTORY_KEEP]
 
 
+def note_output(item, lines):
+    """Lines the work of a job printed (a pod's or a host's), as steps of its
+    Log marked "output", each made plain and noted once. Its message stays a
+    sentence of Homestead's own that says where they are: what a host or pod
+    printed goes to the Log, not to the message. Returns whether any line was new."""
+    history = item.setdefault("history", [])
+    seen = {step.get("m") for step in history if isinstance(step, dict)}
+    added = False
+    for line in output_lines(lines):
+        text = plain_message(line)[:240]
+        if text and text not in seen:
+            history.append({"t": _now(), "s": item.get("status") or "running", "p": item.get("progress", 0),
+                            "m": text, "output": True})
+            seen.add(text)
+            added = True
+    del history[:-HISTORY_KEEP]
+    return added
+
+
 def _finish(item, status, progress, message):
+    message = plain_message(_said(item, message))
     changed = (item.get("status"), item.get("progress"), item.get("message")) != (
         status, progress, message)
-    item.update(status=status, progress=max(0, min(100, int(progress or 0))),
-                message=str(message or "")[:500])
+    item.update(status=status, progress=max(0, min(100, int(progress or 0))), message=message)
     _note(item, item["status"], item["progress"], item["message"])
     if status in TERMINAL and not item.get("finished_at"):
         item["finished_at"] = _now()
@@ -1068,7 +1176,7 @@ def _refresh(item):
         return _resolver_failed(item, f"HTTP {error.code}", f"Status temporarily unavailable (HTTP {error.code})",
                                 before)
     except Exception as error:
-        return _resolver_failed(item, error, f"Status temporarily unavailable: {error}", before)
+        return _resolver_failed(item, error, f"Status temporarily unavailable: {_said(item, error)}", before)
     ERRORS.clear(item)
     return changed or json.dumps(item, sort_keys=True, default=str) != before
 
@@ -2072,8 +2180,16 @@ LOGGERS = {}
 def diagnostic_summaries(operation_ids):
     """Read saved job evidence without polling resolvers or opening consoles."""
     with _lock:
-        return [{key: copy.deepcopy(row.get(key)) for key in ("id", "kind", "title", "status", "message", "history")}
+        return [{key: copy.deepcopy(row.get(key)) for key in ("id", "kind", "title", "status")}
+                | {"message": None if row.get("message") is None else plain_message(row["message"]),
+                   "history": None if row.get("history") is None else _plain_steps(row)}
                 for row in _read() if row.get("id") in operation_ids][:10]
+
+
+def _plain_steps(item):
+    """The steps of a job's log, each message plain (one saved before they were made so)."""
+    return [{**step, "m": plain_message(step["m"])} if isinstance(step, dict) and "m" in step else copy.deepcopy(step)
+            for step in item.get("history") or []]
 
 
 def log(operation_id, see_values=True):
@@ -2095,7 +2211,7 @@ def log(operation_id, see_values=True):
         if (source.pop("helm_values", False) or item.get("kind") == "helm") and not see_values and source.get("text"):
             source.update(text="", note=f"Helm's output can show the chart's values, so it needs the "
                                         f"{MASKS.reveal_role()} role.")
-    return {**_public(item), "history": item.get("history") or [], "sources": sources}
+    return {**_public(item), "history": _plain_steps(item), "sources": sources}
 
 
 # The recovery reviews of a stopped job, asked from the job tray: server.py's

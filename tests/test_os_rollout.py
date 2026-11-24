@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 import urllib.error
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_history as HISTORY
+import homestead_host_os as HOST_OS
 import homestead_os_rollout as ROLLOUT
 from rebind import keep_bound
 
@@ -120,6 +122,12 @@ class RolloutTests(unittest.TestCase):
         ROLLOUT.bind(lambda path: {"items": list(self.nodes.values())},
                      lambda force=False: {"distribution": "k3s"}, self.hosts, reboot, lambda op: self.ops.get(op),
                      lambda name, on: self.cordons.append((name, on)), lambda: own, self.data)
+
+    def resolve(self, item):
+        """The rollout's job, as the job store asks it: through the resolver register() sets."""
+        ops = SimpleNamespace(RESOLVERS={})
+        ROLLOUT.register(ops)
+        return ops.RESOLVERS["os-rollout"](item)
 
     def run_until_done(self, limit=60, on_step=None):
         for _ in range(limit):
@@ -486,6 +494,51 @@ class RolloutTests(unittest.TestCase):
         self.assertNotIn("an earlier install", message)
         self.assertIn("needs attention", message)
         self.assertIn("cannot tell whether", message)
+
+    def test_a_hosts_install_output_goes_to_the_jobs_log_not_its_message(self):
+        self.hosts.upgrade_state = lambda name, run=None: {"running": True, "code": None, "active": True,
+                                                           "last": "Setting up curl (8.5.0)"}
+        ROLLOUT.start(now=1000)
+        for _ in range(6):
+            ROLLOUT.tick(now=1000)
+        rollout = ROLLOUT._load().get("rollout") or {}
+        item = {"ref": {"rollout": rollout["id"]}}
+        for _ in range(3):
+            status, _, message = self.resolve(item)
+        name = rollout["node"]["name"]
+        self.assertEqual(("running", f"Installing updates on {name}. Its latest output is in the job's Log, under Jobs."),
+                         (status, message))
+        self.assertEqual([f"{name} said Setting up curl (8.5.0)"],
+                         [step["m"] for step in item["history"] if step.get("output")], "once, however often it is asked")
+
+    def test_updates_that_did_not_start_say_so_and_the_hosts_lines_go_to_the_jobs_log(self):
+        class Host:   # the host helper, as homestead_host_os runs it: the launch printed an error, not STARTED
+            def hold(self, node, what, seconds=60, holder=""):
+                return "lease/1"
+
+            def let_go(self, node, holder):
+                pass
+
+            def run(self, node, script, timeout=60, change="", holder=""):
+                return "", "E: Could not get lock"
+
+        def begin(name, facts=None, ref=None):   # what the real launch raises
+            keep_bound(self, HOST_OS)
+            HOST_OS.bind(lambda path: {"items": []}, Host(), lambda force=False: {"distribution": "k3s"}, self.data)
+            HOST_OS.upgrade_begin(name, {"package_manager": "apt", "updates": [{"name": "curl", "security": False}],
+                                         "security": 0}, {})
+        self.hosts.upgrade_begin = begin
+        ROLLOUT.start(now=1000)
+        for _ in range(6):
+            ROLLOUT.tick(now=1000)
+        rollout = ROLLOUT._load().get("rollout") or {}
+        item = {"ref": {"rollout": rollout["id"]}}
+        _, _, message = self.resolve(item)
+        name = rollout["node"]["name"]
+        self.assertIn(f"The updates on {name} did not start, because the host did not confirm the launch. The host's output is in the job's Log", message)
+        self.assertNotIn("Could not get lock", message)
+        self.assertEqual([f"{name} said E: Could not get lock"],
+                         [step["m"] for step in item["history"] if step.get("output")])
 
     def test_a_failed_install_stops_before_the_next_host(self):
         self.hosts.codes["node-2"] = "100"

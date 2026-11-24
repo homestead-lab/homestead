@@ -585,7 +585,8 @@ def remove_plans():
 
 
 def _failed_upgrade_job():
-    """An upgrade job Kubernetes has given up on, with what its last pod said.
+    """An upgrade job Kubernetes has given up on: what the job says, and the
+    last lines its newest pod wrote, for the job's Log.
 
     Only the Job's Failed condition counts. k3s's and RKE2's upgrade replaces
     the binary and then stops the server - its own pod with it - so the first
@@ -602,26 +603,27 @@ def _failed_upgrade_job():
         node = labels.get("upgrade.cattle.io/node") or meta.get("name", "")
         why = next((c.get("message") or c.get("reason") or "" for c in conditions if c.get("type") == "Failed"), "")
         tail = _job_log_tail(meta.get("name", ""))
-        return (f"the upgrade job on {node} failed" + (f" ({why})" if why else "")
-                + (f". Its last output: {tail}" if tail else f". kubectl -n {SUC_NS} logs job/{meta.get('name', '')} shows why"))
-    return ""
+        return (f"The upgrade job on {node} failed" + (f" ({why})" if why else "")
+                + (". Its last output is in the job's Log." if tail
+                   else f". kubectl -n {SUC_NS} logs job/{meta.get('name', '')} shows why")), tail
+    return "", []
 
 
 def _job_log_tail(job, lines=8):
-    """The last lines its newest pod wrote, on one line - what to read first."""
+    """The last lines its newest pod wrote - what to read first."""
     if not ktext or not job:
-        return ""
+        return []
     try:
         pods = _items(f"/api/v1/namespaces/{SUC_NS}/pods?labelSelector=" + urllib.parse.quote(f"job-name={job}", safe=""))
         pods.sort(key=lambda p: (p.get("metadata") or {}).get("creationTimestamp") or "")
         if not pods:
-            return ""
+            return []
         text = str(ktext(f"/api/v1/namespaces/{SUC_NS}/pods/{pods[-1]['metadata']['name']}/log?tailLines={lines * 3}") or "")
     except Exception:
-        return ""
+        return []
     # The upgrade script traces every command (set -x); what it says is the rest.
     said = [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("+")]
-    return " | ".join(said[-lines:])[:600]
+    return OPS.output_lines(said, keep=lines)
 
 
 def cordoned():
@@ -1165,8 +1167,9 @@ def status(item):
             if finishing and since < JOB_FINISH_WAIT:
                 return "running", 98, f"Every host runs {target}. Waiting for the upgrade job on {', '.join(finishing[:3])} to finish."
             return _end(item, ("succeeded", 100, f"Every node runs {target}"))
-        failed = _failed_upgrade_job()
+        failed, output = _failed_upgrade_job()
         if failed:
+            OPS.note_output(item, output)
             return _end(item, ("failed", int(100 * done / max(1, len(versions))), failed))
         waiting = sorted(name for name, v in versions.items() if v != target)
         if stalled:

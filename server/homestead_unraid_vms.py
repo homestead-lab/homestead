@@ -1373,7 +1373,13 @@ def status(item):
                 log = _job_logs(ns, disk["job"])
                 reason = next((c.get("message") or c.get("reason") for c in st.get("conditions") or []
                                if c.get("type") == "Failed" and c.get("status") == "True"), "")
-                failed = failure_reason(log, reason or "the copy stopped. Check its disk copy output")
+                said = failure_reason(log, "")
+                if said:
+                    # The line the copy wrote goes to the job's Log, not to the job list.
+                    OPS.note_output(item, [said])
+                    failed = (f"({reason}). " if reason else "") + "The copy's last error is in the job's Log"
+                else:
+                    failed = reason or "the copy stopped. Check its disk copy output"
                 break
             if st.get("succeeded"):
                 disk.update(pct=100, copied=True)
@@ -1382,14 +1388,15 @@ def status(item):
                 disk["pct"] = progress(_job_logs(ns, disk["job"]), disk["bytes"])
                 running += 1
         if failed:
-            return _fail(ref, f"Copying {ref.get('vm_name', ref['vm'])} failed: {failed}", item)
+            joined = " " if failed.startswith("(") else ". " if failed.startswith("The copy's") else ": "
+            return _fail(ref, f"Copying {ref.get('vm_name', ref['vm'])} failed{joined}{failed}", item)
         if gone and not running:
             return _copy_job_gone(ref, item, gone, phases)
         pct = sum(max(1, d["bytes"]) * d.get("pct", 0) for d in ref["disks"]) / total
         if done < len(ref["disks"]):
             gib = sum(d["bytes"] * d.get("pct", 0) / 100 for d in ref["disks"]) / 1024 ** 3
             still = f". {_gone_words(gone)}: this import stops when the others end" if gone else ""
-            return "running", max(3, min(94, round(pct * 0.94))), f"Copying from {ref['source']}: {gib:.1f} of {total / 1024 ** 3:.1f} GiB{still}"
+            return "running", max(3, min(94, round(pct * 0.94))), f"Copying from {ref['source']}, {gib:.1f} of {total / 1024 ** 3:.1f} GiB{still}"
         ref["phase"] = "convert"
         return "running", 95, "CDI is finishing the disk"
     if ref["phase"] == "convert":

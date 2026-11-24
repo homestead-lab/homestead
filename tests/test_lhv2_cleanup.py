@@ -9,6 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'server'))
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import homestead_lhv2_cleanup as C
+REAL_HOST = C.host   # before the tests put a stand-in in its place
 import homestead_kube as K
 from fakes.kube import Kube
 import homestead_capacity_review as REVIEW
@@ -456,6 +457,24 @@ class RefusalEndsTests(unittest.TestCase):
         self.assertFalse(self.cordoned('node-a')); self.assertEqual('complete',item['ref']['nodes'][0]['phase'])
         self.assertIsNone(C.pending()); C.require_idle()
 
+    def test_an_inspection_that_did_not_finish_puts_the_hosts_output_in_the_jobs_log(self):
+        item=self.start_and_stop_v2()
+        self.stage_error=OSError('host helper went away')
+        with self.assertRaises(OSError): C.progress(item)
+        self.stage_error=None
+        refusal=self.kube.object(C.CAP.LH+'/settings/v2-data-engine'); refusal['value']='true'; self.kube.add(refusal)
+        with patch.object(C.HOST,'run',return_value=('no result','Traceback (most recent call last)\nOSError: hugepages are busy')):
+            try:
+                REAL_HOST({'node':'node-a','uid':'u1'})
+            except Exception as error:
+                self.inspect_error=error
+        state,_,message=C.progress(item)
+        self.assertEqual('running',state)
+        self.assertIn("Host memory inspection did not finish on node-a. The host's output is in the job's Log",message)
+        self.assertNotIn('hugepages are busy',message)
+        self.assertEqual(['Traceback (most recent call last)','OSError: hugepages are busy'],
+                         [step['m'] for step in item.get('history',[]) if step.get('output')])
+
     def test_busy_hosts_and_failed_reads_still_retry_and_undo_nothing(self):
         item=self.start_and_stop_v2()
         self.kube.fail('/api/v1/pods',500)
@@ -474,7 +493,7 @@ class RefusalEndsTests(unittest.TestCase):
         refusal=self.kube.object(C.CAP.LH+'/settings/v2-data-engine'); refusal['value']='true'; self.kube.add(refusal)
         self.inspect_error=OSError('host unreachable')
         state,_,message=C.progress(item)
-        self.assertEqual('running',state); self.assertIn('turned on again',message); self.assertIn('node-a: host unreachable',message)
+        self.assertEqual('running',state); self.assertIn('turned on again',message); self.assertIn('node-a was not inspected (host unreachable)',message)
         self.assertTrue(self.cordoned('node-a')); self.assertIsNotNone(C.pending())
         self.inspect_error=None
         self.assertEqual('running',C.progress(item)[0])   # the receipt says restart-required

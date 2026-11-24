@@ -314,8 +314,12 @@ class StateTests(unittest.TestCase):
     def test_an_unconfirmed_launch_seen_running_says_so_and_still_needs_its_own_result(self):
         host, ref, _ = self.start_timed_out()
         host.out = lambda script: "RUNNING\nunpacking\n" if 'echo "CODE' in script else UBUNTU
-        state = HOST_OS.status({"ref": ref}, now=ref["since"] + 60)
-        self.assertEqual(("running", "Installing on node-1: unpacking"), (state[0], state[2]))
+        item = {"ref": ref}
+        state = HOST_OS.status(item, now=ref["since"] + 60)
+        self.assertEqual(("running", "Installing updates on node-1. Its latest output is in the job's Log."),
+                         (state[0], state[2]))
+        self.assertEqual(["unpacking"], [step["m"] for step in item["history"] if step.get("output")],
+                         "the host's line goes to the job's Log, not to the job list")
         self.assertIn("unconfirmed", ref, "only a result with this launch's id proves it")
 
     def test_cancelling_an_unconfirmed_launch_claims_nothing_about_the_install(self):
