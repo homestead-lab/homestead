@@ -6,10 +6,26 @@ window.volumeReclass = async x => {
   if (RECLASS.busy) return;
   RECLASS.back();
   window.__reclassVolume = x;
-  const classes = (STATE.data.storageClasses || []).filter(c => !c.internal && !c.made_for && c.name !== x.storage_class);
-  if (!classes.length) return toast("There is no other storage class to move it to", "warn");
+  const title = `Change storage class · ${x.pvc_name || x.name}`;
+  // The classes are read when the dialog opens, not on every refresh of Volumes (#1211). The dialog
+  // opens first, so a linked cluster's row reads that cluster's classes (fleetRoute).
+  modal(title, '<div class="empty"><span class="spin2"></span> Reading the storage classes…</div>', false, "operation-review");
+  // Closed, opened again for another volume, or another dialog opened meanwhile: the answer is not drawn.
+  const gone = () => window.__reclassVolume !== x || !!$("#modal")?.classList.contains("hidden")
+    || ($("#mtitle") && $("#mtitle").textContent !== title);
+  let all;
+  try { all = await api("/api/storage/classes"); }
+  catch (e) {
+    // Unread is not "no other class" (#620).
+    if (!gone()) modal(title, UI.error(e, { retry: "volumeReclass(window.__reclassVolume)", title: "The storage classes could not be read", dialog: true }), false, "operation-review");
+    return;
+  }
+  if (gone()) return;
+  STATE.data.storageClasses = all;
+  const classes = (all || []).filter(c => !c.internal && !c.made_for && c.name !== x.storage_class);
+  if (!classes.length) return modal(title, UI.callout("info", "There is no other storage class to move it to") + UI.actions(UI.cancel("Close")), false, "operation-review");
   const pick = classes.find(c => c.default) || classes[0];
-  modal(`Change storage class · ${x.pvc_name || x.name}`, UI.lead("Copy this volume to another storage class, keeping its name. Apps and VMs using it stop during the move, and the original data is kept afterwards.") +
+  modal(title, UI.lead("Copy this volume to another storage class, keeping its name. Apps and VMs using it stop during the move, and the original data is kept afterwards.") +
     UI.fields(UI.field("From", `<input value="${esc(x.storage_class || "unknown")}" disabled>`),
       UI.field("To", `<select id="rc_to" onchange="volumeReclassPlan(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">${classes.map(c => `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.replicas ? ` · ${esc(c.replicas)} copies` : ""}</option>`).join("")}</select>`)) +
     '<div id="rc_plan"></div>' +

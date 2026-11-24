@@ -14,6 +14,8 @@ function world({ blocked = false, missing = false, fail = false, live = false } 
     modal: (title, html, wide, context) => log.push(["modal", title, html, wide, context]), applyRole: () => log.push(["applyRole"]),
     noteOperation: op => log.push(["noteOperation", op]), refreshOperations: () => log.push(["refreshOperations"]),
     api: async (path, opts) => {
+      // The dialog reads the classes when it opens (#1211).
+      if (!opts && path === "/api/storage/classes") { log.push(["api", path]); return [{ name: "old" }, { name: "new-class", default: true }, { name: "other" }]; }
       const body = JSON.parse(opts.body); log.push(["api", path, body]);
       if (path.endsWith("/plan")) return { ok: !blocked, blockers: blocked ? ["Unsafe"] : [], warnings: ["Capacity unknown"], consumers: [{ name: "<app>", kind: "Deployment", running: true }],
         space: { size_gb: 20, replicas: 2, allocated_gb: 40 }, capacity_token: missing ? "" : "signed", from_class: "old", to_class: "new-class", live: live ? { disk_tags: ["nvme"], node_tags: [] } : undefined };

@@ -3,6 +3,17 @@
   [
    "modal",
    "Change storage class · data",
+   "<div class=\"empty\"><span class=\"spin2\"></span> Reading the storage classes…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/storage/classes"
+  ],
+  [
+   "modal",
+   "Change storage class · data",
    "<p class=\"ui-lead\">Copy this volume to another storage class, keeping its name. Apps and VMs using it stop during the move, and the original data is kept afterwards.</p><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"field-c1\">From</label><input id=\"field-c1\" value=\"old\" disabled></div><div class=\"ui-field\">\n    <label for=\"rc_to\">To</label><select id=\"rc_to\" onchange=\"volumeReclassPlan(\"lab\",\"data\")\"><option value=\"new-class\" selected>new-class</option><option value=\"other\" >other</option></select></div></div><div id=\"rc_plan\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"rc_ack\" onchange=\"volumeReclassReady()\"><span>Copy it despite the downtime and warnings</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"rc_go\" onclick=\"volumeReclassStart(\"lab\",\"data\")\" disabled >Move volume</button></div></div>",
    false,
    "operation-review"

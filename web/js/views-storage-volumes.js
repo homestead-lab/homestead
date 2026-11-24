@@ -220,8 +220,9 @@ async function viewStorage() {
     .then(answer => { delete load.missed[key]; return answer; },
       e => { load.missed[key] = `${label}: ${e.message}`; return fallback; })
     .then(answer => { load.parts[key] = answer; draw(); });
-  const parts = [part("/api/storage", "st", "totals", null), part("/api/storage/classes", "classes", "storage classes", []),
-    part("/api/storage/v2", "v2", "the V2 engine", null), part("/api/longhorn/capacity", "cap", "capacity", null),
+  // Only what the page draws. The storage classes, the V2 engine and Longhorn's
+  // capacity are read by the dialogs that use them, when they open (#1211).
+  const parts = [part("/api/storage", "st", "totals", null),
     part("/api/storage/forecast", "forecast", "the forecast", null), part("/api/volumes/old-copies", "oldCopies", "old copies", []),
     part("/api/volumes/other", "others", "other volumes", [])];
   volumes = await api("/api/volumes");
@@ -235,12 +236,9 @@ async function viewStorage() {
 
 function storagePaint(v, parts, missed) {
   const has = key => key in parts;
-  const { st, classes, v2, cap, forecast } = parts;
+  const { st, forecast } = parts;
   const allOldCopies = parts.oldCopies || [], allOthers = parts.others || [];
   if (has("forecast")) STATE.data.forecast = forecast;
-  STATE.data.lhcap = cap || STATE.data.lhcap;
-  if (has("classes")) STATE.data.storageClasses = classes;
-  if (has("v2")) STATE.data.v2 = v2;
   if (has("st")) STATE.data.storageTotals = st;
   STATE.data.vols = v;
   const q = STATE.q.toLowerCase();
@@ -646,6 +644,9 @@ window.storageClassCleanup = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.storageClassCreate = async (prefill = {}, onSaved = null) => {
+  // Which class Homestead uses (#1125) needs the classes. Settings and Change storage class leave
+  // them in STATE; opened from anywhere else, the dialog reads them itself (#1211).
+  const known = STATE.data.storageClasses != null;
   modal("New storage class", `
     <p class="muted small">Set the defaults for new volumes: copies, resizing and what happens to data when a volume is deleted. A storage class cannot be edited after it is created.</p>
     <div class="f" style="margin-top:14px"><label>Name</label>
@@ -669,7 +670,7 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
     <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks ${tip("Live-migratable is for moving running VMs between hosts. Its volumes are used on one host at a time, so it is not suitable for a shared volume (RWX).")}</label>
     <div id="sc_hint" hidden></div>
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the cluster's default class ${tip("The cluster's default, for claims that name no class.")}</label>
-    ${homesteadClassLine(STATE.data.storageClasses)}
+    ${known ? homesteadClassLine(STATE.data.storageClasses) : '<p class="dim xs" id="sc_ours"><span class="spin2"></span> Reading which class Homestead puts new volumes on…</p>'}
     ${UI.actions(`<button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   for (const [id, key] of [["sc_name", "name"], ["sc_reps", "replicas"], ["sc_copies", "copies"],
@@ -683,9 +684,21 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
   const button = $("#sc_go");
   button.__storageSaved = onSaved;
   button.disabled = true;
-  await storageClassTags(prefill, button);
+  await Promise.all([storageClassTags(prefill, button), known || storageClassOurs($("#sc_ours"))]);
   if ($("#sc_go") === button) button.disabled = false;
 };
+/* The dialog's "Homestead puts new volumes on …" line, read when it was not
+   known. Unread is said, never shown as if Homestead had no class (#620). */
+async function storageClassOurs(slot) {
+  let classes;
+  try { classes = await api("/api/storage/classes"); }
+  catch (e) {
+    if ($("#sc_ours") === slot) slot.outerHTML = `<p class="dim xs">Homestead could not read which class it puts new volumes on (${esc(e.message)}).</p>`;
+    return;
+  }
+  STATE.data.storageClasses = classes;
+  if ($("#sc_ours") === slot) slot.outerHTML = homesteadClassLine(classes);
+}
 /* The tags disks and nodes have, to choose from, and which nodes a choice
    leaves - a class needs one node per replica. */
 async function storageClassTags(prefill = {}, button = $("#sc_go")) {
@@ -912,6 +925,6 @@ if (typeof module === "object" && module.exports) module.exports = {
   volumeUsageCell, volumeProgressPoll, volumeProgressWatch, shareGuestWindowsNote, otherVolumesHtml,
   storageLoad, partReading, viewStorage, storagePaint, volumeDeleteConfirmationValid, releasedBesideCurrent,
   volumeDeleteTarget, v2Summary, V2_HOW, v2Mark, v2Item, storageClassesPaint, homesteadClassLine, storageClassCard,
-  storageClassTags, fileSize, monacoBase, monacoLoading, monacoLanguage, loadMonaco, monacoTheme, mountEditor,
+  storageClassOurs, storageClassTags, fileSize, monacoBase, monacoLoading, monacoLanguage, loadMonaco, monacoTheme, mountEditor,
   attachedWorkloads
 };

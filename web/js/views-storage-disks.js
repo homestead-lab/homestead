@@ -155,10 +155,23 @@ window.diskAction = async (action, node, disk, value) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
-  const v2 = STATE.data.lhcap?.v2?.enabled;
+/* Whether Longhorn's V2 engine is on, for the dialogs that offer it: read when
+   one opens (#1211), not on every refresh of Volumes, and with the dialog open,
+   so a linked cluster's host asks its own cluster. Unread is said, and only V1
+   is offered: it is not shown as off (#620). */
+const diskV2Read = () => api("/api/storage/v2").then(v2 => ({ on: !!v2?.enabled }), e => ({ unread: e.message }));
+// A dialog closed, or replaced by another, while its reads were out: the answer is not drawn.
+const diskDialogGone = title => !!$("#modal")?.classList.contains("hidden") || !!($("#mtitle") && $("#mtitle").textContent !== title);
+const diskV2Unread = v2 => v2.unread
+  ? `<div class="xs badtext">Homestead could not read whether the V2 engine is on, so only V1 is offered (${esc(v2.unread)}).</div>` : "";
+
+window.diskAdd = async (node, blockdevice = "", path = "", needsWipe = false) => {
+  const title = `Add a disk · ${node}`;
   const back = $("#nodeDisks") ? null : true;
-  childModal(`Add a disk · ${node}`, `
+  childModal(title, '<div class="empty"><span class="spin2"></span> Checking whether the V2 engine is on…</div>');
+  const read = await diskV2Read(), v2 = read.on;
+  if (diskDialogGone(title)) return;
+  childModal(title, `
     ${blockdevice ? `<p>Harvester formats <b class="mono">${esc(path)}</b> and gives it to Longhorn, which starts placing volume copies on it.</p>`
       : `${diskMountGuide(path)}
         <div class="f"><label>Disk location ${tip("For the V1 engine, the folder where a formatted disk is mounted on the host, such as /mnt/disk2. For V2, the raw device, such as /dev/sdb.")}</label>
@@ -166,7 +179,7 @@ window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
     <div class="f"><label>Engine</label><select id="da_engine">
       <option value="v1">V1 — ${blockdevice ? "formatted and mounted" : "a mounted folder"}</option>
       ${v2 ? `<option value="v2">V2 (SPDK) — the raw device</option>` : ""}</select>
-      ${v2 ? "" : '<div class="dim xs">The V2 engine is off. Turn it on under Settings › Hardware and storage to add a V2 disk.</div>'}</div>
+      ${v2 ? "" : read.unread ? diskV2Unread(read) : '<div class="dim xs">The V2 engine is off. Turn it on under Settings › Hardware and storage to add a V2 disk.</div>'}</div>
     ${blockdevice ? `<label class="switch"><input type="checkbox" id="da_wipe" ${needsWipe ? "" : "disabled"}> Erase it first
       ${needsWipe ? '<span class="badtext xs">· It already has a filesystem or partitions, which are destroyed.</span>' : '<span class="dim xs">· It is blank.</span>'}</label>` : ""}
     ${UI.actions(`<button class="btn pri" onclick="diskAddGo(${jsq(node)},${jsq(blockdevice)})">Add disk</button>
@@ -178,12 +191,15 @@ window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
    Longhorn data, or - typed to confirm - erase one holding something else.
    The system disk, and a mounted one, are refused. */
 window.diskSetup = async (node, device) => {
-  const v2 = STATE.data.lhcap?.v2?.enabled;
-  childModal(`Add ${device} · ${node}`, '<div class="empty"><span class="spin2"></span> Checking the disk on its host…</div>');
+  const title = `Add ${device} · ${node}`;
+  childModal(title, '<div class="empty"><span class="spin2"></span> Checking the disk on its host…</div>');
+  const reading = diskV2Read();
   let f;
   try {
     f = await api("/api/disks/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node, device }) });
   } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disk could not be checked.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' })); return; }
+  const read = await reading, v2 = read.on;
+  if (diskDialogGone(title)) return;
   STATE.data.diskFacts = f;
   const what = {
     blank: "It is blank.",
@@ -207,7 +223,7 @@ window.diskSetup = async (node, device) => {
       { html: `<span class="mono">${esc(device)}</span> · ${f.size_gb} GiB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}` },
       `${/<ul/.test(what) ? `<div>${what}</div>` : `<p>${what}</p>`}${(f.multipath || []).length ? `<p class="small">multipathd is using it (${esc(f.multipath.map(m => m.name).join(", "))}). Setting it up releases it and adds its WWID to the blacklist in /etc/multipath.conf, so that multipathd ignores this disk. Nothing else changes.</p>` : ""}`)}
     ${modes.length ? `
-      ${v2 ? `<div class="f"><label>Engine</label><select id="ds_engine" onchange="diskSetupChanged()"><option value="v1">V1 · formatted and mounted</option><option value="v2">V2 (SPDK) · the raw device</option></select></div>` : ""}
+      ${v2 ? `<div class="f"><label>Engine</label><select id="ds_engine" onchange="diskSetupChanged()"><option value="v1">V1 · formatted and mounted</option><option value="v2">V2 (SPDK) · the raw device</option></select></div>` : diskV2Unread(read)}
       <div class="disk-choices" id="ds_modes">
         ${modes.includes("format") ? choice("format", "Format the disk", `As a filesystem mounted at <span class="mono">${esc(f.mount_point)}</span>, for Longhorn.`, true) : ""}
         ${modes.includes("import") ? choice("import", "Keep its Longhorn data", `Mounted unchanged at <span class="mono">${esc(f.mount_point)}</span>. Volume copies from another cluster appear in Longhorn as orphaned data. Volumes are restored from their backups.`, true) : ""}
@@ -230,13 +246,16 @@ window.diskSetup = async (node, device) => {
    disk's unallocated space - made live, the table saved first. V1 gets a
    filesystem of its own; V2 the raw volume or partition. */
 window.diskOsSpace = async node => {
-  childModal(`Free space · ${node}`, '<div class="empty"><span class="spin2"></span> Checking the host\'s disks…</div>');
+  const title = `Free space · ${node}`;
+  childModal(title, '<div class="empty"><span class="spin2"></span> Checking the host\'s disks…</div>');
+  const reading = diskV2Read();
   let f;
   try {
     f = await api("/api/disks/os-space", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node }) });
   } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disks could not be checked.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' })); return; }
+  const read = await reading, v2 = read.on;
+  if (diskDialogGone(title)) return;
   STATE.data.osSpace = f;
-  const v2 = !!STATE.data.lhcap?.v2?.enabled;
   const lvmFree = f.vg && !f.error && f.usable_gb >= 5;
   const sources = [
     ...(lvmFree && (!f.taken?.v1 || (v2 && !f.taken?.v2))
@@ -246,6 +265,7 @@ window.diskOsSpace = async node => {
   if (f.problem || !sources.length) {
     $("#mbody").innerHTML = `<div class="ui-stack">${UI.callout("warn", "No free space to use",
       `${esc(((f.problem || f.lvm_problems?.v1 || "no free space") + "").replace(/^./, c => c.toUpperCase()))}.`)}
+      ${diskV2Unread(read)}
       ${UI.more("What Homestead does and does not do", `<p class="small">It uses only space that nothing else uses: free space in the
         system's LVM volume group, or space after the last partition of a GPT disk. It never shrinks or moves a partition or
         filesystem of a running system. ext4 cannot shrink while mounted, and XFS cannot shrink at all. That needs a rescue start-up.</p>`)}
@@ -257,7 +277,7 @@ window.diskOsSpace = async node => {
     <div class="f"><label>Space</label><select id="os_source" onchange="diskOsSpaceChanged(true)">${sources.map(([value, label]) =>
       `<option value="${esc(value)}">${esc(label)}</option>`).join("")}</select></div>
     ${v2 ? `<div class="f"><label>Engine</label><select id="os_engine" onchange="diskOsSpaceChanged()">
-      <option value="v1">V1 · its own filesystem, mounted</option><option value="v2">V2 (SPDK) · the raw volume or partition</option></select></div>` : ""}
+      <option value="v1">V1 · its own filesystem, mounted</option><option value="v2">V2 (SPDK) · the raw volume or partition</option></select></div>` : diskV2Unread(read)}
     <div class="f"><label>Size (GiB)</label><input id="os_size" type="number" min="5"></div>
     <p class="small" id="os_what"></p>
     <div id="os_confirm_row" hidden></div>
@@ -412,5 +432,5 @@ window.diskAddGo = async (node, blockdevice) => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  DISK_ROLE, diskRowsHtml, nodeTagsLine, TAG_IDEAS, tagEditor, tagsSave, loadDisks, disksRepaint, diskMountGuide
+  DISK_ROLE, diskRowsHtml, nodeTagsLine, TAG_IDEAS, tagEditor, tagsSave, loadDisks, disksRepaint, diskV2Read, diskDialogGone, diskV2Unread, diskMountGuide
 };

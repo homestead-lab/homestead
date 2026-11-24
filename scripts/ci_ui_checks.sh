@@ -56,6 +56,7 @@ case "${1:-}" in
     UPTIME_STRIP_SCREENSHOTS=release-assets/pages/uptime-strip node tests/integration/host-uptime-strip.mjs
     HOST_MAINTENANCE_SCREENSHOTS=release-assets/pages/host-maintenance node tests/integration/host-maintenance.mjs
     node tests/integration/settings-reads.mjs
+    node tests/integration/volumes-page-reads.mjs
     ;;
   pages-dashboard)
     INSIGHTS_OUTPUT=release-assets/pages/insights node tests/integration/health-insights.mjs
