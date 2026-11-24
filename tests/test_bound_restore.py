@@ -1,14 +1,18 @@
 """tests/bound_restore.py: what a test file leaves bound is put back before the next file runs."""
 import sys
+import time
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bound_guard as GUARD
 import bound_restore as RESTORE
 
+import homestead_auth as AUTH
+import homestead_changes as CHANGES
 import homestead_push as PUSH
 import homestead_uplinks as UPLINKS
 
@@ -131,6 +135,127 @@ class PutBack(unittest.TestCase):
         check = run(CLEAN.BoundStateClean)
         self.assertEqual(["test_no_test_left_a_fake_that_is_not_listed"],
                          [test._testMethodName for test, _ in check.failures])
+
+
+class CachesEmptied(unittest.TestCase):
+    """The account store cache and the change-author key, after each file."""
+
+    def setUp(self):
+        if not RESTORE.installed():
+            RESTORE.install()
+            self.addCleanup(RESTORE.uninstall)
+        self.enterContext(mock.patch.dict(AUTH._store_cache, {"at": 0, "data": None}, clear=True))
+        self.enterContext(mock.patch.dict(CHANGES._known, clear=True))
+
+        def forget():
+            # The made-up files' records, so the guards at the end of the run do not count them.
+            for name in [name for name in RESTORE.caches_left if name.startswith("test_made_up_cache_")]:
+                RESTORE.caches_left.pop(name)
+            RESTORE.cache_files.difference_update({f"test_made_up_cache_{x}" for x in "ab"})
+            for files in (GUARD.ran, GUARD.unchecked):
+                files.difference_update({f"test_made_up_cache_{x}" for x in "ab"})
+        self.addCleanup(forget)
+
+    def two_files(self, leave):
+        """A file whose test runs leave(), then a file that reads both caches."""
+        seen = []
+
+        class Leaky(unittest.TestCase):
+            def test_leaves(self):
+                leave()
+
+        class Next(unittest.TestCase):
+            def test_reads(self):
+                seen.append((AUTH._store_cache.get("data"), dict(CHANGES._known)))
+
+        Leaky.__module__, Next.__module__ = "test_made_up_cache_a", "test_made_up_cache_b"
+        self.assertTrue(run(Leaky, Next).wasSuccessful())
+        return seen
+
+    def test_a_keyed_store_one_file_leaves_is_gone_in_the_next_file_and_the_file_is_named(self):
+        # What CI's share 4 had before test_revert_fenced (23 Nov): a store read moments ago, with a key.
+        seen = self.two_files(lambda: AUTH._store_cache.update(
+            at=time.time(), data={"users": {}, "signing_key": "example-key"}))
+        self.assertEqual([(None, {})], seen)
+        self.assertEqual({"test_made_up_cache_a": {"homestead_auth._store_cache"}},
+                         {f: n for f, n in RESTORE.caches_left.items() if f.startswith("test_made_up_cache_")})
+        self.assertEqual(["test_made_up_cache_a: homestead_auth._store_cache"],
+                         RESTORE.new_cache_leaks({"test_made_up_cache_a": {"homestead_auth._store_cache"}}, frozenset()))
+
+    def test_a_key_left_in_the_change_author_cache_is_gone_too(self):
+        seen = self.two_files(lambda: CHANGES._known.update(key=b"k" * 32, users=[], api_keys=[]))
+        self.assertEqual([(None, {})], seen)
+        self.assertIn("homestead_changes._known", RESTORE.caches_left["test_made_up_cache_a"])
+
+    def test_with_no_key_left_the_next_file_writes_no_mark(self):
+        # The clock race of test_revert_fenced needs a key from an earlier file: with none, a
+        # Deployment write through the write guard carries no mark at all.
+        bodies = []
+
+        class Leaky(unittest.TestCase):
+            def test_leaves(self):
+                AUTH._store_cache.update(at=time.time(), data={"users": {}, "signing_key": "example-key"})
+                CHANGES._accounts()
+
+        class Next(unittest.TestCase):
+            def test_writes(self):
+                body = {"spec": {"replicas": 3}}
+                with mock.patch.object(AUTH, "kget", side_effect=OSError("no cluster here")):
+                    CHANGES.note_write("PATCH", "/apis/apps/v1/namespaces/lab/deployments/app-a", body)
+                bodies.append(body)
+
+        Leaky.__module__, Next.__module__ = "test_made_up_cache_a", "test_made_up_cache_b"
+        self.assertTrue(run(Leaky, Next).wasSuccessful())
+        self.assertNotIn(CHANGES.AUTHOR, (bodies[0].get("metadata") or {}).get("annotations") or {})
+
+    def test_a_listed_file_is_tolerated_and_one_that_no_longer_leaks_is_named(self):
+        left = {"test_made_up_cache_a": {"homestead_auth._store_cache"}}
+        listed = frozenset({"test_made_up_cache_a", "test_made_up_cache_b", "test_made_up_cache_c"})
+        self.assertEqual([], RESTORE.new_cache_leaks(left, listed))
+        checked = {"test_made_up_cache_a", "test_made_up_cache_b"}
+        self.assertEqual(["test_made_up_cache_b"], RESTORE.stale_cache_leaks(left, checked, listed),
+                         "b ran and left nothing; c did not run here, so it says nothing")
+
+    def test_a_pending_file_is_not_stale_and_pending_entries_have_a_ceiling_of_their_own(self):
+        left, checked = {}, {"test_made_up_cache_a"}
+        listed = frozenset({"test_made_up_cache_a", "test_made_up_cache_b"})
+        self.assertEqual([], RESTORE.stale_cache_leaks(left, checked, listed, frozenset({"test_made_up_cache_a"})),
+                         "an open PR of ours fixes a: it ran clean, and is not stale while pending")
+        self.assertEqual(["test_made_up_cache_a"], RESTORE.stale_cache_leaks(left, checked, listed),
+                         "once off the pending list (its PR merged), the same run names it")
+        pending = frozenset({"test_made_up_cache_a"})
+        self.assertEqual([], RESTORE.cache_ceiling_faults(listed, pending, 2, 1), "every listed file counts")
+        self.assertEqual(["CACHE_LEAKS has 2, ceiling 1: it may only shrink, fix the leak instead"],
+                         RESTORE.cache_ceiling_faults(listed, pending, 1, 1))
+        self.assertEqual(["pending entries has 0, ceiling 1: lower the ceiling to match"],
+                         RESTORE.cache_ceiling_faults(listed, frozenset(), 2, 1))
+        self.assertEqual(["pending entries has 1, ceiling 0: it may only shrink, fix the leak instead"],
+                         RESTORE.cache_ceiling_faults(listed, pending, 2, 0))
+        self.assertEqual(["test_made_up_cache_c is pending but not on CACHE_LEAKS"],
+                         RESTORE.cache_ceiling_faults(listed, frozenset({"test_made_up_cache_c"}), 2, 1))
+
+    def test_a_listed_file_not_in_the_tree_yet_is_neither_stale_nor_named(self):
+        # An open PR of ours adds test_made_up_cache_b: listed before it arrives. It never ran here.
+        listed = frozenset({"test_made_up_cache_a", "test_made_up_cache_b"})
+        left, checked = {"test_made_up_cache_a": {"homestead_auth._store_cache"}}, {"test_made_up_cache_a"}
+        self.assertEqual([], RESTORE.stale_cache_leaks(left, checked, listed))
+        self.assertEqual([], RESTORE.new_cache_leaks(left, listed))
+        self.assertEqual([], RESTORE.cache_ceiling_faults(listed, frozenset({"test_made_up_cache_b"}), 2, 1),
+                         "counted from the start, so its merge changes no count")
+
+    def test_a_listed_file_that_arrives_and_leaks_is_tolerated_and_an_unlisted_one_still_fails(self):
+        listed = frozenset({"test_made_up_cache_a"})   # a arrives with its PR; b is listed nowhere
+        self.two_files(lambda: AUTH._store_cache.update(at=time.time(), data={"users": {}}))
+        left = {f: n for f, n in RESTORE.caches_left.items() if f.startswith("test_made_up_cache_")}
+        self.assertEqual([], RESTORE.new_cache_leaks(left, listed))
+        self.assertEqual([], RESTORE.stale_cache_leaks(left, RESTORE.cache_files, listed))
+        self.assertEqual(["test_made_up_cache_a: homestead_auth._store_cache"], RESTORE.new_cache_leaks(left, frozenset()),
+                         "not listed: it fails, named")
+
+    def test_a_file_that_leaves_nothing_is_not_named(self):
+        self.two_files(lambda: None)
+        self.assertNotIn("test_made_up_cache_a", RESTORE.caches_left)
+        self.assertIn("test_made_up_cache_a", RESTORE.cache_files)
 
 
 if __name__ == "__main__":
