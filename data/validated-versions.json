@@ -1,5 +1,5 @@
 {
- "generated": "2026-11-19T00:00:00Z",
+ "generated": "2026-11-26T14:49:24Z",
  "host": {
   "ubuntu-26.04-amd64": [
    {
@@ -18,15 +18,103 @@
       "kernel.apparmor_restrict_unprivileged_unconfined": "0"
      }
     }
+   },
+   {
+    "affects": [
+     "kubevirt"
+    ],
+    "evidence": "https://github.com/homestead-lab/homestead/actions/runs/45833726763",
+    "not_covered": [
+     "gpu-passthrough",
+     "real-disks"
+    ],
+    "package": "linux-image-7.0.0-44-generic",
+    "reason": "vm failed",
+    "status": "bad",
+    "tested": "2026-11-26",
+    "version": "7.0.0-44.44"
    }
   ]
  },
  "images": {},
  "platform": {
-  "cdi": [],
-  "k3s": [],
-  "kubevirt": [],
-  "longhorn": [],
-  "rke2": []
+  "cdi": [
+   {
+    "affects": [
+     "kubevirt"
+    ],
+    "evidence": "https://github.com/homestead-lab/homestead/actions/runs/45833726763",
+    "not_covered": [
+     "gpu-passthrough",
+     "real-disks"
+    ],
+    "reason": "vm failed",
+    "status": "bad",
+    "tested": "2026-11-26",
+    "version": "v1.66.1"
+   }
+  ],
+  "k3s": [
+   {
+    "affects": [
+     "kubevirt"
+    ],
+    "evidence": "https://github.com/homestead-lab/homestead/actions/runs/45833726763",
+    "not_covered": [
+     "gpu-passthrough",
+     "real-disks"
+    ],
+    "reason": "vm failed",
+    "status": "bad",
+    "tested": "2026-11-26",
+    "version": "v1.37.2+k3s1"
+   }
+  ],
+  "kubevirt": [
+   {
+    "affects": [
+     "kubevirt"
+    ],
+    "evidence": "https://github.com/homestead-lab/homestead/actions/runs/45833726763",
+    "not_covered": [
+     "gpu-passthrough",
+     "real-disks"
+    ],
+    "reason": "vm failed",
+    "status": "bad",
+    "tested": "2026-11-26",
+    "version": "v1.10.0"
+   }
+  ],
+  "longhorn": [
+   {
+    "affects": [
+     "kubevirt"
+    ],
+    "evidence": "https://github.com/homestead-lab/homestead/actions/runs/45833726763",
+    "not_covered": [
+     "gpu-passthrough",
+     "real-disks"
+    ],
+    "reason": "vm failed",
+    "status": "bad",
+    "tested": "2026-11-26",
+    "version": "v1.13.0"
+   }
+  ],
+  "rke2": [
+   {
+    "affects": [],
+    "evidence": "https://github.com/homestead-lab/homestead/actions/runs/45833726763",
+    "not_covered": [
+     "gpu-passthrough",
+     "real-disks"
+    ],
+    "reason": "install failed",
+    "status": "bad",
+    "tested": "2026-11-26",
+    "version": "v1.37.2+rke2r1"
+   }
+  ]
  }
 }
