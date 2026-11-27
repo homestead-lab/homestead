@@ -325,6 +325,12 @@ needed: Rebuild copy when a copy is missing, Expand volume when it fills up.
 Volumes' columns are Volume, Attached to, Copies (dots, and under them what is
 missing or how far a rebuild is, `UI.reason(…, { under: true })`), Usage (files against the file system, and a
 Full in … chip under it), Last used and actions.
+Virtual machines' columns are VM, Status ("Running", "Shut down", or a chip
+and its reason), Address, CPU, Memory and actions; the labelled action is
+Open console while a VM runs, Start VM when it is shut down, and Edit settings
+when it cannot start. The summary names the VMs that are shut down. Its
+sidebar's tabs are Overview (address, size, memory, disk activity, host),
+Disks, Activity and Settings; the VM page keeps every other detail.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
 pause on the name or the state shows a hover card. The page's summary line

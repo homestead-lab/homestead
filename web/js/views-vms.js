@@ -30,17 +30,18 @@ async function viewVMs() {
   STATE.data.vms = vms;
   const q = STATE.q.toLowerCase();
   const rows = vms.filter(v => !q || [v.name, v.ns, v.os, v.ip, v.node, v.description].join(" ").toLowerCase().includes(q));
-  const running = vms.filter(v => v.status === "Running").length;
   const layout = viewLayout("vms");
   const items = [{ label: "Image store", icon: "store", run: "vmStore()", tip: "Cloud images from their publishers, such as Ubuntu, Debian, Fedora and Rocky, to create VMs from." },
     { label: "ISO library", icon: "disk", run: "vmIsoLibrary()", tip: "ISO images from folders on the network shares, for VM CD-ROM drives." },
     { label: "New k3s cluster", icon: "plus", run: "k3sCluster()", need: "operator", tip: "Create a k3s cluster from VMs on this cluster, each with its own address." },
     { label: "Power schedules", icon: "clock", run: "schedulesOverview()", tip: "Apps and VMs that stop and start on a schedule." }];
   const create = '<button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button>';
-  paint(`<div class="vms-page collection-page" data-collection="vms">${UI.pageHeader(`Virtual machines`, `${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}${metricsNotice(vms)}`, `${layoutSwitch("vms", "viewVMs")}
-      ${moreMenu(items)}${create}`)}
-    ${UI.collectionHeader(`<span class="collection-mobile-scope">All VMs</span>${vmListOptions(layout, items)}${create}`, `<span>${rows.length} VM${rows.length === 1 ? "" : "s"} · ${rows.filter(v => v.status === "Running").length} running</span>
-        ${STATE.platform?.harvester === false && !STATE.platform.cdi ? UI.chip("No CDI", "warn", { size: "slim" }) : ""}`)}
+  // The layout is a choice in ⋯, as on Containers: the summary line stands alone.
+  const layoutItem = { label: layout === "rows" ? "Show as cards" : "Show as rows", icon: layout === "rows" ? "dash" : "list",
+    run: `setViewLayout('vms','viewVMs',${jsq(layout === "rows" ? "cards" : "rows")})` };
+  const summary = vmSummary(rows, { q });
+  paint(`<div class="vms-page collection-page" data-collection="vms">${UI.pageHeader(`Virtual machines`, `${summary}${metricsNotice(vms)}`, `${moreMenu([layoutItem, ...items])}${create}`)}
+    ${UI.collectionHeader(`<span class="collection-mobile-scope">All VMs</span>${vmListOptions(layout, items)}${create}`, `<span>${summary}</span>`)}
     ${uptimeUnreadNote()}
     ${!rows.length ? `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet. Create one to get started."}</div>`
       : layout === "rows" ? vmTable(rows) : `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`}</div>`);
@@ -168,7 +169,7 @@ function vmSpecs(v) {
 /* Its addresses, whole: the first, and how many more. Stopped, it has none. */
 function vmAddress(v, withNetwork = true) {
   const ips = v.ips?.length ? v.ips : v.ip ? [v.ip] : [];
-  if (!ips.length) return `<span class="dim">${v.running ? "no address reported yet" : "no address while stopped"}</span>`;
+  if (!ips.length) return `<span class="dim">${v.running ? "No address reported yet" : "No address while shut down"}</span>`;
   return `<span class="mono vm-ip">${esc(ips[0])}</span>
     <button class="iconbtn vm-copy" type="button" title="Copy ${esc(ips[0])}" onclick="event.stopPropagation();ipamCopy(${jsq(ips[0])})">${icon("copy")}</button>
     ${ips.length > 1 ? UI.chip(`+${ips.length - 1}`, "neutral", { tip: ips.slice(1).join(", ") }) : ""}
@@ -196,30 +197,10 @@ function vmUsage(v) {
 }
 const vmClusterTag = v => v.cluster ? `<span class="tag cluster-tag" data-tip="A VM of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
 
-function vmActions(v, compact = false) {
-  // One power action beside Console, as a container card has Logs; the rest
-  // are in ⋯, the shared action bar, named for this VM (#487).
-  const ns = jsq(v.ns), name = jsq(v.name), run = a => `vmPower(${ns},${name},${jsq(a)})`;
-  const main = v.actions.filter(a => ["start", "stop", "restart", "unpause"].includes(a));
-  const words = a => a === "stop" && v.stop_retries ? ["Stop retries", "power", "Stop retrying the start, and keep the VM off until it is started."] : VM_ACTIONS[a];
-  const power = a => ({ label: words(a)[0], icon: words(a)[1], tip: words(a)[2], run: run(a), need: "operator", pri: a === "start" });
-  const console = v.actions.includes("console");
-  return actionBar([
-    main[0] && power(main[0]),
-    console && { label: "Console", icon: "console", run: `vmConsole(${ns},${name})`, need: "operator", tip: "Console" },
-    { label: "Details", icon: "list", run: `vmOpen(${ns},${name})` },
-    ...main.slice(1).map(power),
-    { label: "Edit", icon: "edit", run: `vmEdit(${ns},${name})`, need: "operator" },
-    { label: "Logo", icon: "logo", run: `vmLogo(${ns},${name})`, need: "operator" },
-    { label: "Monitoring", icon: "pulse", run: `vmMonitoring(${ns},${name})` },
-    { label: "Schedule", icon: "clock", run: `vmSchedule(${ns},${name})`, need: "operator" },
-    v.actions.includes("pause") && { label: "Pause", icon: "pause", run: run("pause"), need: "operator" },
-    v.actions.includes("migrate") && { label: "Move to another host", icon: "move", run: `vmMove(${ns},${name})`, need: "operator" },
-    FLEET.view?.linked && { label: "Move to cluster", icon: "move", run: `moveToCluster('vm',${name},${jsq(v.site?.handle || "")},'move',${ns})`, need: "admin", tip: "Move this VM and its disks to another linked cluster." },
-    FLEET.view?.linked && { label: "Copy to cluster", icon: "copy", run: `moveToCluster('vm',${name},${jsq(v.site?.handle || "")},'copy',${ns})`, need: "admin", tip: "Create a stopped copy of this VM on another linked cluster and keep the original." },
-    v.actions.includes("force-stop") && { label: "Force off", icon: "plug", run: run("force-stop"), need: "operator", danger: true, tip: VM_ACTIONS["force-stop"][2] },
-    { label: "Delete", icon: "trash", run: `vmDelete(${ns},${name})`, need: "admin", danger: true },
-  ], { shown: (main.length ? 1 : 0) + (console ? 1 : 0), label: `More actions for ${v.name}`, iconOnly: compact });
+function vmActions(v) {
+  // The labelled button shows its words alone (style.css .btn[data-plain]).
+  const items = vmActionItems(v), main = vmMainAction(v, items), label = `More actions for ${v.name}`;
+  return main ? actionBar([{ ...main, plain: true }, ...items.filter(i => i !== main)], { shown: 1, label }) : actionBar(items, { shown: 0, label });
 }
 
 /* The same VMs as rows: everything a card says, one VM a line. */
@@ -232,20 +213,17 @@ function vmAvatar(v, cls = "") {
 
 function vmTable(rows) {
   return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact vm-table" data-sort="vms" data-sort-controls="vms"><thead><tr>
-    <th>VM</th><th>Status</th><th>Address</th><th>CPU</th><th>RAM</th><th>Disk IO</th><th data-nosort></th></tr></thead><tbody>
-    ${rows.map(v => `<tr class="clickable"${clusterAttr(v)} onclick="if(!event.target.closest('button,details,a'))vmOpen(${jsq(v.ns)},${jsq(v.name)})">
-      <td class="cell-name" data-sort="${esc(v.name)}"><div class="vm-name-cell">${vmAvatar(v)}<div class="vm-name-text"><b title="${esc(v.name)}">${esc(v.name)}</b>
+    <th>VM</th><th>Status</th><th>Address</th><th>CPU</th><th>Memory</th><th data-nosort></th></tr></thead><tbody>
+    ${rows.map(v => { const p = vmProblem(v), key = vmKey(v); return `<tr class="clickable${p ? ` vm-problem ${p.tone}` : ""}"${clusterAttr(v)} onclick="if(!event.target.closest('button,details,a'))openDetails('vm',${jsq(key)})">
+      <td class="cell-name" data-sort="${esc(v.name)}"><div class="vm-name-cell">${vmAvatar(v)}<div class="vm-name-text"><button type="button" class="linkish vm-open" title="${esc(v.name)}" onclick="openDetails('vm',${jsq(key)})">${esc(v.name)}</button>
         ${clusterTag(v) || vmClusterTag(v) ? `<div class="row vm-tags">${clusterTag(v)}${vmClusterTag(v)}</div>` : ""}
         <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></div></div></td>
-      <td data-label="Status" data-status data-sort="${esc(v.status)}">${UI.chip(v.status, vmTone(v.status), { tip: v.problem || "" })}${answerTag(v, true)}${scheduleTag(v)}
-        ${v.restart_required ? '<div class="dim xs">restart to apply changes</div>' : ""}
-        ${(v.filling || []).length ? `<div class="dim xs">${esc(VM_FILL_WORDS[v.filling[0].phase] || v.filling[0].phase)}${v.filling[0].progress != null ? ` · ${v.filling[0].progress.toFixed(0)}%` : ""}</div>` : ""}</td>
-      <td data-label="Address" class="nowrap" data-sort="${esc((v.ips || [])[0] || "")}"><div class="vm-addr">${vmAddress(v, false)}</div>
+      <td data-label="Status" data-status data-sort="${esc(v.status)}">${vmStatusWords(v)}</td>
+      <td data-label="Address" class="nowrap" data-sort="${esc((v.ips || [])[0] || "")}"><div class="vm-addr" data-card="vm-address|${esc(key)}">${vmAddress(v, false)}</div>
         ${v.network ? `<div class="dim xs">${esc(v.network)}</div>` : ""}</td>
-      <td data-label="CPU" class="nowrap vm-cell-use" data-sort="${v.usage?.cpu_pct ?? -1}">${v.usage?.cpu_pct != null ? `${meter(v.usage.cpu_pct, "", "cpu")}<div class="dim xs mono">${v.usage.cpu_pct}% of ${v.cores}</div>` : `<span class="dim xs">${v.cores} vCPU${v.cores === 1 ? "" : "s"}</span>`}</td>
-      <td data-label="RAM" class="nowrap vm-cell-use" data-sort="${v.usage?.mem_pct ?? -1}">${v.usage?.mem_pct != null ? `${meter(v.usage.mem_pct, "", "memory")}<div class="dim xs mono">${vmBytes(v.usage.mem)} of ${esc(v.memory)}</div>` : `<span class="dim xs">${esc(v.memory || "—")}</span>`}</td>
-      <td data-label="Disk IO" data-sm-hide class="nowrap small" data-sort="${(v.usage?.read_bps || 0) + (v.usage?.write_bps || 0)}">${v.running ? vmIo(v.usage) : '<span class="dim">—</span>'}</td>
-      <td class="nowrap" data-actions><div class="row vm-actions" style="justify-content:flex-end">${vmActions(v, true)}</div></td></tr>`).join("")}
+      <td data-label="CPU" class="nowrap vm-cell-use" data-card="vm-usage|${esc(key)}" data-sort="${v.usage?.cpu_pct ?? -1}">${v.usage?.cpu_pct != null ? `${meter(v.usage.cpu_pct, "", "cpu")}<div class="dim xs mono">${v.usage.cpu_pct}% of ${v.cores}</div>` : `<span class="dim xs">${v.cores} vCPU${v.cores === 1 ? "" : "s"}</span>`}</td>
+      <td data-label="Memory" class="nowrap vm-cell-use" data-card="vm-usage|${esc(key)}" data-sort="${v.usage?.mem_pct ?? -1}">${v.usage?.mem_pct != null ? `${meter(v.usage.mem_pct, "", "memory")}<div class="dim xs mono">${vmBytes(v.usage.mem)} of ${esc(v.memory)}</div>` : `<span class="dim xs">${esc(v.memory || "—")}</span>`}</td>
+      <td class="nowrap" data-actions><div class="row vm-actions" style="justify-content:flex-end">${vmActions(v)}</div></td></tr>`; }).join("")}
     </tbody></table></div></div>`;
 }
 window.viewVMs = viewVMs;
@@ -289,7 +267,7 @@ function vmCard(v) {
   const sub = [v.ns, v.os, v.cluster ? `${v.cluster}${v.cluster_role ? ` ${v.cluster_role}` : ""}` : ""].filter(Boolean).join(" · ");
   return `<div class="card flat vm-card vm-${vmTone(v.status)}"${clusterAttr(v)}>
     <div class="between vm-head">
-      <a class="vm-title" onclick="vmOpen(${jsq(v.ns)},${jsq(v.name)})">${vmAvatar(v)}
+      <a class="vm-title" onclick="openDetails('vm',${jsq(vmKey(v))})">${vmAvatar(v)}
         <div class="vm-name"><b title="${esc(v.description || v.name)}">${esc(v.name)}</b><div class="dim xs" title="${esc(sub)}">${esc(sub)}</div></div></a>
       <span class="row nowrap" style="gap:6px">${clusterTag(v)}${UI.chip(v.status, vmTone(v.status), { tip: v.problem || "" })}</span></div>
     ${v.problem ? `${UI.callout("bad", "", `${esc(v.problem)}`, { className: "vm-problem" })}` : ""}

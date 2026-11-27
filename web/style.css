@@ -2209,6 +2209,11 @@ div.ipam-line.dim{display:block}
 .vm-host{margin-left:auto;color:var(--tx)}
 .vm-host::before{content:"on ";color:var(--dim)}
 .vm-table .vm-addr{flex-wrap:nowrap}
+/* A VM in trouble colours its row's edge, as an app's does; its name opens the details sidebar. */
+.vm-table tr.vm-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+.vm-table tr.vm-problem.warn>td:first-child{box-shadow:inset 3px 0 0 var(--med)}
+.vm-open{padding:0;color:var(--tx);font-weight:650;text-align:left;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vm-table .vm-state{margin-right:6px}
 .vm-table .vm-actions{flex-wrap:nowrap}
 .vm-iconbtn{padding-left:9px;padding-right:9px}.vm-iconbtn .btnicon{margin:0}
 @media(max-width:560px){.vm-grid{grid-template-columns:1fr}}

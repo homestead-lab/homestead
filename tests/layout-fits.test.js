@@ -15,7 +15,9 @@ test("a VM or monitored name ends in an ellipsis, with the cluster tag on its ow
   assert.match(css, /\.vm-name-text>b\{[^}]*text-overflow:ellipsis/);
   const row = read("web/js/views-vms.js");
   assert.doesNotMatch(row, /<b>\$\{esc\(v\.name\)\}<\/b> \$\{clusterTag\(v\)\}\$\{vmClusterTag\(v\)\}/);
-  assert.match(row, /<b title="\$\{esc\(v\.name\)\}">/);
+  // The name is the button that opens the details sidebar, and ends in an ellipsis too.
+  assert.match(row, /<button type="button" class="linkish vm-open" title="\$\{esc\(v\.name\)\}"/);
+  assert.match(css, /\.vm-open\{[^}]*text-overflow:ellipsis/);
   assert.match(read("web/js/uptime.js"), /<b title="\$\{esc\(w\.name\)\}">/);
 });
 test("Remove container is hidden when there is one container, and sits clear of the first field", () => {

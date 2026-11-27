@@ -249,7 +249,7 @@ try {
       const bounds=await toolbar.locator(':scope>*').evaluateAll(items=>items.filter(e=>e.checkVisibility()).map(e=>e.getBoundingClientRect()));
       assert.ok(bounds.length>=2&&bounds.every(b=>Math.abs(b.y+b.height/2-bounds[0].y-bounds[0].height/2)<2),'VM scope and Options align on one row');
       const vmCount=await page.locator('.vm-table tbody tr').count();
-      assert.match(await header.locator('.collection-mobile-summary').textContent(),new RegExp(`${vmCount} VMs? · \\d+ running`));
+      assert.match(await header.locator('.collection-mobile-summary .sum-narrow').textContent(),new RegExp(`(\\d+ of ${vmCount} VMs? (is|are)|All ${vmCount} VMs are|The VM is) running\\.`));
       await header.getByLabel('List options',{exact:true}).click();
       const menu=page.locator('.actionmenu-portal .list-options-pop');
       await menu.waitFor();
@@ -302,10 +302,11 @@ try {
       await page.keyboard.press('Escape');
       await page.evaluate(()=>{ROLE='admin';paintWho();STATE.q='no-matching-vm-example';return viewVMs()});
       await page.getByText('Nothing matches that search.',{exact:true}).waitFor();
-      assert.match(await header.locator('.collection-mobile-summary').textContent(),/0 VMs · 0 running/);
+      assert.match(await header.locator('.collection-mobile-summary .sum-narrow').textContent(),/No VMs matching “no-matching-vm-example”\./);
     } else {
       assert.equal(await page.locator('.vms-page .collection-mobile-head').isVisible(),false);
-      assert.equal(await page.locator('.vms-page>.phead>.row').isVisible(),true);
+      // The layout is in ⋯ and the buttons are in the top bar (one bar), so the header keeps no row of its own.
+      assert.equal(await page.locator('#pagebar').getByRole('button',{name:'＋ New VM',exact:true}).isVisible(),true,'New VM is in the top bar');
     }
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(errors,[]);
