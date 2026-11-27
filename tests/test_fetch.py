@@ -2,6 +2,8 @@
 import http.server
 import io
 import json
+import socket
+import ssl
 import sys
 import threading
 import time
@@ -416,6 +418,155 @@ class GetTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             FETCH.get(self.here + "/nothing", limit=100, seconds=5)
         self.assertEqual(404, caught.exception.code)
+
+
+class GetBeforeTheBodyTests(unittest.TestCase):
+    """urllib's timeout is per wait on the socket: a far end that sent its
+    status line or headers a byte at a time held FETCH.get (an add-on
+    download, a move, the UniFi console) for as long as it kept sending. A real
+    local socket trickles here, as in the Fleet tests (#1488). (Python already
+    bounds a TLS handshake by one wait; it now ends at the deadline too.)"""
+
+    def far_end(self, speak):
+        """A port whose every connection is handed to speak(conn, stop)."""
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+        self.addCleanup(listener.close)
+
+        def run(conn):
+            try:
+                speak(conn, stop)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        def accept():
+            while not stop.is_set():
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return
+                threading.Thread(target=run, args=(conn,), daemon=True).start()
+        threading.Thread(target=accept, daemon=True).start()
+        return listener.getsockname()[1]
+
+    def ends_by_the_deadline(self, speak, scheme="http", **options):
+        """FETCH.get with a 0.5 s deadline (so waits of at most 0.5 s) must
+        raise TimeoutError within the deadline; on a worker thread, so a call
+        that keeps reading fails the test instead of hanging the run."""
+        url = f"{scheme}://127.0.0.1:{self.far_end(speak)}/x"
+        outcome = []
+
+        def run():
+            try:
+                outcome.append(FETCH.get(url, limit=1 << 16, seconds=0.5, timeout=5, what="the test answer",
+                                         **options))
+            except Exception as error:      # noqa: BLE001 - the test reads what came out
+                outcome.append(error)
+        started = time.monotonic()
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(5)
+        self.assertFalse(worker.is_alive(), "the call is still reading")
+        self.assertLess(time.monotonic() - started, 1.5, "the deadline is 0.5 s")
+        self.assertIsInstance(outcome[0], TimeoutError)
+        self.assertEqual("the test answer took too long", str(outcome[0]))
+
+    @staticmethod
+    def trickled_headers(conn, stop):
+        conn.recv(4096)
+        conn.sendall(b"HTTP/1.1 200 OK\r\n")
+        while not stop.wait(0.1):
+            conn.sendall(b"X")
+
+    def test_a_far_end_that_trickles_its_status_line_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            for byte in b"HTTP/1.1 200 OK\r\n" * 50:
+                if stop.wait(0.1):
+                    return
+                conn.sendall(bytes([byte]))
+        self.ends_by_the_deadline(speak)
+
+    def test_a_far_end_that_trickles_its_headers_ends_by_the_deadline(self):
+        self.ends_by_the_deadline(self.trickled_headers, data=b"{}", method="POST")
+
+    def test_a_redirect_to_a_far_end_that_trickles_its_headers_ends_by_the_deadline(self):
+        there = self.far_end(self.trickled_headers)
+
+        def moved(conn, stop):
+            conn.recv(4096)
+            conn.sendall(f"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{there}/y\r\n"
+                         "Content-Length: 0\r\nConnection: close\r\n\r\n".encode())
+        self.ends_by_the_deadline(moved)
+
+    def test_a_tls_far_end_that_trickles_its_handshake_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)                       # the ClientHello
+            # A 16 KiB handshake record opening a ServerHello, then a byte at a time.
+            conn.sendall(b"\x16\x03\x03\x40\x00" + b"\x02\x00\x3f\xfc")
+            while not stop.wait(0.1):
+                conn.sendall(b"\x00")
+        self.ends_by_the_deadline(speak, scheme="https")
+
+    def test_a_tls_far_end_that_trickles_its_headers_after_the_handshake_ends_by_the_deadline(self):
+        """The watchdog must hold the TLS socket, which takes the descriptor
+        over from the plain one when it wraps it."""
+        import tempfile
+        from test_real_answers import _certificate
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        cert, key = _certificate(folder.name)
+        server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server.load_cert_chain(cert, key)
+        shaken = threading.Event()
+
+        def speak(conn, stop):
+            with server.wrap_socket(conn, server_side=True) as tls:
+                shaken.set()
+                self.trickled_headers(tls, stop)
+        self.ends_by_the_deadline(speak, scheme="https", context=ssl.create_default_context(cafile=cert))
+        self.assertTrue(shaken.is_set(), "the handshake finished: the headers are what trickled")
+
+    def test_a_body_cut_by_the_watchdog_is_not_taken_as_whole(self):
+        """A shut socket reads as the end of the body, with or without a
+        declared length (read1 gives b"" and no IncompleteRead): a body the
+        watchdog cut must not come back as a complete, shorter answer. The
+        watchdog here fires 0.3 s early, so only it can end the read, never
+        the body's own deadline."""
+        class EarlyCut(FETCH.Cut):
+            def __init__(self, sock, deadline):
+                super().__init__(sock, deadline - 0.3)
+
+        for head in (b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n",
+                     b"HTTP/1.1 200 OK\r\nContent-Length: 60000\r\n\r\n"):
+            def speak(conn, stop, head=head):
+                conn.recv(4096)
+                conn.sendall(head)
+                while not stop.wait(0.05):
+                    conn.sendall(b"x")
+            with self.subTest(head=head), mock.patch.object(FETCH, "Cut", EarlyCut):
+                self.ends_by_the_deadline(speak)
+
+    def test_an_answer_in_time_is_read_whole_and_leaves_no_watchdog_running(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            for part in (b"HTTP/1.1 200 OK\r\n", b"Content-Type: application/json\r\n",
+                         b"Content-Length: 11\r\n\r\n", b'{"ok":true}'):
+                conn.sendall(part)
+                stop.wait(0.05)
+        before = set(threading.enumerate())
+        answer = FETCH.get(f"http://127.0.0.1:{self.far_end(speak)}/x", limit=100, seconds=30)
+        self.assertEqual(b'{"ok":true}', answer.body)
+        self.assertEqual("application/json", answer.headers.get("Content-Type"))
+        timers = [t for t in threading.enumerate() if t not in before and isinstance(t, threading.Timer)]
+        for timer in timers:
+            timer.join(1)
+        self.assertEqual([], [t for t in timers if t.is_alive()], "a 30 s watchdog outlived its call")
 
 
 if __name__ == "__main__":

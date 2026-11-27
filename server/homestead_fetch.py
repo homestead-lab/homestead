@@ -14,12 +14,19 @@ github.com to another host, but carries only the headers in REDIRECT_KEEPS;
 anything else - an API key, a cookie, a signature - stays behind. A redirect
 to anything but http or https is refused.
 
-The deadline covers the body, not the name lookup: that is bounded by the
-resolver (about 5 s in the Alpine image's musl), with no extra deadline here.
+The deadline covers connecting, the TLS handshake, the status line, the headers
+and the body, not the name lookup: that is bounded by the resolver (about 5 s
+in the Alpine image's musl), with no extra deadline here.
+
+Cut is the watchdog for the stages before the body (a TLS handshake, the status
+line, the headers): it shuts the socket at a deadline, whatever it waits for.
+get() and Fleet's calls hand every connection to one (_opener).
 """
 import http.client
 import io
 import json
+import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -161,16 +168,27 @@ def get(url, *, limit, seconds, timeout=None, headers=None, data=None, method=No
     same deadline. `timeout` caps each wait on the socket (default `seconds`)."""
     deadline = time.monotonic() + seconds
     request = urllib.request.Request(url, data=data, method=method, headers=dict(headers or {}))
-    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), _Redirects(deadline, what))
+    cuts = []
+    opener = _opener(deadline, cuts, context, what)
     wait = min(timeout or seconds, seconds)
     try:
         with opener.open(request, timeout=wait) as response:
             body = read(response, limit, deadline, what)
+            if any(cut.fired.is_set() for cut in cuts):     # cut short: what was read is not the answer
+                raise TimeoutError(f"{what} took too long")
             return Answer(body, response.geturl(), response.headers)
     except urllib.error.HTTPError as error:
         kept = _prefix(error.fp, ERROR_MAX_BYTES, deadline, what) if error.fp is not None else b""
         error.close()
         raise urllib.error.HTTPError(error.url, error.code, error.msg, error.hdrs, io.BytesIO(kept)) from None
+    except Exception as error:
+        if any(cut.fired.is_set() for cut in cuts):
+            raise TimeoutError(f"{what} took too long") from error
+        raise
+    finally:
+        for cut in cuts:
+            cut.cancel()
+            cut.close()
 
 
 def get_text(url, *, errors="strict", **options):
@@ -179,3 +197,99 @@ def get_text(url, *, errors="strict", **options):
 
 def get_json(url, **options):
     return json.loads(get(url, **options).body)
+
+
+class Cut:
+    """Shuts a socket at deadline (time.monotonic()), whatever it
+    is waiting for: http.client's timeout is per wait on the socket, so an
+    answer that trickles in (a TLS handshake, a status line, then up to 100
+    headers of 64 KB) kept a probe, and its thread, going for as long as the
+    far end liked. It holds the socket itself, not conn.sock, which is set
+    late; under TLS, use() hands it the wrapping socket, which owns the
+    descriptor from then on."""
+
+    def __init__(self, sock, deadline):
+        self.fired = threading.Event()
+        self._lock = threading.Lock()
+        self._sock = sock
+        self._timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _shut(self):
+        try:
+            # The plain socket's own shutdown: under TLS it ends the read too.
+            socket.socket.shutdown(self._sock, socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def _fire(self):
+        with self._lock:
+            self.fired.set()
+            self._shut()
+
+    def use(self, sock):
+        with self._lock:
+            self._sock = sock
+            if self.fired.is_set():     # it fired while the socket changed hands
+                self._shut()
+
+    def cancel(self):
+        self._timer.cancel()
+
+    def close(self):
+        with self._lock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+
+
+def _watched(deadline, cuts):
+    """Connection classes whose socket a Cut shuts at deadline, whatever it
+    waits for. urllib's timeout is per wait on the socket: a far end that sent
+    its status line, headers or refusal a byte at a time held the call for as
+    long as it kept sending (Python bounds a TLS handshake by one wait; it now
+    ends at the deadline too). Every connection made (a redirect
+    makes another) goes into cuts."""
+    def connect(address, timeout=None, source_address=None, **options):
+        left = max(0.001, deadline - time.monotonic())
+        sock = socket.create_connection(address, min(timeout, left) if timeout else left, source_address, **options)
+        cuts.append(Cut(sock, deadline))
+        return sock
+
+    class Plain(http.client.HTTPConnection):
+        def __init__(self, *args, **options):
+            super().__init__(*args, **options)
+            self._create_connection = connect
+
+    class Secure(http.client.HTTPSConnection):
+        def __init__(self, *args, **options):
+            super().__init__(*args, **options)
+            self._create_connection = connect
+
+        def connect(self):
+            # As HTTPSConnection.connect, with the handshake after the TLS
+            # socket is in the watchdog's hands (wrapping takes the descriptor).
+            http.client.HTTPConnection.connect(self)
+            sock = self._context.wrap_socket(self.sock, server_hostname=self._tunnel_host or self.host,
+                                             do_handshake_on_connect=False)
+            cuts[-1].use(sock)
+            self.sock = sock
+            sock.do_handshake()
+    return Plain, Secure
+
+
+def _opener(deadline, cuts, context, what):
+    """An opener whose every connection is watched (see _watched), with
+    redirects by the rule above (_Redirects)."""
+    plain, secure = _watched(deadline, cuts)
+
+    class PlainHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(plain, req)
+
+    class SecureHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(secure, req, context=self._context)
+    return urllib.request.build_opener(PlainHandler(), SecureHandler(context=context), _Redirects(deadline, what))

@@ -551,11 +551,12 @@ def console_authorizer(sender):
 
 
 # ------------------------------------------------------------------ calling
-def _open(request, timeout, deadline):
+def _open(request, timeout, deadline, cuts):
     context = ssl.create_default_context() if request.full_url.startswith("https") else None
-    # Redirects by the rule of every other outside read: credentials stay on their origin.
-    return urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), FETCH._Redirects(
-        deadline, "the linked cluster's answer")).open(request, timeout=timeout)
+    # Every connection's socket goes to a FETCH.Cut (into cuts), shut at deadline whatever it
+    # waits for; redirects by the rule of every other outside read: credentials stay on their origin.
+    opener = FETCH._opener(deadline, cuts, context, "the linked cluster's answer")
+    return opener.open(request, timeout=timeout)
 
 
 def _moved_to(sent, error):
@@ -600,12 +601,20 @@ def _json(url, method, path, body=None, token="", headers=None, timeout=TIMEOUT)
     for name, value in (headers or {}).items():
         request.add_header(name, value)
     deadline = time.monotonic() + timeout
+    cuts = []
+    late = f"no answer within {timeout:g} seconds"
     try:
-        with _open(request, timeout, deadline) as response:
+        with _open(request, timeout, deadline, cuts) as response:
             body = FETCH.read(response, ANSWER_MAX_BYTES, deadline, "the linked cluster's answer")
+            if any(cut.fired.is_set() for cut in cuts):     # cut short: what was read is not an answer
+                raise Unreachable(late)
             return json.loads(body.decode() or "{}"), response
     except urllib.error.HTTPError as error:
         reason = _reason(error)
+        if any(cut.fired.is_set() for cut in cuts):
+            # The refusal's body trickled past the deadline: the member did
+            # answer, so its status stands; what was read of the reason does not.
+            reason = ""
         moved = _moved_to(request.full_url, error)
         if moved:
             shown, usable = moved
@@ -617,10 +626,20 @@ def _json(url, method, path, body=None, token="", headers=None, timeout=TIMEOUT)
         if error.code >= 500:
             raise Unreachable(reason or f"HTTP {error.code}") from error
         raise ValueError(reason or f"HTTP {error.code}") from error
-    except (ValueError, Unreachable):
+    except Unreachable:
+        raise
+    except ValueError as error:
+        if any(cut.fired.is_set() for cut in cuts):
+            raise Unreachable(late) from error
         raise
     except Exception as error:
+        if any(cut.fired.is_set() for cut in cuts) or isinstance(getattr(error, "reason", error), TimeoutError):
+            raise Unreachable(late) from error
         raise Unreachable(f"no answer from {url}: {str(error)[:120]}") from error
+    finally:
+        for cut in cuts:
+            cut.cancel()
+            cut.close()
 
 
 def call(ref, method, path, body=None, timeout=TIMEOUT, user="", role="admin", signing_key=None):
