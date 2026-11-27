@@ -26,6 +26,13 @@ fails here: within a file, the next test would see it (keep_bound stays required
 
 Fix a leak with tests/rebind.py (rebind / keep_bound) or mock.patch.object, then
 take its line off bound_leaks.txt and lower CEILING.
+
+The two caches bound_restore empties after every file (its CACHES: the account store as
+last read, the change-author key) are reset and the file is named (CacheRatchet): a file
+not on CACHE_LEAKS that leaves one set fails, and a listed file that ran here and left
+none fails too, so the list only gets shorter. A file an open PR of ours adds is listed
+before it arrives (CACHE_LEAKS_ARRIVING): absent, it is never checked. Fix one by emptying both caches with
+mock.patch.dict in its setUp (put back when the test ends) and take it off the list.
 """
 import os
 import sys
@@ -157,6 +164,98 @@ class BindRatchet(unittest.TestCase):
         present = {p.stem for p in here.glob("test_*.py")}
         self.assertEqual(sorted((UNRESTORED_FILES - found) & present), [],
                          "these restore now: take them off UNRESTORED_FILES")
+
+
+# Test files that leave the account store cache (homestead_auth._store_cache) or the
+# change-author key (homestead_changes._known) set when their tests are done, measured
+# 24 Nov 2026 (every file in one process, both caches emptied before each). bound_restore
+# empties them after each file, so none reaches the next file; they may only go away:
+# a file that restores them comes off this list (#1569).
+CACHE_LEAKS = frozenset({
+    "test_alerts_unread_guard",
+    "test_api_keys",
+    "test_app_hold",
+    "test_cancel_rerun_kinds",
+    "test_cluster_shutdown_auth",
+    "test_copy_job",
+    "test_cycle_readers",
+    "test_data_move",
+    "test_edit_removed_secret_values",
+    "test_edit_secret_prune_order",
+    "test_edit_secret_removal_confirmed",
+    "test_edit_unread_secret",
+    "test_failover",
+    "test_fs_freeze",
+    "test_host_list_reads",   # from #1547 (adds it)
+    "test_host_maintenance",
+    "test_host_move",
+    "test_host_move_status_writes",
+    "test_import_job_deadline",
+    "test_job_cancel",
+    "test_kube_fake",
+    "test_longhorn_unread",
+    "test_move_gives_up",
+    "test_node_probe_smart_thread",
+    "test_node_probes",
+    "test_os_canary_stop_shown",   # from #1532 (adds it)
+    "test_os_update_install_timeout",   # from #1533 (adds it)
+    "test_page_snapshot",
+    "test_power_handoff",
+    "test_power_keeps_persons_cordon",   # from #1541 (adds it)
+    "test_reclass_legacy_waits",
+    "test_restart_moves",
+    "test_restore_test_reads",
+    "test_revert_fenced",
+    "test_revert_stop",
+    "test_review_status_writes",
+    "test_self",
+    "test_sessions",
+    "test_start_order",
+    "test_volume_copy_hold",   # from #1528 (adds it)
+    "test_workload_not_ready_age",
+    "test_write_gate",
+})
+# Entries that come with an open PR of ours, as bound_leaks.txt's open-PR block. Two kinds:
+# - CACHE_LEAKS_PENDING: a file on dev that an open PR fixes; allowed, and not stale while
+#   pending;
+# - CACHE_LEAKS_ARRIVING: a file an open PR adds, and leaves a cache set (measured on the
+#   PR's tree, 24 Nov). Until it merges the file is not in the tree, so it never runs, is
+#   never stale and is never named; once merged it is an ordinary entry.
+# Both are on CACHE_LEAKS and counted against CACHE_CEILING from the start, so no merge
+# order changes a count; CACHE_PENDING_CEILING caps them again on their own. After a PR
+# merges (WORKFLOW.md, after merge): take its files off these two lists, lower
+# CACHE_PENDING_CEILING, and for a fix take the file off CACHE_LEAKS and lower CACHE_CEILING
+# too; a PR closed unmerged: take its files off everything and lower both.
+CACHE_LEAKS_PENDING = frozenset({
+    "test_revert_fenced",   # from #1570 (fixes it)
+})
+CACHE_LEAKS_ARRIVING = frozenset({
+    "test_host_list_reads",             # from #1547
+    "test_os_canary_stop_shown",        # from #1532
+    "test_os_update_install_timeout",   # from #1533
+    "test_power_keeps_persons_cordon",  # from #1541
+    "test_volume_copy_hold",            # from #1528
+})
+# The list may only shrink: lower these with it. A new name needs a higher ceiling in the
+# same change, which this check makes visible.
+CACHE_CEILING = 42
+CACHE_PENDING_CEILING = 6
+
+
+class CacheRatchet(unittest.TestCase):
+    def test_no_new_test_file_leaves_a_cache_set(self):
+        self.assertEqual([], RESTORE.new_cache_leaks(RESTORE.caches_left, CACHE_LEAKS),
+                         "these test files left a cache set (emptied before the next file): "
+                         "put it back with mock.patch.dict in setUp")
+
+    def test_a_listed_file_that_leaves_none_comes_off_the_list(self):
+        self.assertEqual([], RESTORE.stale_cache_leaks(RESTORE.caches_left, RESTORE.cache_files,
+                                                       CACHE_LEAKS, CACHE_LEAKS_PENDING),
+                         "these test files ran and left no cache set: take them off CACHE_LEAKS")
+
+    def test_the_list_only_shrinks(self):
+        self.assertEqual([], RESTORE.cache_ceiling_faults(CACHE_LEAKS, CACHE_LEAKS_PENDING | CACHE_LEAKS_ARRIVING,
+                                                          CACHE_CEILING, CACHE_PENDING_CEILING))
 
 
 if __name__ == "__main__":
