@@ -48,7 +48,7 @@ try {
     await page.evaluate(() => viewProtect());
     await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Data protection"));
     const protect = await page.locator("body").innerText();
-    assert.match(protect, /Backup storage\s*unknown/i);
+    assert.match(protect, /Backup storage could not be read[\s\S]*timed out/i);
     assert.equal(await page.getByRole("button", {name: "Set up backup storage"}).count(), 0, "Set up is not offered on a guess");
     assert.doesNotMatch(protect, /No backup storage/);
 

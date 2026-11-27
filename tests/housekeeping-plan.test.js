@@ -10,11 +10,12 @@ function view() {
   const ctx = { console, Promise, JSON, URLSearchParams, location: { search: "", href: "http://example.com/" },
     STATE: { data: {}, q: "", view: "protect" }, document: { addEventListener() {}, getElementById: () => null },
     $: () => null, moreMenu: () => "", meter: () => "", icon: () => "", tip: t => t, nextRun: () => "",
-    fmtAt: String, fmtWhen: String, CRON: { describe: String },
+    fmtAt: String, fmtWhen: String, fmtDay: String, CRON: { describe: String },
     esc: s => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;") };
   ctx.jsq = s => ctx.esc(JSON.stringify(s)); ctx.window = ctx;
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   vm.runInContext(fs.readFileSync("web/js/views-protect.js", "utf8"), ctx);
+  vm.runInContext(fs.readFileSync("web/js/views-protect-volumes.js", "utf8"), ctx);
   return ctx;
 }
 
@@ -34,13 +35,15 @@ const UNREAD = { total: 1, protected: null, backed_up: null, unprotected: [], gr
 
 test("jobs that could not be read are named, coverage is unknown, and no plan is offered on a guess", () => {
   const ctx = view();
-  const top = ctx.protectTop(UNREAD, { deployed: false, unread: "" }, UNREAD.target, null);
+  const top = ctx.protectTop(UNREAD, { deployed: false, unread: "" }, UNREAD.target);
   assert.match(top, /Longhorn's recurring jobs could not be read: forbidden/);
   assert.doesNotMatch(top, /% covered/);
   assert.doesNotMatch(top, /null/);
-  const body = ctx.protectBody(UNREAD, UNREAD.target, []);
-  assert.doesNotMatch(body, /No recurring jobs yet/);
+  const body = ctx.protectSchedulesTable(UNREAD);
+  assert.doesNotMatch(body, /No schedules yet/);
   assert.match(body, /could not be read/);
+  assert.match(ctx.protectSummary(UNREAD), /schedules could not be read/, "the summary does not guess either");
+  assert.equal(ctx.protectProblem(UNREAD.volumes[0], UNREAD), null, "an unread volume is not called unprotected");
 });
 
 test("with the jobs unread, a volume's coverage is unknown: not 'nothing', and in neither the covered nor the uncovered filter", () => {

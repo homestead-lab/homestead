@@ -41,6 +41,9 @@
     storage:   Object.freeze({ path: "/volumes",         label: "Volumes",         section: "Storage" }),
     shares:    Object.freeze({ path: "/shares",          label: "Network Shares",  section: "Storage" }),
     protect:   Object.freeze({ path: "/data-protection", label: "Data Protection", section: "Storage" }),
+    "protect-schedules": Object.freeze({ path: "/data-protection/schedules", label: "Schedules", section: "Storage", parent: "protect" }),
+    "protect-tests": Object.freeze({ path: "/data-protection/restore-tests", label: "Restore tests", section: "Storage", parent: "protect" }),
+    "protect-settings": Object.freeze({ path: "/data-protection/settings", label: "Settings", section: "Storage", parent: "protect" }),
     network:   Object.freeze({ path: "/networking",      label: "Networking",      section: "System" }),
     cluster:   Object.freeze({ path: "/system/cluster",  label: "Cluster",         section: "System" }),
     events:    Object.freeze({ path: "/events",          label: "Events",          section: "System", parent: "cluster" }),
@@ -57,6 +60,7 @@
     vms: [["vms", "Machines"], ["vmimport", "Import"]],
     store: [["store", "Apps"], ["helm", "Helm"]],
     cluster: [["cluster", "Health"], ["events", "Events"], ["resources", "Resources"]],
+    protect: [["protect", "Volumes"], ["protect-schedules", "Schedules"], ["protect-tests", "Restore tests"], ["protect-settings", "Settings"]],
   });
 
   /* The sidebar entry a page belongs to. */

@@ -187,6 +187,9 @@ function syncPhoneBar() {
   const phone = phoneBar();
   document.body.classList.toggle("title-picks", phoneTitle(STATE.view, phone));
   document.body.classList.toggle("phone-plus", phonePrimary(phone));
+  // A header left with only ⋯ (its main button is ＋) puts ⋯ beside the summary line.
+  const head = V()?.querySelector(".phead"), acts = head?.querySelector(":scope > .page-actions");
+  head?.classList.toggle("phone-slim", phone && !!acts && [...acts.children].every(c => c.matches(".actionmenu, button.btn.pri, .scanprogress")));
   if (window.applyRole) window.applyRole();
 }
 if (typeof matchMedia === "function") matchMedia("(max-width: 560px)").addEventListener?.("change", syncPhoneBar);

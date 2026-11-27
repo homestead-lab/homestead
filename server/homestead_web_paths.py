@@ -27,7 +27,8 @@ def bind_routes(helpers, **values):
 # explicit allowlist: an unknown path must not accidentally shadow an API 404.
 SPA_ROUTES = frozenset({
     "/", "/timeline", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
-    "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal", "/helm", "/resources",
+    "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection",
+    "/data-protection/schedules", "/data-protection/restore-tests", "/data-protection/settings", "/portal", "/helm", "/resources",
     "/schedules", "/schedules/week", "/monitoring", "/import", "/vms/import", "/events", "/networking", "/system/cluster", "/settings", "/setup", "/agents",
 })
 

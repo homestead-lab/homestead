@@ -36,6 +36,6 @@ test("the phone's bottom bar says Dashboard and Containers, like the sidebar", (
 
 test("a page's tab says the page's name where they are the same page", () => {
   for (const tabs of Object.values(TABS)) for (const [view, label] of tabs)
-    if (!["dash", "workloads", "vms", "store", "cluster"].includes(view)) assert.equal(label, ROUTES[view].label, view);
+    if (!["dash", "workloads", "vms", "store", "cluster", "protect"].includes(view)) assert.equal(label, ROUTES[view].label, view);
   assert.deepEqual(TABS.workloads.find(([view]) => view === "images"), ["images", "Image Cache"]);
 });

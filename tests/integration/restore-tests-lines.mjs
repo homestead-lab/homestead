@@ -8,7 +8,7 @@ const base=process.env.HOMESTEAD_URL || 'http://127.0.0.1:4173',out=process.env.
 await mkdir(out,{recursive:true});const browser=await chromium.launch({headless:true});
 try{for(const width of [1440,390]){
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(`${base}/data-protection?demo=1`);await page.locator('.restore-table tbody tr').first().waitFor();
+ await page.goto(`${base}/data-protection/restore-tests?demo=1`);await page.locator('.restore-table tbody tr').first().waitFor();
  // For each div straight inside a cell, everything before it in the cell ends above it.
  const lines=await page.locator('.restore-table td[data-label]>div').evaluateAll(divs=>divs.map(div=>{
   const range=document.createRange();range.setStart(div.parentElement,0);range.setEndBefore(div);
