@@ -1,5 +1,6 @@
 """Read-only drain inventory. Eviction API remains authoritative for PDBs."""
 import hashlib
+import ipaddress
 import json
 from homestead_topology import selected
 import homestead_pullwatch as PULLWATCH
@@ -100,9 +101,77 @@ def helper_blocker(pod):
     return guidance.get(task, "")
 
 
+def on_host(row):
+    """Whether a local_storage row is data kept on the host itself. An NFS or
+    SMB share on another server keeps it there: listed, but no reason to hold
+    the host. A share this host serves, a host path that is a share mounted on
+    the host, and any other driver still count (#1545)."""
+    return not row.get("network_share")
+
+
+def _bare(name):
+    """A server name as compared: lower case, no port, no IPv6 brackets, no
+    trailing dot; an address in one form (::ffff:192.0.2.1 is 192.0.2.1)."""
+    name = str(name or "").strip().lower()
+    if name.startswith("[") and "]" in name:
+        name = name[1:name.index("]")]
+    elif name.count(":") == 1 and name.rsplit(":", 1)[1].isdigit():
+        name = name.rsplit(":", 1)[0]
+    name = name.rstrip(".")
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        return name
+    return str(getattr(ip, "ipv4_mapped", None) or ip)
+
+
+def _host_names(get, node):
+    """The names and addresses the Node answers to, or None when it cannot be read."""
+    try:
+        obj = get(f"/api/v1/nodes/{node}") if node else None
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    addresses = ((obj.get("status") or {}).get("addresses")) or []
+    names = {_bare(node)} | {_bare(a.get("address")) for a in addresses if isinstance(a, dict)}
+    names.discard("")
+    return names
+
+
+def _elsewhere(server, names):
+    """Whether a share's server is another machine than the host. One the Node
+    reports as its own (an address, its name), a loopback or unspecified address,
+    a missing server or a host that cannot be read counts as the host. Nothing is
+    resolved: an alias or an address the Node does not report counts as another."""
+    server = _bare(server)
+    if not server or names is None or any(c.isspace() for c in server):
+        return False
+    if _is_ip(server):
+        ip = ipaddress.ip_address(server)
+        return not (ip.is_loopback or ip.is_unspecified) and server not in names
+    # node-a and node-a.example.com are one host: compare the first label too.
+    label = server.split(".")[0]
+    return label != "localhost" and server not in names and label not in {n.split(".")[0] for n in names if not _is_ip(n)}
+
+
+def _is_ip(name):
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return False
+
+
+def _smb_server(source):
+    """The server of an SMB source, //server/share or \\\\server\\share."""
+    return str(source or "").replace("\\", "/").lstrip("/").split("/")[0]
+
+
 def inventory(get, pods, namespace=None, draining=True):
     budgets = items(get, "/apis/policy/v1/poddisruptionbudgets")
     rows, blockers, storage, waiting = [], [], [], []
+    hosts = {}
     for pod in pods:
         meta, spec, status = pod.get("metadata") or {}, pod.get("spec") or {}, pod.get("status") or {}
         if not drainable(pod):
@@ -148,8 +217,15 @@ def inventory(get, pods, namespace=None, draining=True):
         # They remain in the reviewed snapshot, PDB checks and eviction targets.
         if temporary:
             continue
+
+        def host_names(node=spec.get("nodeName")):
+            # Read once per host, and only when a pod on it has a share.
+            if node not in hosts:
+                hosts[node] = _host_names(get, node)
+            return hosts[node]
+
         for volume in spec.get("volumes") or []:
-            kind, source = "", ""
+            kind, source, share = "", "", False
             if "emptyDir" in volume:
                 kind, source = ("emptyDir (deleted by drain)" if draining else "emptyDir (temporary pod storage)"), volume.get("name", "?")
             elif "hostPath" in volume:
@@ -167,10 +243,17 @@ def inventory(get, pods, namespace=None, draining=True):
                     continue
                 kind = "host-local PVC" if "local" in pv_spec or "hostPath" in pv_spec else "external PVC (availability unverified)"
                 source = str(claim)
+                csi = pv_spec.get("csi") or {}
+                attributes = csi.get("volumeAttributes") or {}
+                server = ((pv_spec["nfs"] or {}).get("server") if "nfs" in pv_spec else
+                          attributes.get("server") if csi.get("driver") == "nfs.csi.k8s.io" else
+                          _smb_server(attributes.get("source")) if csi.get("driver") == "smb.csi.k8s.io" else "")
+                share = bool(server) and _elsewhere(server, host_names())
             elif "nfs" in volume:
                 kind, source = "external NFS (availability unverified)", (volume["nfs"] or {}).get("server", "?")
+                share = _elsewhere((volume["nfs"] or {}).get("server"), host_names())  # a missing server: on the host
             elif any(key not in ("name", "configMap", "secret", "projected", "downwardAPI") for key in volume):
                 blockers.append(identity + ": unsupported storage source " + volume.get("name", "?"))
             if kind:
-                storage.append({"pod": identity, "kind": kind, "source": source})
+                storage.append({"pod": identity, "kind": kind, "source": source, **({"network_share": True} if share else {})})
     return {"budgets": rows, "local_storage": storage, "blockers": blockers, "waiting": waiting}

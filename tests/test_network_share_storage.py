@@ -1,0 +1,242 @@
+"""A network share is not data kept on the host (#1545).
+
+A pod that mounts an NFS export, or a volume on an NFS or SMB server, keeps its
+data on that server. The host restart review lists it with the host's own
+storage, but it asks no data acceptance for it, an OS-update restart with nobody
+there is not held by it, and Make server does not call it "kept on this host".
+A host path, a local volume and an emptyDir are counted as before.
+
+Reads go through the real kget over the shared fake API server
+(tests/fakes/kube.py)."""
+import sys
+import unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import server
+import homestead_kube as K
+import homestead_maintenance as MAINTENANCE
+import homestead_power as power
+import homestead_promote as PROMOTE
+from fakes.kube import Kube
+import own_pod
+from rebind import keep_bound
+from test_power_drain_blockers import host
+from test_promote import PlanBase
+
+REAL_INVENTORY = MAINTENANCE.inventory
+NAS = "192.0.2.20"
+
+
+def app_pod(name, volumes, node="node-a"):
+    return {"apiVersion": "v1", "kind": "Pod",
+            "metadata": {"namespace": "lab", "name": name, "uid": f"uid-{name}",
+                         "ownerReferences": [{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": name,
+                                              "uid": f"rs-{name}", "controller": True}]},
+            "spec": {"nodeName": node, "containers": [{"name": "c"}], "volumes": volumes},
+            "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}}
+
+
+def bound(claim, pv_spec):
+    """A volume claim in lab bound to a PersistentVolume with this spec."""
+    return [{"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"namespace": "lab", "name": claim},
+             "spec": {"volumeName": f"pv-{claim}"}, "status": {"phase": "Bound"}},
+            {"apiVersion": "v1", "kind": "PersistentVolume", "metadata": {"name": f"pv-{claim}"}, "spec": pv_spec}]
+
+
+def claim_volume(claim):
+    return {"name": claim, "persistentVolumeClaim": {"claimName": claim}}
+
+
+NFS = {"name": "media", "nfs": {"server": NAS, "path": "/export/media"}}
+# The shapes the csi-driver-nfs and csi-driver-smb provisioners write, and an
+# NFS PersistentVolume written by hand.
+SHARES = {
+    "nfs-csi": {"csi": {"driver": "nfs.csi.k8s.io", "volumeHandle": NAS + "#export#media##",
+                        "volumeAttributes": {"server": NAS, "share": "/export"}}},
+    "smb-csi": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": NAS + "/share#media##",
+                        "volumeAttributes": {"source": "//" + NAS + "/share"}}},
+    "nfs-pv": {"nfs": {"server": NAS, "path": "/export/media"}},
+}
+ON_HOST = {
+    "local-pv": {"local": {"path": "/srv/data"}},
+    "hostpath-pv": {"hostPath": {"path": "/srv/data"}},
+}
+
+
+class Cluster(unittest.TestCase):
+    def setUp(self):
+        keep_bound(self, power)
+        self.kube = Kube(host("node-a", "uid-a"), host("node-b", "uid-b"))
+        self.kube.__enter__()
+        self.addCleanup(self.kube.__exit__, None, None, None)
+        power.bind(K.kget, lambda node: {"workloads": [], "stranded": []},
+                   lambda: {"members": ["node-a", "node-b", "node-c"], "can_lose": 1}, lambda: True)
+        self.kube.add(own_pod.runs_as(self, K.kget))
+
+    def run_with(self, volumes, *objects):
+        for obj in objects:
+            self.kube.add(obj)
+        self.kube.add(app_pod("app", volumes))
+
+
+class RestartReviewTests(Cluster):
+    def review(self, volumes, *objects):
+        self.run_with(volumes, *objects)
+        plan = power.plan("node-a", "reboot")
+        self.assertFalse(plan["storage_unknown"])
+        self.assertEqual([], plan["blockers"])
+        return plan
+
+    def test_a_network_share_asks_no_data_acceptance_and_is_still_listed(self):
+        plan = self.review([NFS])
+        self.assertFalse(plan["requires_data_ack"])
+        self.assertEqual([("lab/app", NAS)], [(r["pod"], r["source"]) for r in plan["maintenance"]["local_storage"]])
+
+    def test_a_volume_on_an_nfs_or_smb_server_asks_no_data_acceptance(self):
+        for claim, spec in SHARES.items():
+            with self.subTest(claim):
+                self.setUp()
+                plan = self.review([claim_volume(claim)], *bound(claim, spec))
+                self.assertFalse(plan["requires_data_ack"])
+                self.assertEqual(["lab/app"], [r["pod"] for r in plan["maintenance"]["local_storage"]])
+
+    def test_data_on_the_host_still_asks_for_it(self):
+        cases = {"hostPath": ([{"name": "files", "hostPath": {"path": "/srv/files"}}], []),
+                 "emptyDir": ([{"name": "cache", "emptyDir": {}}], []),
+                 **{c: ([claim_volume(c)], bound(c, spec)) for c, spec in ON_HOST.items()}}
+        for case, (volumes, objects) in cases.items():
+            with self.subTest(case):
+                self.setUp()
+                self.assertTrue(self.review(volumes, *objects)["requires_data_ack"])
+                self.setUp()
+                # Next to a network share, too.
+                self.assertTrue(self.review(volumes + [NFS], *objects)["requires_data_ack"])
+
+    def test_another_kind_of_volume_server_is_counted_as_before(self):
+        # Only NFS and SMB are known to keep the data on another server.
+        plan = self.review([claim_volume("other")], *bound("other", {"csi": {"driver": "csi.example.com",
+                                                                               "volumeHandle": "v1"}}))
+        self.assertTrue(plan["requires_data_ack"])
+
+
+class ShareOnThisHostTests(Cluster):
+    """A share this same host serves keeps its data on the host being restarted."""
+    def setUp(self):
+        super().setUp()
+        node = self.kube.object("/api/v1/nodes/node-a")
+        node["status"]["addresses"] = [{"type": "InternalIP", "address": "192.0.2.11"},
+                                       {"type": "InternalIP", "address": "2001:DB8::11"},
+                                       {"type": "Hostname", "address": "node-a.example.com"}]
+        self.kube.add(node)
+
+    def asks(self, volumes, *objects):
+        self.run_with(volumes, *objects)
+        plan = power.plan("node-a", "reboot")
+        self.assertFalse(plan["storage_unknown"])
+        return plan["requires_data_ack"]
+
+    def nfs(self, server):
+        return [{"name": "media", "nfs": {"server": server, "path": "/export/media"}}]
+
+    def test_an_nfs_export_of_this_host_is_data_on_the_host(self):
+        for server_name in ("192.0.2.11", "2001:db8::11", "[2001:db8::11]", "node-a", "NODE-A.example.com.",
+                            "node-a.example.com", "localhost", "LOCALHOST.", "127.0.0.1", "127.0.1.1", "::1", "[::1]", "", "  ",
+                            "::ffff:192.0.2.11", "[::ffff:192.0.2.11]", "::ffff:127.0.0.1", "0.0.0.0", "::", "[::]",
+                            "192.0.2.11:2049", "[2001:db8::11]:2049", "node-a:2049", "localhost:2049"):
+            with self.subTest(server_name):
+                self.setUp()
+                self.assertTrue(self.asks(self.nfs(server_name)))
+
+    def test_a_csi_volume_this_host_serves_is_data_on_the_host(self):
+        cases = {"nfs-csi": {"csi": {"driver": "nfs.csi.k8s.io", "volumeHandle": "h",
+                                     "volumeAttributes": {"server": "192.0.2.11", "share": "/export"}}},
+                 "nfs-csi-no-server": {"csi": {"driver": "nfs.csi.k8s.io", "volumeHandle": "h"}},
+                 "smb-csi": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h",
+                                     "volumeAttributes": {"source": "//node-a/share"}}},
+                 "smb-csi-port": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h",
+                                          "volumeAttributes": {"source": "//192.0.2.11:445/share"}}},
+                 "smb-csi-backslash": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h",
+                                               "volumeAttributes": {"source": "\\\\localhost\\share"}}},
+                 "smb-csi-no-source": {"csi": {"driver": "smb.csi.k8s.io", "volumeHandle": "h"}},
+                 "nfs-pv": {"nfs": {"server": "node-a.example.com", "path": "/export"}}}
+        for claim, spec in cases.items():
+            with self.subTest(claim):
+                self.setUp()
+                self.assertTrue(self.asks([claim_volume(claim)], *bound(claim, spec)))
+
+    def test_a_share_on_another_server_is_still_not_counted(self):
+        # 192.0.2.20 starts like this host's address; nas-a starts like its name.
+        for server_name in (NAS, "nas-a.example.com", "192.0.2.110", "node-ab.example.com", "::ffff:192.0.2.20",
+                            NAS + ":2049", "[2001:db8::20]:2049", "nas-a:445"):
+            with self.subTest(server_name):
+                self.setUp()
+                self.assertFalse(self.asks(self.nfs(server_name)))
+        for claim, spec in SHARES.items():
+            with self.subTest(claim):
+                self.setUp()
+                self.assertFalse(self.asks([claim_volume(claim)], *bound(claim, spec)))
+
+
+    def test_the_host_is_read_once_for_many_share_pods(self):
+        for n in range(4):
+            self.kube.add(app_pod(f"app-{n}", self.nfs(NAS)))
+        plan = power.plan("node-a", "reboot")
+        self.assertEqual(4, sum(1 for r in plan["maintenance"]["local_storage"] if not MAINTENANCE.on_host(r)))
+        reads = [path for path, _ in self.kube.reads if path == "/api/v1/nodes/node-a"]
+        before = len(reads)
+        self.kube.reads.clear()
+        MAINTENANCE.inventory(K.kget, [self.kube.object(f"/api/v1/namespaces/lab/pods/app-{n}") for n in range(4)])
+        self.assertEqual(1, sum(1 for path, _ in self.kube.reads if path == "/api/v1/nodes/node-a"), before)
+
+
+class UnattendedRestartTests(Cluster):
+    def check(self, volumes, *objects):
+        self.run_with(volumes, *objects)
+        return server.POWER_JOBS.rollout_check("node-a")
+
+    def test_a_network_share_does_not_hold_an_os_update_restart(self):
+        self.assertEqual(("", False, []), self.check([NFS]))
+        self.setUp()
+        claim, spec = "nfs-csi", SHARES["nfs-csi"]
+        self.assertEqual(("", False, []), self.check([claim_volume(claim)], *bound(claim, spec)))
+
+    def test_nor_next_to_the_hosts_own_plumbing(self):
+        # The plumbing alone asks the review for acceptance; the share must
+        # not be what is left to refuse with.
+        plumbing = {"name": "sockets", "hostPath": {"path": "/var/lib/kubelet/plugins"}}
+        self.assertEqual(("", False, []), self.check([plumbing, NFS]))
+
+    def test_data_on_the_host_still_holds_it_until_a_person_acts(self):
+        refusal, may_clear, reasons = self.check([{"name": "files", "hostPath": {"path": "/srv/files"}}, NFS])
+        self.assertRegex(refusal, r"pods keep data on this host itself: lab/app \(/srv/files\)")
+        self.assertNotIn(NAS, refusal)
+        self.assertFalse(may_clear)
+        # The update review's line for it names the host data only.
+        host_data = [r for r in reasons if r["kind"] == "host-data"]
+        self.assertEqual([(1, ["lab/app (/srv/files)"])], [(r["count"], r["names"]) for r in host_data])
+        self.assertNotIn(NAS, str(reasons))
+
+
+class MakeServerTests(PlanBase):
+    def warnings(self, *pods):
+        for pod in pods:
+            self.cluster.kube.add(pod)
+        with mock.patch.object(MAINTENANCE, "inventory", REAL_INVENTORY):
+            return PROMOTE.plan("app-1")["warnings"]
+
+    def test_a_network_share_is_not_kept_on_this_host(self):
+        warnings = self.warnings(app_pod("player", [NFS], node="app-1"),
+                                 app_pod("db", [{"name": "files", "hostPath": {"path": "/srv/db"}}], node="app-1"))
+        kept = [w for w in warnings if w.startswith("Kept on this host")]
+        self.assertEqual(["Kept on this host, waiting for it: lab/db"], kept)
+        share = [w for w in warnings if "lab/player" in w]
+        self.assertEqual(1, len(share), warnings)
+        self.assertIn("shared folder on a file server", share[0])
+        self.assertIn(NAS, share[0])
+
+
+if __name__ == "__main__":
+    unittest.main()
