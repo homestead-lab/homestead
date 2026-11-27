@@ -27,11 +27,11 @@ test("the buttons and the ⋯ menu go up; the count pill, the view switch and th
   assert.match(kept, /^<div class="row page-actions page-controls"><span id="scanprogress"[^>]*><\/span><button class="pill warn pillbtn">3 updates<\/button><div class="seg iconseg">/);
 });
 
-test("a header that is a search stays whole on the page", () => {
+test("a header that is a search goes up whole, its field and its button together", () => {
   const store = `<div class="row page-actions store-search"><input id="s_q" class="search"><button class="btn pri">Search</button></div>`;
   const { lifted, kept } = P.splitPageActions(store);
-  assert.equal(lifted, "");
-  assert.match(kept, /<input id="s_q" class="search"><button class="btn pri">Search<\/button>/);
+  assert.equal(lifted, store, "the App Store's search is in the top bar (Nov 2026 mockup)");
+  assert.equal(kept, "");
 });
 
 test("nested markup and void elements are read as one element each", () => {

@@ -81,7 +81,7 @@ function storeSection(mode, apps, total) {
 
 async function viewStore() {
   resetPaint();
-  paint(`${UI.pageHeader(`Community catalogue`, `Third-party Community Applications templates adapted into reviewed Kubernetes workloads`, `<input class="search" id="s_q" aria-label="Search the App Store" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
+  paint(`${UI.pageHeader(`Community catalogue`, `<b>Community catalogue.</b> Third-party Community Applications templates, adapted into reviewed Kubernetes workloads.`, `<input class="search" id="s_q" aria-label="Search the App Store" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
       <button class="btn pri" onclick="storeSearch()">Search</button>`, {actionsClass:`store-search`})}
     <div class="store-browse-head"><div class="seg store-modes" id="s_modes">
       ${Object.entries(STORE_MODES).map(([mode, [label]]) => `<button data-mode="${mode}" class="${STORE_MODE === mode ? "on" : ""}" onclick="storeBrowse(${jsq(mode)})">${label}</button>`).join("")}

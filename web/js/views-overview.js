@@ -263,16 +263,31 @@ function metricsNotice(rows) {
 function dashboardSummary(o) {
   if (fleetAll()) return dashboardScope(o);
   const issues = o.health_issues || [];
-  const words = x => {
-    const name = String(x.name || "").split("/").pop(), rest = String(x.reason || "").replace(/^(node|volume|app|pod|disk|deployment|statefulset)\s+/i, "");
-    return /^(is|has|was|cannot|can't|does)\b/i.test(rest) ? `${name} ${rest[0].toLowerCase()}${rest.slice(1)}` : `${name}: ${rest}`;
-  };
   if (!issues.length) return UI.summary({ head: `<b>Nothing needs attention.</b>`, parts: [{ text: `${o.nodes_total} host${o.nodes_total === 1 ? "" : "s"}, all checks clear.`, note: true }] });
   return UI.summary({ head: `<b>${issues.length === 1 ? "1 item needs" : `${issues.length} items need`} attention.</b>`, parts: [
-    // A long reason is the link's tip, so the line stays one line: "doublecommander needs attention".
-    ...issues.slice(0, 3).map(x => { const said = words(x), short = said.length <= 48;
-      return { text: short ? said : `${String(x.name || "").split("/").pop()} needs attention`, tip: short ? "" : String(x.reason || ""), tone: x.severity === "critical" ? "bad" : "warn", run: "HealthInsights.open('health')" }; }),
+    // The full reason is each link's tip: the line says what is wrong in a few words.
+    ...issues.slice(0, 3).map(x => ({ text: dashboardIssueWords(x), tip: String(x.reason || ""), tone: x.severity === "critical" ? "bad" : "warn", run: "HealthInsights.open('health')" })),
     issues.length > 3 && { text: `${issues.length - 3} more`, note: true }] });
+}
+
+/* A health issue in a few words, as the mockup says it ("paperless is down",
+   "nextcloud-data is missing a copy"), from the kinds the server reports
+   (homestead_cluster.health_verdict, homestead_overview_server, weekly trim).
+   A reason it does not know reads as it is when it is short, and otherwise
+   as "needs attention", with the full reason in the link's tip. */
+function dashboardIssueWords(x) {
+  const full = String(x.name || ""), name = full.split("/").pop(), reason = String(x.reason || ""), kind = String(x.kind || "").toLowerCase();
+  const copies = reason.match(/(\d+)\/(\d+) replicas ready/);
+  if (kind === "node") return `${name} is not ready`;
+  if (kind === "disk") return full.includes("/") ? `${name} on ${full.split("/")[0]} has a drive warning` : `${name} has a drive warning`;
+  if (kind === "volume") return /faulted/i.test(reason) ? `${name} is faulted` : /still rebuilding/i.test(reason) ? `${name} is still rebuilding a copy` : `${name} is missing a copy`;
+  if (kind === "workload" && copies) return Number(copies[1]) === 0 ? `${name} is down` : `${name} has ${copies[1]} of ${copies[2]} copies ready`;
+  if (kind === "trim") return `${name}'s weekly trim failed`;
+  if (kind === "backup") return full === "backup target" ? (/no backup target/i.test(reason) ? "Backups have no target" : "The backup target cannot be reached")
+    : `${name}'s last ${/snapshot run/i.test(reason) ? "snapshot" : "backup"} failed`;
+  const rest = reason.replace(/^(node|volume|app|pod|disk|deployment|statefulset)\s+/i, "");
+  const said = /^(is|has|was|cannot|can't|does)\b/i.test(rest) ? `${name} ${rest[0].toLowerCase()}${rest.slice(1)}` : `${name}: ${rest}`;
+  return said.length <= 48 ? said : `${name} needs attention`;
 }
 
 /* Dense host summaries respond to widget width, rather than viewport width. */
