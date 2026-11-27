@@ -824,11 +824,10 @@ class CatalogueTests(unittest.TestCase):
                          "/api/operations/power-recovery/preview", "/api/operations/power-recovery/resolve",
                          "/api/operations/resume", "/api/operations/storage-recovery/act",
                          "/api/operations/storage-recovery/preview", "/api/operations/vm-recovery/preview",
-                         "/api/operations/vm-recovery/resolve", "/api/statefulset/restart-elsewhere",
+                         "/api/operations/vm-recovery/resolve", "/api/operations/vm-recovery/removal-preview",
+                         "/api/operations/vm-recovery/remove", "/api/statefulset/restart-elsewhere",
                          "/api/restore-swap", "/api/volumes/previous/swap-back"),
                         "recovery after a failure is a person's judgement; restore_backup restores a backup"),
-        "/api/restore-tests/run": "a test restore runs on the restore-test schedule an admin set; a held tool "
-                                  "for it is on the wrap-up list",
         **dict.fromkeys(("/api/image-updates/channel", "/api/restore-tests/settings", "/api/weekly-trim/settings",
                          "/api/volumes/previous/settings", "/api/portal", "/api/homestead/data/tidy",
                          "/api/setup/https-check", "/api/setup/opened", "/api/welcome/done"),

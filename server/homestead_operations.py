@@ -2106,7 +2106,7 @@ def _recover(kind, step):
         import homestead_vm_mutation_recovery as VM_MUTATION_RECOVERY
         import homestead_vm_power_recovery as VM_POWER_RECOVERY
         ops = sys.modules[__name__]
-        what = request.body.get("id", "") if step == "preview" else request.body
+        what = request.body.get("id", "") if step in ("preview", "removal_preview") else request.body
         if kind == "storage":
             return getattr(STORAGE_RECOVERY, step)(what, ops, _recovery["read"], request.user, _recovery["helper"],
                                                    _recovery["restart"], runtime_check=_recovery["runtime"])
@@ -2139,6 +2139,8 @@ ROUTES = {
     ("POST", "/api/operations/power-recovery/resolve"): ("admin", _recover("power", "resolve")),
     ("POST", "/api/operations/vm-recovery/preview"): ("admin", _recover("vm", "preview")),
     ("POST", "/api/operations/vm-recovery/resolve"): ("admin", _recover("vm", "resolve")),
+    ("POST", "/api/operations/vm-recovery/removal-preview"): ("admin", _recover("vm", "removal_preview")),
+    ("POST", "/api/operations/vm-recovery/remove"): ("admin", _recover("vm", "remove")),
     ("POST", "/api/operations/storage-recovery/preview"): ("admin", _recover("storage", "preview")),
     ("POST", "/api/operations/storage-recovery/act"): ("admin", _recover("storage", "act")),
     ("GET", "/api/operations"): ("viewer", lambda request: snapshot()),

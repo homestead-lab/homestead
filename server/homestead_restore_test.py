@@ -493,13 +493,13 @@ def forget_plans():
     CACHE.forget_where(lambda key: key == PLANS)
 
 
-def start_test(ns, name, why="Test now"):
-    """Start one restore test as a job."""
+def start_test(ns, name, why="Test now", unless=()):
+    """Start one restore test as a job. unless: OPS.start's, checked under the job store's lock."""
     forget_plans()
     return OPS.start(KIND, f"Restore test of {name}",
                      {"kind": "Deployment", "name": name, "namespace": ns},
                      "/data-protection#restore-tests", {"namespace": ns, "name": name, "phase": "plan", "why": why},
-                     "Finding each volume's newest backup")
+                     "Finding each volume's newest backup", unless=unless)
 
 
 def _listed(w):
@@ -566,7 +566,8 @@ def run_now(b):
     ns, name = dns_name(b.get("ns"), "namespace"), dns_name(b.get("name"), "workload name")
     if any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in OPS.snapshot()):
         raise ValueError("A restore test is already running. Only one runs at a time.")
-    return {"ok": True, "operation": start_test(ns, name)}
+    # Again under the job store's lock as it starts: a test started since, or one still cancelling, refuses it.
+    return {"ok": True, "operation": start_test(ns, name, unless=(KIND,))}
 
 
 # Its routes and who may use them (homestead_routes.py).

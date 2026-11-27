@@ -70,6 +70,7 @@ function operationCard(operation) { return `<article class="jobitem" data-operat
       ${operation.storage_recovery ? `<button class="btn sm" data-need="admin" onclick="storageRecoveryReview(${jsq(operation.id)})">Review storage move</button>` : ""}
       ${operation.host_gone_endable ? `<button class="btn sm" data-need="admin" data-tip="For a job whose host was removed. Review what it left behind, then end it so that it no longer holds anything back." onclick="hostGoneReview(${jsq(operation.id)})">End job for removed host</button>` : ""}
       ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)},${operation.kind === 'import-create' ? "'import'" : 'true'})">Check ${operation.kind === "k3s-cluster" ? "batch" : operation.kind === "import-create" ? "import" : "save"} outcome</button>` : ""}
+      ${operation.mutation_recovery && operation.kind === "vm-create" && operation.status === "failed" ? `<button class="btn sm danger" data-need="admin" data-tip="Shows what this create made and what removing it takes away" onclick="vmCreateRemoveReview(${jsq(operation.id)})">Remove kept resources</button>` : ""}
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the remaining steps, starting from the one where it stopped" onclick="resumeOperation(${jsq(operation.id)})">Resume job</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only || ["disk-retire", "helm"].includes(operation.kind) ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review the resources that were kept and the recovery choices. Nothing is deleted." : ["disk-retire", "helm"].includes(operation.kind) ? "Shows what it restores" : "Shows what it left behind and what cleaning up removes"}" onclick="cancelOperation(${jsq(operation.id)})">${operation.tracking_only ? "Review kept resources" : "Clean up"}</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="${operation.copy_recovery ? "admin" : "operator"}" data-tip="Shows what can be stopped or recovered before anything changes" onclick="cancelOperation(${jsq(operation.id)})">${operation.rename_recovery || operation.copy_recovery ? "Check outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel job"}</button>` : ""}
@@ -503,6 +504,59 @@ const POWER_RECOVERY = UI.reviewFlow({
 window.powerRecoveryReview = (id, mutation = false) => POWER_RECOVERY.open({id, mutation});
 window.powerRecoveryReady = () => POWER_RECOVERY.ready();
 window.powerRecoveryResolve = () => POWER_RECOVERY.apply();
+
+/* Remove what a Create VM left after an uncertain error. The review lists
+   each object the job's write record made and whether it goes: only what
+   this attempt provably made is removed, and a VM of that name that is not
+   this attempt's keeps everything it may use. The typed VM name confirms. */
+const removalKind = kind => ({VirtualMachine:"VM",PersistentVolumeClaim:"Volume"})[kind] || kind;
+const VM_CREATE_REMOVAL = UI.reviewFlow({
+  loading: () => modal("Remove kept resources", '<div id="vmCreateRemoveLoading" class="empty"><span class="spin2"></span>Checking the current resources…</div>', true, "operation-review"),
+  live: () => !!$("#vmCreateRemoveLoading"),
+  preview: async ({id}) => {
+    const review = await api("/api/operations/vm-recovery/removal-preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+    const p = review.plan;
+    if (!p || typeof p.blocked !== "boolean" || (!p.blocked && !review.capacity_token)) throw new Error("The removal review is incomplete. Nothing was removed.");
+    return {id, ...review};
+  },
+  render: review => {
+    const p = review.plan;
+    if ($("#mtitle")) $("#mtitle").textContent = `Remove kept resources · ${p.confirm || "VM"}`;
+    $("#mbody").innerHTML = UI.lead(`Review what the failed create of <b>${esc(p.confirm || "this VM")}</b> left behind.`) +
+      (p.blocked ? UI.callout("bad", "Nothing can be removed now", (p.blockers || []).map(esc).join("<br>")) : "") +
+      UI.section("Kept resources", UI.table([{label:"Resource"},{label:"Now"},{label:"Outcome"}], (p.resources || []).map(row => [
+        `${esc(removalKind(row.resource.kind))} · ${esc(row.resource.name)}`, esc(row.relationship), row.remove ? "Removed" : row.with_vm ? "Removed with the VM" : "Kept"]))) +
+      UI.notices((p.warnings || []).map(w => ["warn", w])) +
+      (!p.blocked ? UI.typedConfirm({id: "vmCreateRemoveName", expect: p.confirm, oninput: "vmCreateRemoveReady()"}) : "") +
+      UI.actions(UI.cancel("Cancel") + (!p.blocked ? UI.button("Remove resources", "vmCreateRemoveApply()", {kind: "danger", id: "vmCreateRemoveApply", disabled: true}) : ""));
+    if ($(".modalbox")) $(".modalbox").scrollTop = 0;
+  },
+  failed: error => {
+    $("#mbody").innerHTML = UI.callout("bad", "", esc(error.message)) + UI.actions(UI.cancel("Close"));
+  },
+  blocked: review => review.plan.blocked, button: "vmCreateRemoveApply",
+  check: () => typedConfirmMatches("vmCreateRemoveName"),
+  apply: async review => {
+    const button = $("#vmCreateRemoveApply");
+    button.disabled = true;
+    try {
+      const result = await api("/api/operations/vm-recovery/remove", {method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({id:review.id,capacity_token:review.capacity_token,confirm:review.plan.confirm})});
+      if (result.operation) noteOperation(result.operation);
+      toast(result.detail, result.ok ? "ok" : result.removed ? "warn" : "bad"); closeModal();
+    } catch (error) {
+      if ($("#vmCreateRemoveApply") === button) {
+        $("#mbody").insertAdjacentHTML("afterbegin", UI.callout("bad", "", `${esc(String(error.message).replace(/\.$/, ""))}. Review again before removing anything.`));
+        if ($(".modalbox")) $(".modalbox").scrollTop = 0;
+      }
+      toast(error.message, "bad");
+    }
+  },
+  after: () => refreshOperations(true),
+});
+window.vmCreateRemoveReview = id => VM_CREATE_REMOVAL.open({id});
+window.vmCreateRemoveReady = () => VM_CREATE_REMOVAL.ready();
+window.vmCreateRemoveApply = () => VM_CREATE_REMOVAL.apply();
 
 /* A disk job whose host was removed (V2 preparation, storage allocation,
    runtime maintenance) can never finish and is never forgotten. The review

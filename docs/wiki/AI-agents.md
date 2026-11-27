@@ -227,6 +227,7 @@ Tools come in three classes:
 | `revert_to_snapshot` | Asks to roll a volume back to a snapshot: what was written since is lost, and what uses it stops meanwhile | `storage:manage` | destructive |
 | `restore_backup` | Asks to restore a backup as a new volume | `storage:manage` | destructive |
 | `delete_backup` | Asks to delete a backup from the backup target | `storage:manage` | destructive |
+| `run_restore_test` | Asks to check that an app's backups restore, as Test now on Data protection does; no app's data and no backup changes | `storage:manage` | destructive |
 | `change_storage_class` | Asks to move a volume's data to another storage class; what uses it stops while it copies | `storage:manage` | destructive |
 | `get_backup_overview` | Backup and snapshot jobs, the groups that hold volumes to them, and the backup target | `read` | read |
 | `save_backup_group` | Creates or changes a group of volumes and the jobs that apply to it: settings {name, jobs, volumes, original} | `storage:manage` | change |

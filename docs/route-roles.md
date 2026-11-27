@@ -489,6 +489,8 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | POST | `/api/operations/storage-recovery/preview` | admin |  | homestead_operations |
 | GET | `/api/operations/vm-recovery/preview` | admin |  | homestead_route_policy |
 | POST | `/api/operations/vm-recovery/preview` | admin |  | homestead_operations |
+| POST | `/api/operations/vm-recovery/removal-preview` | admin |  | homestead_operations |
+| POST | `/api/operations/vm-recovery/remove` | admin |  | homestead_operations |
 | GET | `/api/operations/vm-recovery/resolve` | admin |  | homestead_route_policy |
 | POST | `/api/operations/vm-recovery/resolve` | admin |  | homestead_operations |
 | GET | `/api/os-updates` | viewer |  | homestead_os_rollout |
@@ -885,6 +887,7 @@ Needs is the role the tool's scope stands for. A destructive tool waits for a pe
 | `rollback_container_image` | operator | containers:manage | change |  |
 | `run_backup_job` | operator | storage:manage | change |  |
 | `run_container_command` | operator | containers:manage | destructive | admin |
+| `run_restore_test` | operator | storage:manage | destructive | admin |
 | `run_schedule` | operator | containers:manage | change |  |
 | `save_backup_group` | operator | storage:manage | change |  |
 | `save_backup_job` | operator | storage:manage | change |  |
