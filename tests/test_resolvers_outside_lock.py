@@ -91,6 +91,48 @@ class OutsideTheLockTests(unittest.TestCase):
         self.assertEqual(["upstream-1"], seen, "the canceller did not see what the step created")
         self.assertEqual("cancelled", self.stored(self.op)["status"])
 
+    def test_a_cancel_made_while_the_last_step_finishes_the_job_keeps_its_result(self):
+        def finishes(item):
+            self.entered.set(); self.release.wait(5)
+            return "succeeded", 100, "Host updated to 42.20261101"
+        OPS.RESOLVERS[KIND] = finishes
+        thread = self.round_in_background()
+        self.assertTrue(OPS.cancel(self.op).get("accepted"))   # recorded while the step runs
+        self.release.set(); thread.join(5)
+        self.assertFalse(thread.is_alive())
+        OPS.list_operations()   # the loop's next tick looks at the recorded cancel
+        saved = self.stored(self.op)
+        self.assertEqual(("succeeded", "Host updated to 42.20261101"), (saved["status"], saved["message"]))
+        self.assertNotIn("cancel_request", saved)
+        # Whoever asked is still told, in the job's log, not as the job's result.
+        lines = [row["m"] for row in OPS.log(self.op)["history"]]
+        self.assertEqual("Cancel not applied: it has succeeded already, so there is nothing left to cancel",
+                         lines[-1])
+        self.assertEqual("Host updated to 42.20261101", lines[-2])
+
+    def test_a_long_refusal_is_in_the_log_whole(self):
+        # A failed job that may still be cleaned up is reviewed again, and its plan
+        # can refuse with a long reason: the log line keeps all of it.
+        why = "The disk is still being taken out of storage on node-a; " * 5 + "try again once that ends."
+        self.assertGreater(len(why), 240)
+        self.enterContext(mock.patch.object(OPS, "CLEANUPS", OPS.CLEANUPS | {KIND}))
+        OPS.CANCELLERS[KIND] = (lambda item: {"mode": "stop", "needs": "operator",
+                                              **({"can": False, "why_not": why} if item["status"] == "failed" else {})},
+                                lambda item, options: "Stopped")
+
+        def fails(item):
+            self.entered.set(); self.release.wait(5)
+            return "failed", 60, "The host did not come back"
+        OPS.RESOLVERS[KIND] = fails
+        thread = self.round_in_background()
+        self.assertTrue(OPS.cancel(self.op).get("accepted"))
+        self.release.set(); thread.join(5)
+        self.assertFalse(thread.is_alive())
+        OPS.list_operations()
+        saved = self.stored(self.op)
+        self.assertEqual(("failed", "The host did not come back"), (saved["status"], saved["message"]))
+        self.assertEqual(f"Cancel not applied: {why}", OPS.log(self.op)["history"][-1]["m"])
+
     def test_a_cancel_wakes_the_loop(self):
         OPS._wake.clear()
         OPS.cancel(self.op)
