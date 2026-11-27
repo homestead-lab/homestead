@@ -314,8 +314,13 @@ window.nodePower = async (node, action) => {
 
 /* A reboot or shutdown as it goes: its steps, from the job's recorded phase.
    Homestead itself may be unreachable while a host restarts - on a host it
-   runs on, or the only one - so the view keeps asking until the job ends. */
-let NODE_POWER_FOLLOW = 0;
+   runs on, or the only one - so the view keeps asking until the job ends.
+   It is a poll (UI.poll, #1406), every 2 s, that reads on in a hidden tab
+   (background: a host restart or shutdown is followed as it happens, so the
+   time disconnected stays true) and stops when the dialog closes. api()
+   leaves its own `timeout` to a caller that passes a signal, so the 10 s limit
+   on a read joins the poll's signal here; the poll gives up after 30 s itself. */
+let NODE_POWER_FOLLOW = null;   // the poll following the job, one at a time
 function nodePowerSteps(power) {
   const reboot = power.action === "reboot";
   // A declared maintenance sends no power: it ends once the host is marked.
@@ -376,30 +381,34 @@ window.nodePowerRelease = async id => {
     toast(r.detail, "ok");
   } catch (e) { toast(e.message, "bad"); }
 };
-window.nodePowerFollow = async (id, intro = "", initial = null) => {
-  const sequence = ++NODE_POWER_FOLLOW;
+window.nodePowerFollow = (id, intro = "", initial = null) => {
+  NODE_POWER_FOLLOW?.stop();
   modal("Host maintenance", (intro ? UI.lead(esc(intro)) : "") + '<div id="pwProgress"><div class="empty"><span class="spin2"></span>Starting…</div></div>', true);
   let last = initial?.id === id ? initial : null, disconnectedAt = null;
-  while (sequence === NODE_POWER_FOLLOW && $("#pwProgress")) {
+  const poll = NODE_POWER_FOLLOW = UI.poll(async signal => {
+    if (!$("#pwProgress")) return false;
     let offline = false;
     try {
-      last = (await api("/api/operations", { keep: true, timeout: 10000 })).find(o => o.id === id) || null;
+      const timeout = typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(10000) : null;
+      const limit = timeout && signal && AbortSignal.any ? AbortSignal.any([signal, timeout]) : signal || timeout;
+      last = (await api("/api/operations", { keep: true, signal: limit })).find(o => o.id === id) || null;
       disconnectedAt = null;
     } catch (e) {
-      if ((e.status === 401 || e.status === 403) && sequence === NODE_POWER_FOLLOW && $("#pwProgress")) {
+      if (UI.pollCancelled(signal) || poll !== NODE_POWER_FOLLOW) return false;
+      if ((e.status === 401 || e.status === 403) && $("#pwProgress")) {
         $("#pwProgress").innerHTML = UI.callout("warn", "The maintenance progress cannot be read", "Sign in with access to Jobs to check this request. Its outcome has not been confirmed.") + UI.actions(UI.cancel("Close"));
-        return;
+        return false;
       }
       offline = true;
       disconnectedAt ??= Date.now();
     }
-    if (!$("#pwProgress") || sequence !== NODE_POWER_FOLLOW) return;
+    if (UI.pollCancelled(signal) || !$("#pwProgress") || poll !== NODE_POWER_FOLLOW) return false;
     if (last) $("#pwProgress").innerHTML = nodePowerProgressMarkup(last, offline, offline ? Date.now() - disconnectedAt : 0);
     else if (offline) $("#pwProgress").innerHTML = nodePowerProgressMarkup({ power: {}, status: "running" }, true, Date.now() - disconnectedAt);
-    else if (!offline) { $("#pwProgress").innerHTML = UI.callout("warn", "The job was not found", "It may have been cleared. Check Recent jobs and the host.") + UI.actions(UI.cancel("Close")); return; }
-    if (last && ["succeeded", "failed", "cancelled"].includes(last.status)) { window.refreshOperations?.(true); return; }
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
+    else if (!offline) { $("#pwProgress").innerHTML = UI.callout("warn", "The job was not found", "It may have been cleared. Check Recent jobs and the host.") + UI.actions(UI.cancel("Close")); return false; }
+    if (last && ["succeeded", "failed", "cancelled"].includes(last.status)) { window.refreshOperations?.(true); return false; }
+  }, 2000, { background: true });
+  return poll.first;
 };
 
 // Node only (tests): the same names, for require(). The browser has no `module`.

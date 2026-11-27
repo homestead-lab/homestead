@@ -11,7 +11,7 @@ function setup({ plan = PLAN, post = null } = {}) {
   const fields = { "#mbody": { innerHTML: "" }, "#mtitle": { textContent: "" }, "#sr_confirm": { value: "postgres", dataset: { typedExpect: "postgres" } },
     "#sr_run": { disabled: false, textContent: "Start on another host", onclick: null } };
   const calls = [], toasts = [], requests = [];
-  const ctx = { console, Map, Set, Promise, JSON, URLSearchParams, setTimeout, encodeURIComponent, document: { addEventListener() {} },
+  const ctx = { console, Map, Set, Promise, JSON, URLSearchParams, setTimeout, clearTimeout, encodeURIComponent, document: { addEventListener() {} },
     STATE: { data: {} }, $: key => fields[key], $$: () => [], can: () => true, tip: t => t,
     toast: (m, k) => toasts.push([m, k]),
     esc: value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),

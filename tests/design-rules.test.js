@@ -48,7 +48,9 @@ test("lists' rows put their buttons in an actionBar, not loose in the row (#506)
   const lists = [
     ["web/js/views-storage-volumes.js", /function storagePaint\(/, ["＋ Create volume"]],
     ["web/js/views-lifecycle-images.js", /async function viewImages\(/, ["Scan every host", "Stop download"]],
-    ["web/js/views-vms.js", /window\.vmStore = /, ["Check for newer builds"]],
+    // The image store: the dialog around the lists (to the end of vmStore), then the lists alone.
+    ["web/js/views-vms.js", /const vmStoreFrame = /, ["Check for newer builds"]],
+    ["web/js/views-vms.js", /function vmStoreList\(/, []],
     ["web/js/vm-hardware.js", /window\.vmIsoLibrary = /, ["＋ Add folder", "Save setting", "↻ Refresh"]],
     ["web/js/views-helm.js", /function renderHelm\(/, ["＋ Install chart"]],
   ];

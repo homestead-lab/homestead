@@ -3,7 +3,7 @@
    has stopped answering. The review is a fresh read of the cluster; the run
    sends its token back, and a changed review asks to be read again. */
 let SET_RESTART_PLAN = null;
-let SET_RESTART_FOLLOW = 0;
+let SET_RESTART_FOLLOW = null;   // the poll following the job, one at a time
 const setRestartAgo = seconds => {
   const minutes = Math.max(0, Math.round(Number(seconds) / 60));
   return minutes >= 120 ? `${Math.round(minutes / 60)} h` : `${minutes} min`;
@@ -85,23 +85,31 @@ window.setRestartRun = async (ns, name, node) => {
   } finally { window.refreshOperations?.(true); }
 };
 
-/* The job as it goes: its progress and message from Recent jobs, until it ends. */
-window.setRestartFollow = async (id, name) => {
-  const sequence = ++SET_RESTART_FOLLOW;
+/* The job as it goes: its progress and message from Recent jobs, until it ends.
+   A poll (UI.poll, #1406), every 2 s: it reads nothing in a hidden tab and
+   once when the tab is shown again, and stops when the dialog closes. api()
+   leaves its own `timeout` to a caller that passes a signal, so the 10 s limit
+   on a read joins the poll's signal here; the poll gives up after 30 s itself. */
+window.setRestartFollow = (id, name) => {
+  SET_RESTART_FOLLOW?.stop();
   modal(`Starting elsewhere · ${name}`, '<div id="srProgress"><div class="empty"><span class="spin2"></span> Starting…</div></div>', true);
   let last = null;
-  while (sequence === SET_RESTART_FOLLOW && $("#srProgress")) {
+  const poll = SET_RESTART_FOLLOW = UI.poll(async signal => {
+    if (!$("#srProgress")) return false;
     let offline = false;
-    try { last = (await api("/api/operations", { keep: true, timeout: 10000 })).find(o => o.id === id) || last; }
-    catch { offline = true; }
-    if (!$("#srProgress") || sequence !== SET_RESTART_FOLLOW) return;
+    try {
+      const timeout = typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(10000) : null;
+      const limit = timeout && signal && AbortSignal.any ? AbortSignal.any([signal, timeout]) : signal || timeout;
+      last = (await api("/api/operations", { keep: true, signal: limit })).find(o => o.id === id) || last;
+    } catch { offline = true; }
+    if (UI.pollCancelled(signal) || !$("#srProgress") || poll !== SET_RESTART_FOLLOW) return false;
     const done = last?.status === "succeeded", stopped = last?.status === "failed" || last?.status === "cancelled";
     if (last) $("#srProgress").innerHTML = UI.progress(done ? 100 : last.progress, { label: done ? "Finished" : stopped ? "Stopped" : "In progress", kind: done ? "ok" : stopped ? "bad" : "info" })
       + (last.message ? UI.lead(esc(last.message)) : "")
       + (offline ? UI.callout("warn", "Reconnecting", "Homestead cannot be reached right now. This view continues automatically.") : "")
       + UI.actions(UI.cancel("Close"));
-    else if (!offline) { $("#srProgress").innerHTML = UI.callout("warn", "Job not found", "It may have been cleared. Check Recent jobs.") + UI.actions(UI.cancel("Close")); return; }
-    if (done || stopped) { window.refreshOperations?.(true); return; }
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
+    else if (!offline) { $("#srProgress").innerHTML = UI.callout("warn", "Job not found", "It may have been cleared. Check Recent jobs.") + UI.actions(UI.cancel("Close")); return false; }
+    if (done || stopped) { window.refreshOperations?.(true); return false; }
+  }, 2000);
+  return poll.first;
 };
