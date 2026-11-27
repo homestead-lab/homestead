@@ -1,5 +1,6 @@
 /* The installed phone app keeps its document still. Refresh belongs to the
-   content pane, with a button for people who do not use the gesture. */
+   content pane: pulling it down at the top. The top bar's button is for a
+   tablet; a phone hides it for room (style.css), and keeps Reload app in the menu. */
 (() => {
   const main = $(".main"), indicator = $("#pullRefresh"), button = $("#refresh");
   const formViews = new Set(["deploy", "vmimport", "imports", "setup"]);
