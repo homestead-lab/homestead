@@ -22,6 +22,7 @@ import re
 import time
 import urllib.error
 
+import homestead_icons as ICONS
 import homestead_leader_state as LEADER_STATE
 import homestead_names as NAMES
 import homestead_shared as SHARED
@@ -55,7 +56,7 @@ STORES = [
     ("Console sessions", ["console-audit.jsonl"], f"{LOG_DAYS} days, at most {LOG_LINES} entries"),
     ("Sign-ins", ["signins.jsonl"], "the last 5,000"),
     ("First-admin setup code", ["setup-code.json"], "the code's hash, until the first account exists"),
-    ("Logos", ["icons/*"], f"while something uses them, then {ICON_DAYS} days"),
+    ("Logos", ["icons/*", "icon-addresses.json"], f"while something uses them, then {ICON_DAYS} days"),
     ("Bug reports", ["diagnostics/*"], "until they expire"),
     ("Host ports and monitoring state", ["host-ports.json", "host-os.json", "node-parity.json", "root-guard.json", "smart-readings.json"], "current state only"),
 ]
@@ -95,6 +96,9 @@ def referenced_icons():
             found.add(str(link.get("icon") or ""))
     except Exception:
         return None
+    # An old address in an annotation uses the copy it was kept as (#1211).
+    copies = ICONS.address_copies(DATA_DIR)
+    found |= {copies[f] for f in found if f in copies}
     return {f for f in found if f.startswith("/api/icons/")}
 
 

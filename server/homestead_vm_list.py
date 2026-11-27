@@ -11,6 +11,7 @@ import re
 import time
 import urllib.error
 import urllib.parse
+import homestead_icons as ICONS
 import homestead_logos as LOGOS
 import homestead_names as NAMES
 import homestead_value_masks as MASKS
@@ -231,7 +232,7 @@ def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
             # Its logo: one set for it, else its OS's, from what the guest
             # agent says, Harvester's label, or the OS chosen for it.
             "icon": V.display_icon(annotations),
-            "has_logo": bool(NAMES.read(annotations, "icon")),
+            "has_logo": ICONS.has_logo(NAMES.read(annotations, "icon")),
             "logo_os_set": bool(NAMES.read(annotations, "logo-os")),
             # How it is monitored (homestead_uptime): blank is automatic.
             "monitoring": NAMES.read(annotations, "uptime"),

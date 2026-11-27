@@ -85,6 +85,7 @@ case "${1:-}" in
   pages-live)
     node scripts/check_dashboard_stream.mjs
     node scripts/check_icon_retries.mjs
+    node scripts/check_logos_everywhere.mjs
     node scripts/check_lh_v2_back.mjs
     node scripts/check_move_send.mjs
     VOLUME_SCREENSHOTS=release-assets/pages/planned-volumes node tests/integration/planned-container-volumes.mjs

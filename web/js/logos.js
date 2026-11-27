@@ -72,12 +72,17 @@ function logoSyncSave() {
   if (go) go.disabled = LOGO.chosen < 0 && !($("#lg_url")?.value || "").trim();
 }
 
+/* Remove is offered for a logo that is shown or on its way: one being copied into the cache, or whose
+   file is being fetched back, shows initials for now but is still set (#1211). A logo that could not be
+   copied reports has_logo false and is offered under Find logos instead, where a new one replaces it. */
+window.logoRemovable = w => !!(w.icon || w.has_logo);
+
 /* One app: the picker as its own dialog. back reopens what sent you here. */
 window.wlLogo = (ns, name, back = null) => {
   const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || {};
   Object.assign(LOGO, { kind: "workload", ns, name, tiles: [], chosen: -1, back, os: "" });
   logoDialog(name, "Pick a logo from the app store. Homestead keeps a copy. Nothing restarts.",
-    w.icon ? UI.button("Remove logo", "logoSave(true)", { attrs: 'data-need="operator"' }) : "");
+    logoRemovable(w) ? UI.button("Remove logo", "logoSave(true)", { attrs: 'data-need="operator"' }) : "");
 };
 
 /* One VM: its OS's logo, another OS's, or one from the app store. */

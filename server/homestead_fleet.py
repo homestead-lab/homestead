@@ -34,6 +34,7 @@ import urllib.request
 
 import homestead_audit as AUDIT_LOG
 import homestead_fetch as FETCH
+import homestead_icons as ICONS
 import homestead_names as NAMES
 import homestead_sessions as SESSIONS
 
@@ -1780,8 +1781,26 @@ def gather(what, local, user, role):
         entries = [result] if what == "flow" and result is not None else result or []
         for row in entries:
             if isinstance(row, dict):
-                rows.append({**row, "site": tags[m["id"]]})
+                rows.append({**(row if m["self"] else _their_logos(row, m["id"], what)), "site": tags[m["id"]]})
     return ({"clusters": rows, "missing": missing} if what == "flow" else rows), missing
+
+
+def _their_logos(row, member_id, what):
+    """A linked cluster's rows name its logos as /api/icons/ paths of its own
+    (#1211): each is asked of that cluster (hs_cluster, as a console names it),
+    since this one's cache may not hold it. An older Homestead's picture inside
+    the value is kept; any other value is no logo, since the page would load
+    it. Copies: the kept answer is not changed."""
+    def named(item):
+        if not isinstance(item, dict) or not item.get("icon") or ICONS.is_picture_data(item["icon"]):
+            return item
+        icon = item["icon"]
+        if ICONS.is_reference(icon):
+            return {**item, "icon": f"{icon}?hs_cluster={urllib.parse.quote(member_id, safe='')}"}
+        return {**item, "icon": ""}
+    if what == "flow":
+        return {**row, "workloads": [named(w) for w in row.get("workloads") or []]} if "workloads" in row else row
+    return named(row)
 
 
 # Its routes and who may use them (homestead_routes.py).

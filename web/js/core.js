@@ -45,10 +45,21 @@ async function readClipboard() {
 }
 const HOMESTEAD_VERSION = "2.9.1-dev.3";
 const ICON_BLOBS = new Map();
+// The picture of each logo that has arrived: a panel or dialog drawn again sets it at once (#1211).
+const ICON_READY = new Map();
 /* An icon that could not be fetched is not asked for again on every refresh: its app shows its initials,
-   and it is tried again after ten minutes (or on a full reload, which forgets this). (#906) */
+   and it is tried again after ten minutes (or on a full reload, which forgets this). (#906) A failure
+   that may pass - no answer, a 5xx, or an answer that is not a picture, such as a proxy's sign-in
+   page - is tried again after ICON_RETRY_SOON_MS instead, then twice as long each time it fails again
+   up to the ten minutes; a 404 waits the ten minutes at once (#1211). */
 const ICON_FAILED = new Map();
 const ICON_RETRY_MS = 10 * 60 * 1000;
+const ICON_RETRY_SOON_MS = 15 * 1000;
+const ICON_FAILS = new Map();      // a logo's failures in a row that may pass: its wait doubles with each
+/* What the page fetches as an app's logo: exactly this Homestead's /api/icons/<sha256>.<ext> (the
+   names homestead_icons.ICON_NAME allows), or a linked cluster's, named by ?hs_cluster= (#1211).
+   A logo annotation is written by anyone who may edit the app, so nothing else is fetched. */
+const ICON_PATH = /^\/api\/icons\/[0-9a-f]{64}\.(png|jpg|gif|webp|ico|svg)(\?hs_cluster=[A-Za-z0-9._~%-]+)?$/;
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
   disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
@@ -103,8 +114,8 @@ function pageTitle(view) {
 window.pageTitle = pageTitle;
 const tip = (text, label = "?") => `<span class="tip" tabindex="0" aria-label="${esc(text)}" data-tip="${esc(text)}">${esc(label)}</span>`;
 const icon = name => `<svg class="btnicon" aria-hidden="true"><use href="#i-${esc(name)}"/></svg>`;
-const appAvatar = (name, icon, cls = "") => icon
-  ? `<span class="av appav ${cls}"><span class="avfallback">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span><img ${icon.startsWith("/api/icons/") ? `data-icon-src="${esc(icon)}"` : `src="${esc(icon)}"`} alt="" referrerpolicy="no-referrer"></span>`
+const appAvatar = (name, icon, cls = "") => icon && (ICON_PATH.test(icon) || !icon.startsWith("/api/icons/"))
+  ? `<span class="av appav ${cls}"><span class="avfallback">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span><img ${ICON_PATH.test(icon) ? `data-icon-src="${esc(icon)}"` : `src="${esc(icon)}"`} alt="" referrerpolicy="no-referrer"></span>`
   : `<span class="av ${cls}">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span>`;
 
 function loadAppIcons(root = document) {
@@ -123,25 +134,54 @@ function loadAppIcons(root = document) {
   root.querySelectorAll("img[data-icon-src]").forEach(img => {
     if (img.dataset.iconLoading) return;
     const url = img.dataset.iconSrc;
+    if (!ICON_PATH.test(url)) { img.remove(); return; }
     const failedAt = ICON_FAILED.get(url);
     if (failedAt !== undefined) {
       if (Date.now() - failedAt < ICON_RETRY_MS) { img.remove(); return; }
       ICON_FAILED.delete(url);
     }
     img.dataset.iconLoading = "1";
+    if (ICON_READY.has(url)) { img.src = ICON_READY.get(url); return; }
     let pending = ICON_BLOBS.get(url);
     if (!pending) {
-      pending = fetch(url, { credentials: "same-origin", cache: "no-store" }).then(response => {
-        if (!response.ok) throw new Error(`icon request failed (${response.status})`);
+      // The address names the picture's content, so the browser keeps it for the next page load (#1211);
+      // a missing one is answered no-store, and asked for again after ICON_RETRY_MS.
+      pending = fetch(url, { credentials: "same-origin" }).then(response => {
+        if (!response.ok) throw Object.assign(new Error(`icon request failed (${response.status})`), { missing: response.status === 404 });
+        if (!/^image\//i.test(response.headers?.get?.("content-type") || "")) throw new Error("the icon answer is not a picture");
         return response.blob();
-      }).then(blob => URL.createObjectURL(blob));
+      }).then(blob => { const objectUrl = URL.createObjectURL(blob); ICON_READY.set(url, objectUrl); ICON_FAILS.delete(url); return objectUrl; });
       ICON_BLOBS.set(url, pending);
-      pending.catch(() => ICON_BLOBS.delete(url));
+      // Once per failure, however many images wait on it: a 404 waits ICON_RETRY_MS; a failure that may
+      // pass waits ICON_RETRY_SOON_MS, twice as long each time it fails again, up to ICON_RETRY_MS. It is
+      // kept as if it had failed that long before the long wait ends, which is what iconRetryDue reads.
+      pending.catch(error => {
+        ICON_BLOBS.delete(url);
+        const fails = error?.missing ? 0 : (ICON_FAILS.get(url) || 0) + 1;
+        if (fails) ICON_FAILS.set(url, fails); else ICON_FAILS.delete(url);
+        const wait = fails ? Math.min(ICON_RETRY_SOON_MS * 2 ** (fails - 1), ICON_RETRY_MS) : ICON_RETRY_MS;
+        ICON_FAILED.set(url, Date.now() - ICON_RETRY_MS + wait);
+      });
     }
     pending.then(objectUrl => { if (img.isConnected) img.src = objectUrl; })
-      .catch(() => { ICON_FAILED.set(url, Date.now()); if (img.isConnected) img.remove(); });
+      .catch(() => { if (img.isConnected) img.remove(); });
   });
 }
+
+/* A logo is drawn wherever an app is: a page's paint, the details panel, a dialog body written in place,
+   a list in a section. Each of those would have to call loadAppIcons itself, so one watcher does it for
+   all of them: a change that adds an <img data-icon-src> has its logos loaded once the change is in (#1211). */
+(() => {
+  if (typeof MutationObserver !== "function" || typeof document === "undefined" || !document.documentElement) return;
+  let queued = false;
+  const adds = records => records.some(r => [...r.addedNodes].some(n => n.nodeType === 1 &&
+    (n.matches("img[data-icon-src]") || n.querySelector("img[data-icon-src]"))));
+  new MutationObserver(records => {
+    if (queued || !adds(records)) return;
+    queued = true;
+    queueMicrotask(() => { queued = false; loadAppIcons(document); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
+})();
 
 /* ---------------- settings ---------------- */
 const SET = { theme: "dark", bg: "soft", blur: 26, motion: "on", refresh: 15 };
@@ -162,7 +202,7 @@ applySettings();
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  $, $$, V, STATE, esc, jsArg, jsq, safeHref, copyText, readClipboard, HOMESTEAD_VERSION, ICON_BLOBS, ICON_FAILED,
-  ICON_RETRY_MS, HEALTH_DEFAULTS, HEALTH, healthPair, sev, gcls, worstMetricClass, loadHealthSettings, paintBrand,
+  $, $$, V, STATE, esc, jsArg, jsq, safeHref, copyText, readClipboard, HOMESTEAD_VERSION, ICON_BLOBS, ICON_READY, ICON_FAILED,
+  ICON_RETRY_MS, ICON_RETRY_SOON_MS, ICON_FAILS, ICON_PATH, HEALTH_DEFAULTS, HEALTH, healthPair, sev, gcls, worstMetricClass, loadHealthSettings, paintBrand,
   pageTitle, tip, icon, appAvatar, loadAppIcons, SET, applySettings
 };

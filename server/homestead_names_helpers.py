@@ -53,36 +53,81 @@ def _dns_name(value, label="name"):
 _ICON_HEALED = {}
 _ICON_TRIED = {}
 ICON_RETRY_SECONDS = 15 * 60
+ICON_TRIED_MAX = 1024             # the oldest attempt is forgotten past this
+_ICON_TRIED_LOCK = threading.Lock()
 
 
 def _heal_icon(reference, annotations):
     moved_from = (NAMES.read(annotations, "moved-from") or "").split("/", 1)[0]
     found = ""
-    if moved_from:
+    if moved_from and ICONS.is_reference(reference):     # an address is fetched from where it points
         try:
             found = MOVE_PHASES.carry_icon(moved_from, dict(annotations))
         except Exception:
             found = ""
     if not found:
-        source = NAMES.read(annotations, "icon-source") or ""
+        # An address in the annotation itself (written so by v1.9.0 to v1.14.1) is
+        # the source; otherwise the source the logo was cached from.
+        source = reference if ICONS.is_address(reference) else NAMES.read(annotations, "icon-source") or ""
+        found = ""
         if source.startswith(("http://", "https://")):
             try:
+                # The icon code's own fetch: public addresses only, size and type checked.
                 found = ICONS.persist(source, DATA_DIR)
             except Exception:
                 found = ""
     if found:
         _ICON_HEALED[reference] = found
+    if ICONS.is_address(reference):
+        if ICONS.is_reference(found):
+            ICONS.remember_copy(reference, found, DATA_DIR)    # lasting: a restart or another replica reads it
+        ICONS.uncacheable(reference, failed=not ICONS.is_reference(found))
+
+
+def _heal_soon(reference, annotations):
+    """Copy the logo into this Homestead's cache in the background, at most
+    every ICON_RETRY_SECONDS for one reference."""
+    with _ICON_TRIED_LOCK:
+        now = time.time()
+        if now - _ICON_TRIED.get(reference, 0) <= ICON_RETRY_SECONDS:
+            return
+        if reference not in _ICON_TRIED and len(_ICON_TRIED) >= ICON_TRIED_MAX:
+            _ICON_TRIED.pop(min(_ICON_TRIED, key=_ICON_TRIED.get))
+        _ICON_TRIED[reference] = now
+    threading.Thread(target=_heal_icon, args=(reference, dict(annotations or {})),
+                     daemon=True, name="icon-heal").start()
 
 
 def display_icon(annotations):
-    reference = NAMES.read(annotations, "icon")
+    """An app's logo for a list row: its cached file's /api/icons/ reference,
+    which the browser fetches once and keeps (#1211), not the picture itself:
+    a list read every 15 seconds carried every logo again each time.
+
+    A picture inside the value is shown as before. An http(s) address (v1.9.0
+    to v1.14.1 wrote one) is never given to the page, which would load it
+    from wherever the annotation says: it is copied into the cache in the
+    background, through the icon code's own checked fetch, and the next read
+    names the cached copy; until then it is no logo. Anything else - a path
+    with "..", a query, another host, another scheme - is no logo."""
+    reference = NAMES.read(annotations, "icon") or ""
+    healed = _ICON_HEALED.get(reference)
+    if healed and ICONS.exists(healed, DATA_DIR):
+        return healed
+    if ICONS.is_picture_data(reference):
+        return reference
+    if ICONS.is_address(reference):
+        copy = ICONS.copied(reference, DATA_DIR)
+        if copy:
+            return copy
+        _heal_soon(reference, annotations)     # at most every ICON_RETRY_SECONDS for one address
+        return ""
+    if not ICONS.is_reference(reference):
+        return ""
     try:
-        return ICONS.data_url(_ICON_HEALED.get(reference, reference), DATA_DIR)
+        ICONS.resolve(reference, DATA_DIR)     # a file not here is no logo, and its repair is asked for
+        return reference
     except FileNotFoundError:
-        if str(reference or "").startswith("/api/icons/") and                 time.time() - _ICON_TRIED.get(reference, 0) > ICON_RETRY_SECONDS:
-            _ICON_TRIED[reference] = time.time()
-            threading.Thread(target=_heal_icon, args=(reference, dict(annotations or {})),
-                             daemon=True, name="icon-heal").start()
+        _heal_soon(reference, annotations)
         return ""
     except (ValueError, OSError):
         return ""

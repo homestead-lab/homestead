@@ -3111,7 +3111,8 @@ ssh_pwauth: true
         unread: [],
         counts: { stops: 1, waits: 2, unknown: 0, moves: 2, at_risk: 1, fewer_copies: 1, addresses: 1 },
         apps: [
-          { kind: "app", ns: "lab", name: "frigate", outcome: "stops", why: "no other host can run it: lacks the Google Coral USB", notes: [] },
+          // Its logo, as homestead_impact.py carries each app's from the apps list (#1211).
+          { kind: "app", ns: "lab", name: "frigate", icon: DEMO_ICON_OK, outcome: "stops", why: "no other host can run it: lacks the Google Coral USB", notes: [] },
           { kind: "app", ns: "lab", name: "paperless", outcome: "waits", why: "set to wait for its host to come back", notes: [] },
           { kind: "set", ns: "data", name: "postgres", icon: "", here: 1, copies: 1, keeps_answering: false, outcome: "waits", setting: "node_down",
             why: "waits until its pod is deleted: Kubernetes doesn't start a StatefulSet's pod elsewhere while the old one might still run. To have Longhorn do this, turn on Settings → Hardware and storage → Allow apps with storage to move off a failed host.", notes: [] },

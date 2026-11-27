@@ -44,6 +44,7 @@ MIME_EXTENSIONS = {
 }
 
 ICON_NAME = re.compile(r"[0-9a-f]{64}\.(png|jpg|gif|webp|ico|svg)")
+PREFIX = "/api/icons/"
 SVG_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 
 SVG_NS, XLINK_NS = "http://www.w3.org/2000/svg", "http://www.w3.org/1999/xlink"
@@ -466,11 +467,118 @@ def exists(reference, data_dir):
         return False
 
 
+def is_reference(value):
+    """Whether value is exactly a cached logo's path, /api/icons/<sha256>.<ext>,
+    with nothing before or after it: no other folder, host, query or fragment.
+    A workload's logo annotation is written by anyone who may edit the
+    workload, and the page fetches what a list row names (#1211)."""
+    return isinstance(value, str) and value.startswith(PREFIX) and bool(ICON_NAME.fullmatch(value[len(PREFIX):]))
+
+
+_PICTURE_DATA = re.compile(r"data:(" + "|".join(re.escape(m) for m in MIME_EXTENSIONS) + r");base64,[A-Za-z0-9+/]+={0,2}")
+
+
+def is_picture_data(value):
+    """Whether value is a picture inside the value, as an older Homestead's
+    rows carried each logo: data:<an allowed image type>;base64,... and nothing
+    else. The page shows it as an <img>, where an SVG's script never runs."""
+    return isinstance(value, str) and bool(_PICTURE_DATA.fullmatch(value))
+
+
+def is_address(value):
+    """An http(s) address, one token long: a logo as v1.9.0 to v1.14.1 wrote
+    it into the annotation, before logos were kept in the cache."""
+    return isinstance(value, str) and len(value) <= 2048 and bool(re.fullmatch(r"https?://[^\s\"'<>`]+", value))
+
+
+# Addresses whose copy into the cache failed (dead, too large, not an image,
+# or refused by _public_target): address -> when. Kept per replica, the
+# oldest dropped past UNCACHEABLE_MAX (it is then tried again).
+_UNCACHEABLE = {}
+UNCACHEABLE_MAX = 1024
+
+
+def uncacheable(address, failed=True):
+    """Note that an address could (not) be copied into the cache."""
+    if failed:
+        if address not in _UNCACHEABLE and len(_UNCACHEABLE) >= UNCACHEABLE_MAX:
+            _UNCACHEABLE.pop(min(_UNCACHEABLE, key=_UNCACHEABLE.get))
+        _UNCACHEABLE[address] = time.time()
+    else:
+        _UNCACHEABLE.pop(address, None)
+
+
+def has_logo(value):
+    """Whether a logo annotation names a logo that is shown or on its way:
+    a cached logo (its file may be being fetched back), a picture inside the
+    value, or an address not yet found impossible to copy. Anything else is
+    no logo, so Find logos offers the app again."""
+    if is_reference(value) or is_picture_data(value):
+        return True
+    return is_address(value) and value not in _UNCACHEABLE
+
+
+# Old addresses copied into the cache, kept on the data volume beside the
+# icons so a restart or another replica names the copy at once, and the logo
+# outlives its host: {address: {"icon": reference, "at": when}}. The
+# annotation is left as it is (changing it would be a write to the cluster).
+ADDRESSES = "icon-addresses.json"
+ADDRESSES_MAX = 512
+_addresses_read = [None]          # ((path, mtime_ns, size), record): the last file read
+
+
+def address_copies(data_dir):
+    """{address: reference} from the lasting record; a missing, unreadable or
+    damaged file is an empty record."""
+    path = os.path.join(data_dir, ADDRESSES)
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return {}
+    key = (path, stat.st_mtime_ns, stat.st_size)
+    if _addresses_read[0] and _addresses_read[0][0] == key:
+        return _addresses_read[0][1]
+    try:
+        record = SHARED.load_json(path)
+    except (OSError, ValueError):
+        record = {}
+    copies = {address: entry["icon"] for address, entry in (record.items() if isinstance(record, dict) else ())
+              if is_address(address) and isinstance(entry, dict) and is_reference(entry.get("icon"))}
+    _addresses_read[0] = (key, copies)
+    return copies
+
+
+def copied(address, data_dir):
+    """The cached logo an old address was copied to, when its file is here."""
+    reference = address_copies(data_dir).get(address, "")
+    return reference if reference and exists(reference, data_dir) else ""
+
+
+def remember_copy(address, reference, data_dir):
+    """Keep address -> reference in the lasting record, the oldest dropped
+    past ADDRESSES_MAX. A damaged record is started again."""
+    path = os.path.join(data_dir, ADDRESSES)
+
+    def change(record):
+        record.pop(address, None)
+        record[address] = {"icon": reference, "at": int(time.time())}
+        while len(record) > ADDRESSES_MAX:
+            record.pop(min(record, key=lambda a: record[a].get("at", 0) if isinstance(record[a], dict) else 0))
+    lock = SHARED.SharedLock("icon-addresses", directory=lambda: data_dir)
+    try:
+        SHARED.update_file(path, change, lock, {})
+    except SHARED.Unreadable:
+        with lock:
+            fresh = {}
+            change(fresh)
+            SHARED.write_json(path, fresh)
+
+
 def resolve(path, data_dir):
     """Return (absolute path, MIME) for an exact cached icon route."""
-    name = (path or "").rsplit("/", 1)[-1]
-    if not ICON_NAME.fullmatch(name):
+    if not is_reference(path):
         raise FileNotFoundError("invalid icon")
+    name = path[len(PREFIX):]
     ext = name.rsplit(".", 1)[1]
     mime = next(k for k, value in MIME_EXTENSIONS.items() if value == ext)
     target = os.path.abspath(os.path.join(data_dir, "icons", name))
