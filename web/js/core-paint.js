@@ -169,7 +169,7 @@ function phoneTitle(view, phone) {
 function phonePrimary(phone) {
   const plus = document.getElementById("phonePrimary");
   if (!plus) return false;
-  const main = phone ? V()?.querySelector(".phead .page-actions>button.btn.pri") : null;
+  const main = phone ? V()?.querySelector(".phead .page-actions:not(.store-search)>button.btn.pri") : null;
   plus.hidden = !main;
   if (!main) return false;
   // The same name as the button it stands for, so it is announced (and found) as that button.
@@ -229,10 +229,11 @@ function topLevelElements(markup) {
 /* The header's action row split in two: what goes into the top bar (the
    page's buttons and its ⋯ menu) and what stays on the page with the list's
    other controls (a count pill, a view switch, a field). A header that is a
-   search, the App Store's field and its button, stays whole. */
+   search, the App Store's field and its button, goes up whole (Nov 2026 mockup). */
 function splitPageActions(row) {
   const open = row.slice(0, row.indexOf(">") + 1), inner = row.slice(open.length, row.lastIndexOf("</div>"));
-  const stays = el => /\bstore-search\b/.test(open) || /^<(input|select|label)\b/i.test(el)
+  if (/\bstore-search\b/.test(open)) return { lifted: row, kept: "" };
+  const stays = el => /^<(input|select|label)\b/i.test(el)
     || /^<[^>]*\b(class="[^"]*\b(pill|iconseg|scanprogress)\b|id="scanprogress")/.test(el);
   const items = topLevelElements(inner);
   const up = items.filter(el => !stays(el)), down = items.filter(stays);
