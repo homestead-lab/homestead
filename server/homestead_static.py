@@ -51,9 +51,12 @@ FINGERPRINT = re.compile(r"\.([0-9a-f]{10})\.[a-z0-9]+$")
 # The reads a page repeats on every tick and that grow with the cluster. Each is a
 # GET any role may read (tests/test_api_compression.py checks); add one only if no
 # answer it gives can hold a secret, a log line or a value masked for some roles.
+# /api/alerts is left out (each person's own acknowledgements and push devices: a value that differs by
+# who asks), and /api/gitops (Flux's message can name repositories and Secrets) (#1211).
 COMPRESSED_ANSWERS = frozenset((
     "/api/overview", "/api/nodes", "/api/nodes/uptime", "/api/history/long", "/api/uptime",
-    "/api/workloads", "/api/volumes", "/api/storage", "/api/lh/overview", "/api/operations"))
+    "/api/workloads", "/api/volumes", "/api/storage", "/api/lh/overview", "/api/operations",
+    "/api/image-updates", "/api/storage/forecast", "/api/history", "/api/longhorn/capacity"))
 # Below about one packet gzip saves nothing a user would notice.
 MIN_ANSWER_GZIP = 1400
 ANSWER_LEVEL = 5

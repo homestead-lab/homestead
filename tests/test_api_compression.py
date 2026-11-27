@@ -7,17 +7,20 @@ reads the secret back, so everything else (answers to actions, downloads,
 streams, reveals, logs) is always sent as it is."""
 import email.message
 import gzip
+import hashlib
 import importlib
 import io
 import json
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import server
+import homestead_history as HISTORY
 import homestead_routes as ROUTES
 import homestead_static as STATIC
 
@@ -107,6 +110,122 @@ class AnswerCompressionTests(unittest.TestCase):
         headers, payload = call("/api/overview", packed, extra=[("Content-Encoding", "gzip")])
         self.assertEqual(["gzip"], headers["content-encoding"])
         self.assertEqual(packed, payload)
+
+
+def _digest(*parts):
+    return "sha256:" + hashlib.sha256("/".join(map(str, parts)).encode()).hexdigest()
+
+
+def image_updates(apps=60):
+    """/api/image-updates for a cluster of `apps` apps, in the shape
+    homestead_update_checks builds it: one or two images each, digests and all."""
+    workloads = []
+    for n in range(apps):
+        ns, name = f"apps-{n % 7}", f"app-{n}"
+        images = []
+        for c in range(1 + n % 2):
+            base = f"registry.example.com/team-{n % 5}/{name}-{c}"
+            images.append({"container": f"{name}-{c}", "deployed": f"{base}:1.{n}.0", "source": f"{base}:1.{n}.0",
+                           "available": n % 9 == 0, "current_digest": _digest(base, "now"),
+                           "remote_digest": _digest(base, "remote" if n % 9 == 0 else "now"),
+                           "candidate": f"{base}:1.{n + (n % 9 == 0)}.0", "candidate_tag": f"1.{n}.0",
+                           "error": "registry authentication required" if n % 13 == 0 else "", "running": True})
+        workloads.append({"ns": ns, "name": name, "images": images, "unchecked": False,
+                          "available": any(i["available"] for i in images), "managed": {}, "yaml": "",
+                          "can_rollback": n % 4 == 0, "last_action": "", "homestead": ""})
+    return {"channel": "prod", "checked_at": "2026-11-23T10:00:00Z", "updates": 7, "rate_limited": 0, "errors": 5,
+            "homestead": {"updates": 0, "errors": 0}, "workloads": workloads,
+            "policy": {"policy": "approval_required", "allows_install": True, "requires_approval": True,
+                       "reason": "Explicit operator approval is required before rollout.", "window_open": False,
+                       "maintenance": {"start": "02:00", "duration_minutes": 120}}}
+
+
+def storage_forecast(volumes=60, hosts=4):
+    """/api/storage/forecast: a row per volume, per Longhorn disk and the pool (homestead_forecast.report)."""
+    rows = [{"key": f"volume:pvc-{n:04d}", "kind": "volume", "label": f"apps-{n % 7}/data-app-{n}",
+             "namespace": f"apps-{n % 7}", "volume": f"pvc-{n:04d}", "node": "", "used": 1_000_000_000 + n * 7919,
+             "capacity": 10 * 1024**3, "pct": round(9.3 + n / 7, 1), "days": 30,
+             "days_left": None if n % 3 else round(40.0 + n, 1), "per_day": 1048576.0 * n,
+             "why": "not growing" if n % 3 else "", "full_on": "" if n % 3 else "2027-01-05"} for n in range(volumes)]
+    rows += [{"key": f"disk:node-{h}:disk-{h}", "kind": "disk", "label": f"node-{h} /var/lib/longhorn",
+              "namespace": "", "volume": "", "node": f"node-{h}", "used": 400 * 1024**3, "capacity": 1024**4,
+              "pct": 39.1, "days": 30, "days_left": None, "per_day": 2.0e8, "why": "too irregular to forecast",
+              "full_on": ""} for h in range(hosts)]
+    rows.append({"key": "pool", "kind": "pool", "label": "Longhorn storage", "namespace": "", "volume": "", "node": "",
+                 "used": 1600 * 1024**3, "capacity": 4 * 1024**4, "pct": 39.1, "days": 30, "days_left": None,
+                 "per_day": 8.0e8, "why": "not growing", "full_on": ""})
+    return {"rows": rows, "warn_days": 14, "show_days": 60, "min_days": 7}
+
+
+def live_history(points=120):
+    """/api/history from the real homestead_history.live_series, over a full live
+    buffer: an hour of 30 s samples as record_live keeps them."""
+    now = 1_763_903_580
+    samples = [{"t": now - 30 * (points - n), "cpu": round(18 + (n * 37 % 50) / 7, 1),
+                "mem": round(52 + (n * 11 % 30) / 10, 1), "rx": round(3.5 + (n * 29 % 97) / 13, 2),
+                "tx": round(1.2 + (n * 31 % 89) / 17, 2), "pods": 140 + n % 3, "sys_pods": 61, "vol_bad": 0,
+                "nodes_ready": 4, "nodes_total": 4} for n in range(points)]
+    with mock.patch.object(HISTORY, "_read_live", return_value=samples):
+        return HISTORY.live_series(now=now)
+
+
+def longhorn_capacity(hosts=4, disks=2):
+    """/api/longhorn/capacity: each host's Longhorn disks (homestead_lhcapacity.status)."""
+    nodes = [{"name": f"node-{h}", "tags": [], "allocated_gb": 812.0, "limit_gb": 1862.6, "size_gb": 1862.6,
+              "used_gb": 640.4, "pct": 43.6, "room_gb": 520.3, "physical_room_gb": 700.1, "level": "ok", "blocked": "",
+              "disks": [{"id": f"disk-{h}-{d}", "path": f"/var/lib/longhorn-{d}", "type": "filesystem", "tags": ["ssd"],
+                         "size_gb": 931.3, "allocated_gb": 406.0, "limit_gb": 931.3, "used_gb": 320.2,
+                         "free_gb": 611.1, "room_gb": 525.3, "physical_room_gb": 378.3, "pct": 43.6, "blocked": ""}
+                        for d in range(disks)]} for h in range(hosts)]
+    return {"over_provisioning": 100, "minimal_available": 25, "nodes": nodes,
+            "largest": {"1": 525.3, "2": 525.3, "3": 525.3}, "warn_pct": 80, "crit_pct": 90,
+            "v2": {"enabled": False, "harvester_setting": None, "ready_nodes": 0, "total_nodes": hosts,
+                   "distribution": "k3s", "longhorn_version": "v1.9.1", "longhorn_ok": True,
+                   "nodes": [{"name": f"node-{h}", "block_disks": 0, "hugepages_mb": 0, "ready": False,
+                              "missing": ["a V2 (block) disk", "2 GiB of hugepages (has 0 MiB)"],
+                              "checks": {"cpu": True, "modules": None, "hugepages": False, "disk": False},
+                              "missing_modules": []} for h in range(hosts)]},
+            "node_down": "do-nothing", "rwx_fast_failover": False,
+            "replenish_wait": 600, "replenish_choices": [600, 3600, 21600, 86400],
+            "orphan_auto_removal": {"setting": "orphan-resource-auto-deletion", "said": "Longhorn removes records of replicas by itself."}}
+
+
+class ListReadsAddedFor1211Tests(unittest.TestCase):
+    """#1211: the steady list reads a page asks for on every tick, measured going
+    over the wire at full size. Each holds names, numbers and fixed phrases, and
+    no secret, log line or value masked for some roles."""
+    ADDED = {"/api/image-updates": image_updates, "/api/storage/forecast": storage_forecast,
+             "/api/history": live_history, "/api/longhorn/capacity": longhorn_capacity}
+
+    def test_each_is_gzipped_for_a_browser_that_accepts_it(self):
+        for path, shape in self.ADDED.items():
+            body = shape()
+            with self.subTest(path=path):
+                headers, payload = call(path, body)
+                self.assertEqual(["gzip"], headers.get("content-encoding"), f"{path} went out at full size")
+                self.assertIn("Accept-Encoding", headers["vary"])
+                self.assertEqual(body, json.loads(gzip.decompress(payload)))
+                self.assertLess(len(payload), len(json.dumps(body)) / 3)
+
+    def test_each_is_sent_unchanged_to_one_that_does_not(self):
+        for path, shape in self.ADDED.items():
+            body = shape()
+            with self.subTest(path=path):
+                headers, payload = call(path, body, gzip_ok=False)
+                self.assertNotIn("content-encoding", headers)
+                self.assertIn("Accept-Encoding", headers.get("vary", []), f"{path} is not on the list")
+                self.assertEqual(json.dumps(body).encode(), payload)
+
+    def test_alerts_and_gitops_stay_uncompressed(self):
+        # /api/alerts: each person's own acknowledgements and push devices, a value
+        # that differs by who asks. /api/gitops: Flux's own message,
+        # which can name repositories and Secrets (homestead_gitops.alert_facts).
+        for path in ("/api/alerts", "/api/gitops"):
+            with self.subTest(path=path):
+                headers, payload = call(path, BIG)
+                self.assertNotIn("content-encoding", headers)
+                self.assertNotIn("vary", headers)
+                self.assertEqual(BIG, json.loads(payload))
 
     def test_every_listed_read_is_a_get_route_any_role_may_read(self):
         declared = {}
