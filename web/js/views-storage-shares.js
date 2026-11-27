@@ -21,39 +21,32 @@ async function viewShares() {
   const smbUsersUnread = smbUsersRead?.unread || "";
   if (smbUserList) STATE.data.smbUsers = smbUserList;
   const ip = smb.address || "address not assigned yet";
-  paint(`${UI.pageHeader(`Network shares`, `SMB shares, and optional NFSv4 exports, stored on Longhorn volumes`, `<button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button>`)}
-  <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">SMB server · ${esc(smb.name || "homestead-smb")}</div>
-    <div class="dim small">${smb.error ? `Status unavailable. ${esc(smb.error)}` : !smb.installed ? "Not installed · Creating the first share installs it" :
-      `${smb.enabled ? `${smb.ready || 0}/${smb.desired || 1} ready` : "Stopped"}${smb.address ? ` · \\\\${esc(smb.address)}` : " · waiting for an address"} · ${smb.served_shares?.length ?? 0} of ${sh.length} shares served${smb.in_sync ? "" : " · out of sync"}`}</div></div>
-    ${can("admin") && !smb.error ? `<div class="row">${smb.installed && (!smb.in_sync || Object.keys(smb.recovery_failures || {}).length) ? '<button class="btn sm" onclick="repairSamba(this)">Repair SMB server</button>' : ""}${smbUserList ? `<button class="btn sm" onclick="smbUsers()">SMB users · ${smbUserList.length}</button>` : smbUsersUnread ? '<button class="btn sm" onclick="smbUsers()">SMB users</button>' : ""}<button class="btn sm quiet" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>` : ""}</div>
-    ${smbUsersUnread && !smb.error ? `<div class="dim small" style="margin-top:8px">The SMB users could not be read. ${esc(smbUsersUnread)}</div>` : ""}
-    ${smb.partial ? `${UI.callout("warn", { html: `Partly serving · ${plural(smb.offline_shares.length, "share")} offline` }, `Shares whose storage is unavailable are left out for now, so the other shares can start. No volumes, passwords or share settings were deleted.<ul>${smb.offline_shares.map(s => `<li><b>${esc(s.name)}</b> · ${esc(s.pvc)}: ${esc(s.reason)}</li>`).join("")}</ul>When the storage has been available for two minutes, Homestead adds the shares again. This restarts the SMB server and briefly interrupts connections.`)}` : ""}
-    ${smbUserList && !smbUserList.length ? `<div class="dim small" style="margin-top:8px">There are no SMB users yet. Private shares need one, but guest shares do not. <a class="linkish" onclick="smbUserEdit('')">Add a user</a></div>` : ""}
-    ${smb.recovery_warning ? `${UI.callout("warn", "", `${esc(smb.recovery_warning)}`)}` : ""}
-    ${Object.keys(smb.recovery_failures || {}).length ? `${UI.callout("bad", "", `Shares are no longer restored automatically. ${Object.entries(smb.recovery_failures).map(([pvc, reason]) => `${esc(pvc)}: ${esc(reason)}`).join(" ")} The shares that work were restored. After fixing the problem, choose Repair SMB server.`)}` : ""}
-    ${Object.keys(smb.recovery_pending || {}).length ? `${UI.callout("warn", "", `Checking that the storage stays available: ${Object.entries(smb.recovery_pending).map(([pvc, p]) => `${esc(pvc)} (${p.action === "restore" ? "waiting to add back" : "waiting to leave out"})`).join(", ")}.`)}` : ""}
-    ${UI.more("How the SMB server is managed", `<p>Homestead manages the SMB server, its image and its volumes from the list of shares. Turn the server on or off, or remove it, under Settings → Hardware and storage → Add-ons. Volumes are kept. A volume that has been unavailable for one minute is left out for now. It is added back when it has been available again for two minutes. Both changes restart the SMB server. Shares still need their storage and a working cluster to recover.</p>`)}</div>
-  <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">NFSv4 server · ${esc(nfs.name || "homestead-nfs")}</div>
-    <div class="dim small">${nfs.error ? `Status unavailable. ${esc(nfs.error)}` : !nfs.installed ? "Not installed" :
-      `${nfs.enabled ? `${nfs.ready || 0}/${nfs.desired || 1} ready` : "Stopped"}${nfs.address ? ` · ${esc(nfs.address)}:/<share>` : " · waiting for an address"}`} · ${(nfs.exports || []).length} exports</div></div>
-    <button class="btn sm quiet" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>
-    ${nfsRecovery(nfs, false, "<p>The NFS server is optional and separate from the SMB server. Only the chosen shared volumes are exported, and only to their allowed client networks. The SMB server and the volumes are not affected.</p>")}</div>
+  // The Nov 2026 mockup: one summary line, the servers a line each, then the shares
+  // (views-storage-shares-details.js); what the server cards explained is in their ⋯.
+  const notices = smb.error ? "" : [
+    smbUsersUnread && `<div class="dim small">The SMB users could not be read. ${esc(smbUsersUnread)}</div>`,
+    smb.partial && UI.callout("warn", { html: `Partly serving · ${plural(smb.offline_shares.length, "share")} offline` }, `Shares whose storage is unavailable are left out for now, so the other shares can start. No volumes, passwords or share settings were deleted.<ul>${smb.offline_shares.map(s => `<li><b>${esc(s.name)}</b> · ${esc(s.pvc)}: ${esc(s.reason)}</li>`).join("")}</ul>When the storage has been available for two minutes, Homestead adds the shares again. This restarts the SMB server and briefly interrupts connections.`),
+    smbUserList && !smbUserList.length && `<div class="dim small">There are no SMB users yet. Private shares need one, but guest shares do not. <a class="linkish" onclick="smbUserEdit('')">Add a user</a></div>`,
+    smb.recovery_warning && UI.callout("warn", "", esc(smb.recovery_warning)),
+    Object.keys(smb.recovery_failures || {}).length && UI.callout("bad", "", `Shares are no longer restored automatically. ${Object.entries(smb.recovery_failures).map(([pvc, reason]) => `${esc(pvc)}: ${esc(reason)}`).join(" ")} The shares that work were restored. After fixing the problem, choose Repair SMB server.`),
+    Object.keys(smb.recovery_pending || {}).length && UI.callout("warn", "", `Checking that the storage stays available: ${Object.entries(smb.recovery_pending).map(([pvc, p]) => `${esc(pvc)} (${p.action === "restore" ? "waiting to add back" : "waiting to leave out"})`).join(", ")}.`),
+  ].filter(Boolean).join("");
+  paint(`${UI.pageHeader(`Network shares`, sharesSummary(sh, smb, nfs), `<button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button>`)}
+  ${sharesServers(sh, smb, nfs, smbUserList)}
+  ${notices ? `<div class="share-notices">${notices}</div>` : ""}
   <div class="card flat pad0"><div class="tblwrap sharetable"><table data-sort="shares" class="tbl stack">
     <thead><tr><th>Share</th><th>Storage</th><th>Size</th><th>Access</th><th>Windows path</th><th></th></tr></thead><tbody>
-    ${sh.map(s => `<tr><td class="shareidentity"><div class="row" style="gap:9px"><div class="av n2">${esc(s.name.slice(0, 2).toUpperCase())}</div>
-      <div><b>${esc(s.name)}</b>${(smb.offline_shares || []).some(row => row.name === s.name) ? ` ${UI.chip("Offline · storage unavailable", "bad")}` : ""}<div class="dim xs">${esc(s.created || "")}</div></div></div></td>
+    ${sh.map(s => { const p = shareProblem(s, smb), items = shareActionItems(s); return `<tr class="share-row${p ? ` share-problem ${p.tone}` : ""}"><td class="shareidentity"><div class="row" style="gap:9px"><div class="av n2">${esc(s.name.slice(0, 2).toUpperCase())}</div>
+      <div><button type="button" class="linkish share-open" onclick="openDetails('share',${jsq(s.name)})">${esc(s.name)}</button>${shareOffline(s) ? ` ${UI.chip("Offline · storage unavailable", "bad")}` : ""}<div class="dim xs">${esc(s.created || "")}</div></div></div></td>
       <td class="small mono" data-label="Storage"><span class="sharevol">${esc(s.pvc || "—")}${s.sub_path ? `<span class="dim">/${esc(s.sub_path)}</span>` : ""}</span>
         ${s.owned === false ? UI.chip("shared volume", "neutral") : ""}</td>
       <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GiB" : "—"}</td>
-      <td data-label="Access"><span>${s.public ? UI.chip("guest", "warn", { tip: "No sign-in. Windows 11 refuses guest shares until two of its settings are changed. See Allow guest access when creating or editing a share." }) : (can("admin") ? `<button type="button" class="pill low pillbtn" data-tip="Private. Signs in as ${esc(s.user)}. Opens SMB users." onclick="smbUsers()">${esc(s.user)}</button>` : UI.chip(s.user, "neutral"))}
+      <td data-label="Access"><span data-card="share-access|${esc(s.name)}">${s.public ? UI.chip("guest", "warn") : (can("admin") ? `<button type="button" class="pill low pillbtn" data-tip="Private. Signs in as ${esc(s.user)}. Opens SMB users." onclick="smbUsers()">${esc(s.user)}</button>` : UI.chip(s.user, "neutral"))}
         ${s.read_only ? UI.chip("read only", "neutral") : UI.chip("read/write", "neutral")}
         ${shareBinChip(s)}
-        ${s.nfs_clients ? UI.chip("NFS", "info", { size: "slim", tip: `NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${s.nfs_clients}` }) : ""}</span></td>
+        ${s.nfs_clients ? UI.chip("NFS", "info", { size: "slim" }) : ""}</span></td>
       <td class="small muted mono" data-label="Windows path">${smb.address ? `\\\\${esc(ip)}\\${esc(s.name)}` : "Waiting for an address"}</td>
-      <td data-actions>${actionBar([
-        { label: "Edit", icon: "edit", run: `editShare(${jsq(s.name)})`, need: "admin", tip: "Make this share larger or change who can use it" },
-        { label: "NFS", run: `nfsExport(${jsq(s.name)})`, need: "admin", tip: "Set up this share's NFSv4 export and its allowed clients" },
-        { label: "Remove", icon: "trash", run: `rmShare(${jsq(s.name)})`, need: "admin", danger: true }])}</td></tr>`).join("")
+      <td data-actions>${actionBar([{ ...items[0], plain: true }, ...items.slice(1)], { shown: 1, label: `More actions for ${s.name}` })}</td></tr>`; }).join("")
       || `<tr><td colspan=6 class="empty">No shares yet. Create one with ＋ New share.</td></tr>`}</tbody></table></div></div>`);
 }
 window.nfsExport = name => {
