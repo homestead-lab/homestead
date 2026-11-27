@@ -349,6 +349,13 @@ finds them; the SMB and NFS servers are a line each in one card, with what
 their cards used to explain in ⋯; a row's action is Edit share. A share's
 sidebar says plainly when guests can change files, with Change access, then
 its Windows path, NFS path, storage and users, with Access and Activity tabs.
+Hosts are cards on a computer and the comparison on a phone, unless a layout
+was chosen in ⋯. The summary says how many hosts are ready and which can
+restart without stopping an app; each card shows its uptime, CPU, memory and
+disks, what runs on it, whether a restart is safe ("A restart stops frigate:
+No other host has a Google Coral USB."), and Restart host… and Start
+maintenance…. Its temperature shows only when the probe is waiting or a
+sensor runs warm; the disks' hover card and the host's page have the rest.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
 pause on the name or the state shows a hover card. The page's summary line

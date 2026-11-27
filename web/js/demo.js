@@ -3064,6 +3064,14 @@ ssh_pwauth: true
     // If this host goes down (impact.js): one of each outcome, and a StatefulSet that waits (#440).
     "/api/nodes/impact": url => {
       const node = url.searchParams.get("node") || "harvester-node2";
+      const others = ["harvester-node1", "harvester-node2", "harvester-node3"].filter(n => n !== node);
+      // Only frigate's host has the Coral USB, so only its restart stops an app.
+      if (node === "harvester-node1") return { node, others_ready: others, unread: [], counts: { stops: 0, waits: 0, unknown: 0, moves: 3, at_risk: 0, fewer_copies: 0, addresses: 1 },
+        apps: ["home-assistant", "mosquitto", "homestead-smb"].map(name => ({ kind: "app", ns: "lab", name, outcome: "moves", to: others, why: "about 15 seconds after the host is marked not ready", notes: [] })),
+        at_risk: [], fewer_copies: [], addresses: [{ ip: "192.0.2.210", kind: "management", services: [] }] };
+      if (node === "harvester-node3") return { node, others_ready: others, unread: [], counts: { stops: 0, waits: 0, unknown: 0, moves: 1, at_risk: 0, fewer_copies: 0, addresses: 0 },
+        apps: [{ kind: "app", ns: "lab", name: "paperless", outcome: "moves", to: ["harvester-node1"], why: "about 15 seconds after the host is marked not ready", notes: [] }],
+        at_risk: [], fewer_copies: [], addresses: [] };
       return { node, others_ready: ["harvester-node1", "harvester-node3"].filter(n => n !== node),
         unread: [],
         counts: { stops: 1, waits: 2, unknown: 0, moves: 2, at_risk: 1, fewer_copies: 1, addresses: 1 },

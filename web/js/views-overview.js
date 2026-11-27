@@ -1219,17 +1219,22 @@ async function viewNodes() {
   const [n, up] = await Promise.all([api("/api/nodes"), api("/api/nodes/uptime").catch(e => ({ unread: e.message })), loadHardwareFeatures()]);
   STATE.data.nodes = n;
   noteNodeUptime(up);
-  const layout = viewLayout("nodes");
-  paint(`${UI.pageHeader(`Hosts`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}${metricsNotice(n)}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
+  // The Nov 2026 mockup: cards on a computer, the comparison on a phone, unless
+  // a layout was chosen; the choice is in ⋯ (views-hosts.js draws the cards).
+  const layout = viewLayout("nodes", { phone: "rows" });
+  paint(`${UI.pageHeader(`Hosts`, `${hostsSummary(n)}${metricsNotice(n)}`, `
       ${moreMenu([
+        n.length > 1 && {label: layout === "rows" ? "Show as cards" : "Show as comparison", icon: layout === "rows" ? "dash" : "list", run: `setViewLayout('nodes','viewNodes',${jsq(layout === "rows" ? "cards" : "rows")})`},
         {label:"Add a host…",run:"clusterOnboarding()",need:"admin"},
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
       ])}
       ${n.length > 1 ? `<button class="btn" data-need="operator" onclick="balanceHosts()" data-tip="Move apps and volume copies so that hosts carry similar loads.">${icon("layers")}Balance hosts…</button>` : ""}`)}
    <div id="restartReady"></div>
-   ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : nodeComparison(n, "nodes", { singleCard: false })}`);
-  ready.then(answer => { const slot = $("#restartReady"); if (slot) slot.innerHTML = restartReadyNotice(answer); });
+   ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(hostCard).join("")}</div>` : nodeComparison(n, "nodes", { singleCard: false })}`);
+  // The last restart's check is said only when something is still wrong; the summary says the rest.
+  ready.then(answer => { const slot = $("#restartReady"); if (slot) slot.innerHTML = answer?.ready ? "" : restartReadyNotice(answer); });
+  hostsReadImpact(n);
 }
 
 /* ---------------- a node's own terminal ----------------

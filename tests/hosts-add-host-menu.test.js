@@ -11,9 +11,9 @@ async function hostsHeader() {
     api: async path => path === "/api/nodes" ? [{ name: "node1" }] : { nodes: {} } };
   c.window = c; vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => c.esc(c.jsArg(s));
-  for (const f of ["web/js/ui.js", "web/js/views-overview.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  for (const f of ["web/js/ui.js", "web/js/views-overview.js", "web/js/views-hosts.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
   Object.assign(c, { loadHardwareFeatures: async () => {}, noteNodeUptime() {}, viewLayout: () => "cards", layoutSwitch: () => "",
-    nodeCard: () => "", nodeComparison: () => "", paint: html => { painted = html; } });
+    nodeCard: () => "", hostCard: () => "", nodeComparison: () => "", paint: html => { painted = html; } });
   await c.viewNodes();
   return painted.split('<details class="actionmenu headmenu">')[1].split("</details>")[0];
 }

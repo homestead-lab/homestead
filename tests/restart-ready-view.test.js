@@ -15,7 +15,7 @@ function setup(answer) {
       : path === "/api/nodes" ? [] : path === "/api/nodes/uptime" ? { nodes: {} } : [] };
   c.window = c; vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
-  for (const f of ["web/js/ui.js", "web/js/views-overview.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  for (const f of ["web/js/ui.js", "web/js/views-overview.js", "web/js/views-hosts.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
   return { c, html: () => html, slot: () => slot };
 }
 const settling = { node: "node-a", ready: false, not_running: ["lab/db", "lab/web"], short_of_copies: ["lab/data"] };
