@@ -1591,14 +1591,14 @@ class H(HTTP.LimitedHandler):
         except PermissionError as e:
             return self._send(403, {"error": str(e)})
         except ValueError as e:
-            return self._send(400, {"error": str(e)})
+            return self._send(400, {"error": getattr(e, "whole", str(e))})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
             return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": API_ERRORS.message(e, 500)})
         except Exception as e:
-            return self._send(500, {"error": str(e)})
+            return self._send(500, {"error": getattr(e, "whole", str(e))})
 
     @REQUEST_SCOPE.unbinds_after(self_data_request)
     def do_POST(self):
@@ -1630,14 +1630,14 @@ class H(HTTP.LimitedHandler):
         except PermissionError as e:
             return self._send(403, {"error": str(e)})
         except ValueError as e:
-            return self._send(400, {"error": str(e)})
+            return self._send(400, {"error": getattr(e, "whole", str(e))})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
             return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": API_ERRORS.message(e)})
         except Exception as e:
-            return self._send(500, {"error": str(e)})
+            return self._send(500, {"error": getattr(e, "whole", str(e))})
 
     @REQUEST_SCOPE.unbinds_after(self_data_request)
     def do_DELETE(self):
@@ -1655,11 +1655,11 @@ class H(HTTP.LimitedHandler):
             # Not an empty account store: the cluster did not answer.
             return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})
         except ValueError as e:
-            return self._send(400, {"error": str(e)})
+            return self._send(400, {"error": getattr(e, "whole", str(e))})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": API_ERRORS.message(e, 500)})
         except Exception as e:
-            return self._send(500, {"error": str(e)})
+            return self._send(500, {"error": getattr(e, "whole", str(e))})
 
 
 def start_background_tasks():

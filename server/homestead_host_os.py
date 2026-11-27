@@ -274,10 +274,10 @@ def read(node, refresh=False, now=None):
     if not facts["complete"]:
         # The facts are one per line, so the last one says how far it got.
         last = next((line.split(" ", 1)[0] for line in reversed(out.splitlines()) if line.strip()), "")
-        raise ValueError(f"could not read {node}'s operating system: the check stopped part-way"
-                         + (f", after {last}" if last else "")
-                         + (f": {err.strip()[-160:]}" if (err or "").strip() else
-                            ". The host's kernel log (dmesg) says whether it ran out of memory"))
+        said = f"could not read {node}'s operating system: the check stopped part-way" + (f", after {last}" if last else "")
+        if (err or "").strip():
+            raise OPS.HostOutput(said, err.strip()[-160:])
+        raise ValueError(said + ". The host's kernel log (dmesg) says whether it ran out of memory")
     facts["at"] = int(now or time.time())
     # The boot this read saw: a later restart makes its "restart needed" old
     # news. And whether it runs VMs (KubeVirt labels the hosts it schedules
@@ -405,7 +405,7 @@ def check_all(reader=None, wait=False):
             reader(name)
         except Exception as error:
             with _check_lock:
-                _CHECK["failed"][name] = str(error)[:160]
+                _CHECK["failed"][name] = getattr(error, "whole", str(error))[:160]   # as before, with what the host said
         with _check_lock:
             _CHECK["done"].append(name)
 
@@ -466,7 +466,7 @@ def tick(now=None):
             read_now.append(name)
         else:
             READS.failed(_FAILED, name, now)
-            print(f"host OS: {name}: {str(error)[:160]}", flush=True)
+            print(f"host OS: {name}: {getattr(error, 'whole', str(error))[:160]}", flush=True)   # the server log keeps what the host said
     return read_now
 
 
@@ -531,7 +531,7 @@ def upgrade_begin(node, facts=None, ref=None):
         raise
     if "STARTED" not in out:
         hostrun.let_go(node, lease)
-        raise ValueError(f"updates on {node} did not start: {(err or out)[-200:]}")
+        raise OPS.HostOutput(f"The updates on {node} did not start, because the host did not confirm the launch", (err or out)[-200:])
     if ref is not None:
         ref.update(lease=lease, run=run)
     return manager
@@ -568,7 +568,10 @@ def upgrade_start(node, ops):
     """Install every waiting update on node, detached on the host, as a job."""
     facts = read(node)
     held = {}
-    manager = upgrade_begin(node, facts, held)
+    try:
+        manager = upgrade_begin(node, facts, held)
+    except OPS.HostOutput as error:
+        raise ValueError(error.whole) from None   # the answer to the person who asked keeps what the host said
     ref = {"node": node, "since": time.time(), "manager": manager, **held}
     return ops.start("host-os", _title(node, facts), {"kind": "Node", "name": node}, "/nodes", ref,
                      _unconfirmed(ref) if ref.get("unconfirmed") else f"{manager} is installing updates on {node}")
@@ -612,8 +615,10 @@ def _step(item, now=None):
             return "failed", 100, f"No result from {node}'s update after two hours. See {LOG} there."
         if ref.get("unconfirmed") and not now_state.get("active"):
             return "running", 50, _unconfirmed(ref)
-        last = now_state["last"]
-        return "running", 50, f"Installing on {node}: {last}" if last else f"Installing updates on {node}"
+        if now_state["last"]:
+            OPS.note_output(item, [now_state["last"]])
+            return "running", 50, f"Installing updates on {node}. Its latest output is in the job's Log."
+        return "running", 50, f"Installing updates on {node}"
     try:
         facts = read(node)
     except Exception:

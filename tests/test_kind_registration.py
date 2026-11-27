@@ -46,7 +46,7 @@ from unittest import mock
 # module, the kinds it resolves, the kinds it cancels
 HOSTS = [
     (HOST_OS, {"host-os": HOST_OS.status}, {"host-os"}),
-    (OS_ROLLOUT, {"os-rollout": OS_ROLLOUT.status}, {}),
+    (OS_ROLLOUT, {"os-rollout": OS_ROLLOUT.job_status}, {}),
     (HOST_BRIDGE, {"host-bridge": HOST_BRIDGE.status}, {"host-bridge"}),
     (HOST_BONDS, {HOST_BONDS.KIND: HOST_BONDS.status}, {HOST_BONDS.KIND}),
     (UPLINKS, {UPLINKS.KIND: UPLINKS.status}, {}),

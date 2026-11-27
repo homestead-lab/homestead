@@ -605,9 +605,14 @@ class RestartNotScheduledTests(Unfinished):
         for kind in self.each():
             self.host.restart_says = self.SAYS
             ref = kind.saved()
-            status, progress, message = self.step(kind, ref, 5)
+            self.now = SINCE + 5
+            item = {"id": "job-1", "ref": ref}
+            status, progress, message = kind.module.status(item, now=self.now)
             self.assertEqual(("running", kind.confirmed_at, "confirmed"), (status, progress, ref["stage"]))
-            self.assertIn("still trying to schedule the restart of k3s (Failed to start transient timer unit", message)
+            self.assertIn("still trying to schedule the restart of k3s (exit code 1, its output is in the job's Log)", message)
+            self.assertNotIn("Failed to start", message, "what the host printed goes to the job's Log")
+            self.assertEqual(["Failed to start transient timer unit"],
+                             [step["m"] for step in item.get("history", []) if step.get("output")])
             self.assertEqual(LEASE, ref["lease"])
             self.host.restart_says = POD_EXEC.Output("OK\n", "", 0)
             self.step(kind, ref, 35)

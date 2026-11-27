@@ -39,7 +39,8 @@ def _host(node, code, *, write=False, timeout=120):
         line = next(line[len('RESULT '):] for line in out.splitlines() if line.startswith('RESULT '))
         return json.loads(line)
     except (StopIteration, ValueError):
-        raise ValueError('Runtime maintenance could not be verified: ' + str(err or out)[-600:]) from None
+        import homestead_operations as OPS
+        raise OPS.HostOutput(f'Runtime maintenance could not be verified on {node}, because its worker gave no result', str(err or out)[-600:]) from None
 
 
 def _call(node, expression, *, write=False):
@@ -238,7 +239,7 @@ def progress(item):
         # Waiting for a reboot can take days: the host is looked at every CADENCE interval (#975).
         return CADENCE.look(item, 'longhorn-runtime', on_host)
     except (ValueError, urllib.error.HTTPError) as error:
-        return 'failed', item.get('progress', 0), str(error)
+        return 'failed', item.get('progress', 0), error   # a host's output goes to the job's Log (homestead_operations._finish)
 
 
 def status(operation_id):

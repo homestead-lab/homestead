@@ -149,6 +149,9 @@ def script(action):
     return "\n".join(lines)
 
 
+ACTION_WORDS = {"enable": "Installing the host console on {node}", "disable": "Removing the host console from {node}"}
+
+
 def _apply(node, uid, action):
     """Run one console action on one host and record what it is now. Called
     holding _lock, so one console action runs at a time."""
@@ -159,8 +162,12 @@ def _apply(node, uid, action):
         if not report:
             failed = next((s for s in out.splitlines() if s.startswith("HSCONSOLE-FAILED ")), "")
             said = "\n".join(s for s in out.splitlines() if s and not s.startswith("HSCONSOLE"))
-            raise ValueError((failed[len("HSCONSOLE-FAILED "):] + ": " if failed else "")
-                             + ((err or said)[-280:] or "the host gave no output"))
+            step = failed[len("HSCONSOLE-FAILED "):]
+            output = (err or said)[-280:]
+            doing = ACTION_WORDS.get(action, "Checking the host console on {node}").format(node=node)
+            import homestead_operations as OPS
+            raise OPS.HostOutput(f"{doing} failed" + (f" ({step})" if step else "")
+                                 + ("" if output else ". The host gave no output."), output)
         fields = dict(pair.split("=", 1) for pair in report.split()[1:])
         native, enabled = fields["native"] == "yes", fields["enabled"] == "yes"
         version = fields.get("version", "")
@@ -178,8 +185,9 @@ def _apply(node, uid, action):
                  "detail": detail}
     except Exception as error:
         state = _read()
+        # The host's record (Add-ons, admin) keeps what the host said.
         saved = dict(state.get(node) if (state.get(node) or {}).get("uid") == uid else {"uid": uid},
-                     failed_at=time.time(), detail=f"{action} failed: {str(error)[:300]}")
+                     failed_at=time.time(), detail=f"{action} failed: {getattr(error, 'whole', str(error))[:300]}")
         state[node] = saved
         SHARED.write_json(_path(), state, durable=True)
         raise
@@ -226,7 +234,7 @@ def status(item):
         try:
             saved = _apply(ref["node"], ref["uid"], ref["action"])
         except Exception as error:
-            return "failed", 0, str(error)[:400]
+            return "failed", 0, error   # a host's output goes to the job's Log (homestead_operations._finish)
         ref.update(done=True, detail=saved["detail"])
         return "succeeded", 100, saved["detail"]
 
@@ -282,7 +290,7 @@ def tick(now=None):
                                             "disable": "host console removed"}.get(action, "host console checked")
                              + f" ({record['detail']})"))
             except Exception as error:
-                done.append((meta["name"], f"host console {action} failed, tried again in an hour: {str(error)[:200]}"))
+                done.append((meta["name"], f"host console {action} failed, tried again in an hour: {getattr(error, 'whole', str(error))[:200]}"))
             saved = _read()
             want = wanted(saved)
     return done

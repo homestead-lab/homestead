@@ -9,6 +9,7 @@ from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_operations as OPERATIONS
 import homestead_unraid_vms as UVMS
 from rebind import keep_bound
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -200,6 +201,10 @@ class ImportTests(unittest.TestCase):
                 pass
 
             @staticmethod
+            def note_output(item, lines):
+                return OPERATIONS.note_output(item, lines)   # the real one: it changes only the job it is given
+
+            @staticmethod
             def record_phase(operation_id, phase, progress, message, **updates):
                 ref = self.started[-1][2]
                 ref.update(updates, phase=phase)
@@ -361,11 +366,15 @@ class ImportTests(unittest.TestCase):
         ref = {"namespace": "lab", "vm": "Desktop VM", "phase": "copy", "disks": [{"dv": "desktop-disk", "job": "copy", "bytes": 1}]}
         self.objects[f"{UVMS.CDI_API}/namespaces/lab/datavolumes/desktop-disk"] = {"status": {"phase": "UploadReady"}}
         self.imp._get_or_none = lambda path: {"status": {"failed": 1, "conditions": [{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]}}
+        item = {"ref": ref}
         with mock.patch.object(UVMS, "_job_logs", return_value="curl: (22) The requested URL returned error: 500\n0\n"):
-            state, _, message = UVMS.status({"ref": ref})
+            state, _, message = UVMS.status(item)
         self.assertEqual("failed", state)
-        self.assertIn("curl: (22)", message)
-        self.assertNotIn("failed: 0", message)
+        self.assertIn("Copying Desktop VM failed (BackoffLimitExceeded). The copy's last error is in the job's Log.", message,
+                      "the job's own reason stays, for a reader without the Log")
+        self.assertNotIn("curl: (22)", message, "the copy's output goes to the job's Log, not to the job list")
+        self.assertEqual(["curl: (22) The requested URL returned error: 500"],
+                         [step["m"] for step in item["history"] if step.get("output")])
 
     def test_logs_follow_the_confirmed_job_and_prime_upload_pvc(self):
         ref = {"namespace": "lab", "phase": "copy", "disks": [{"dv": "desktop-disk", "job": "copy", "job_uid": "job-current"}]}

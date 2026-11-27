@@ -478,8 +478,10 @@ class JobTests(PlanBase):
 
     def test_running_follows_the_unit(self):
         item, result = self.run_with("[INFO]  Starting k3s\n")
-        self.assertEqual("running", result[0])
-        self.assertIn("Starting k3s", result[2])
+        self.assertEqual(("running", "Reinstalling k3s on app-1. Its latest output is in the job's Log."),
+                         (result[0], result[2]))
+        self.assertEqual(["[INFO] Starting k3s"], [step["m"] for step in item["history"] if step.get("output")],
+                         "the host's line goes to the job's Log, not to the job list")
 
     def test_running_unreachable_is_running_then_fails_after_limit(self):
         def boom(node, script):
@@ -491,11 +493,13 @@ class JobTests(PlanBase):
         self.assertIn(PROMOTE.LOG, result[2])
 
     def test_running_failure_message_has_rejoin(self):
-        _, result = self.run_with("CODE 1\ncurl: (6) Could not resolve host\n")
+        item, result = self.run_with("CODE 1\ncurl: (6) Could not resolve host\n")
         self.assertEqual("failed", result[0])
         self.assertIn("AGENT-JOIN-CMD", result[2])
-        self.assertIn("code 1", result[2])
+        self.assertIn("The reinstall on app-1 stopped with code 1. Its last output is in the job's Log.", result[2])
         self.assertNotIn("k3s is stopped", result[2])
+        self.assertNotIn("Could not resolve host", result[2])
+        self.assertEqual(["curl: (6) Could not resolve host"], [step["m"] for step in item["history"] if step.get("output")])
 
     def test_running_code_10_is_the_node_password(self):
         _, result = self.run_with("CODE 10\n")

@@ -81,7 +81,11 @@ class ConsoleSettingsTests(unittest.TestCase):
         CONSOLE.start("node1", "enable")
         result = OPS.list_operations()[0]
         self.assertEqual("failed", result["status"])
-        self.assertIn("curses unavailable", result["message"])
+        self.assertEqual("Installing the host console on node1 failed. The host's output is in the job's Log.",
+                         result["message"])
+        self.assertEqual(["python curses unavailable"],
+                         [step["m"] for step in OPS.log(result["id"])["history"] if step.get("output")])
+        self.assertIn("curses unavailable", CONSOLE.inventory()["nodes"][0]["detail"], "the Add-ons page keeps saying why")
 
     def test_a_console_job_leaves_the_job_store_free_while_its_host_runs_the_script(self):
         # The script may run for minutes: under the store's lock every start,

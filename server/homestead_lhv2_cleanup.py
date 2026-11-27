@@ -59,7 +59,8 @@ def host(row, action='inspect', *, proof='', boot=''):
     try:
         return json.loads(next(line[7:] for line in out.splitlines() if line.startswith('RESULT ')))
     except (StopIteration, ValueError):
-        raise ValueError('Host memory inspection did not finish: ' + (err or out)[-350:]) from None
+        import homestead_operations as OPS
+        raise OPS.HostOutput(f"Host memory inspection did not finish on {row['node']}", (err or out)[-350:]) from None
 
 
 def node_rows(nodes):
@@ -85,7 +86,8 @@ def review():
             if memory['boot'] != row['boot']: raise ValueError('Host restarted during review')
             rows.append({**row, **memory})
         except (ValueError, OSError) as error:
-            rows.append({**row, 'owned_pages': 0, 'phase': 'retained', 'reason': str(error)})
+            # A review the person asked for: its reason keeps what the host said.
+            rows.append({**row, 'owned_pages': 0, 'phase': 'retained', 'reason': getattr(error, 'whole', str(error))})
     context = {'setting_uid': setting['metadata']['uid'], 'enabled': setting['value'] == 'true', 'nodes': rows,
                'managers': active}
     cfg = {'request_id': secrets.token_hex(12)}
@@ -255,7 +257,10 @@ def _end_refused(item):
         try:
             memory = _inspect(row)
         except (ValueError, OSError) as error:
-            notes.append(row['node'] + ': ' + str(error)[:200]); continue   # no receipt: it stays staged
+            import homestead_operations as OPS
+            said = OPS.said_with_output(item, error)   # a host's output goes to the job's Log
+            notes.append(said.rstrip('.')[:240] if getattr(error, 'output', None)
+                         else f"{row['node']} was not inspected ({said[:200]})"); continue   # no receipt: it stays staged
         if memory['phase'] != 'complete' or _released(obj, memory):
             row.update(memory)
         else:

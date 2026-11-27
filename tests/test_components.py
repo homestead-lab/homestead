@@ -264,7 +264,8 @@ class K3sTests(unittest.TestCase):
     def node_job(self, **status):
         self.c.upgrade_api()
         self.c.kube.add(job("apply-homestead-server-on-node-1", "homestead-server", "node-1", **status))
-        return C.status({"ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes"}})
+        self.job_item = {"ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes"}}
+        return C.status(self.job_item)
 
     def test_a_server_stopping_its_own_upgrade_pod_is_retried_not_a_failure(self):
         # Seen on a real cluster: k3s-upgrade replaces the binary and stops
@@ -289,10 +290,29 @@ class K3sTests(unittest.TestCase):
         finally:
             C.ktext = None
         self.assertEqual("failed", status)
-        self.assertIn("node-1 failed (Job has reached the specified backoff limit)", message)
-        self.assertIn("[ERROR] no space left on device", message, "what it said, not where to look")
-        self.assertNotIn("+ set -e", message, "the script's trace is left out")
+        self.assertEqual("The upgrade job on node-1 failed (Job has reached the specified backoff limit). "
+                         "Its last output is in the job's Log.", message)
+        output = [step["m"] for step in self.job_item["history"] if step.get("output")]
+        self.assertEqual(["[INFO] Comparing old and new binaries", "[ERROR] no space left on device"], output,
+                         "what it said goes to the job's Log, not to the job list")
         self.assertIn("/pods/apply-1-b/log", read[0], "its newest pod")
+
+    def test_a_value_the_pod_printed_on_the_line_after_its_name_is_hidden_in_the_jobs_log(self):
+        value = "".join(("Zq8", "Wm3", "Xr7", "Kp2"))   # in pieces: no real value
+        self.cluster()
+        self.c.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {
+            "namespace": C.SUC_NS, "name": "apply-1-a", "creationTimestamp": "2026-10-06T12:47:00Z",
+            "labels": {"job-name": "apply-homestead-server-on-node-1"}}})
+        keep = C.ktext
+        C.ktext = lambda path: "\n".join(["[INFO]  Fetching the mirror", "registry password:", f"  {value}", "+ exit 1", ""])
+        try:
+            status, _, message = self.node_job(failed=6, conditions=[{"type": "Failed", "status": "True",
+                                                                       "reason": "BackoffLimitExceeded"}])
+        finally:
+            C.ktext = keep
+        self.assertEqual("failed", status)
+        self.assertNotIn(value, message)
+        self.assertNotIn(value, json.dumps(self.job_item.get("history", [])), "the name and its value are one step")
 
     def test_a_server_restarting_mid_upgrade_is_not_a_step_of_its_own(self):
         self.cluster([])

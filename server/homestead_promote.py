@@ -449,7 +449,7 @@ def _prepare(op_id, ref):
             launching = False    # refused before anything ran there
             raise
         if "STARTED" not in out:
-            raise ValueError(f"the reinstall on {node} did not confirm it started: {(err or out)[-200:]}")
+            raise OPS.HostOutput(f"the reinstall on {node} did not confirm it started", err or out)
         record("running", 45, f"Reinstalling k3s on {node} as a server", running_since=time.time())
     except (_Stopped, OPS.Superseded):
         pass
@@ -457,11 +457,12 @@ def _prepare(op_id, ref):
         try:
             if launching:
                 # It may have started: the host's marker and status file decide.
-                record("launching", 45, f"Homestead could not confirm that the reinstall on {node} started ({str(error)[:160]}). "
-                                        "Watching the host.", running_since=time.time())
+                record("launching", 45, OPS.with_output(f"Homestead could not confirm that the reinstall on {node} started "
+                                                        f"({str(error)[:160]}). Watching the host", error),
+                       running_since=time.time())
             else:
                 NODE_ACTIONS.set_cordon(node, False)
-                record("failed", 100, f"{node} was not changed: {_drain_text(str(error))}"[:400])
+                record("failed", 100, OPS.with_output(f"{node} was not changed: {_drain_text(str(error))}"[:400], error))
         except Exception:
             pass
     finally:
@@ -531,7 +532,10 @@ def status(item, now=None):
             if now - since > RUN_LIMIT:
                 return "failed", 100, f"No result from {node} after {RUN_LIMIT // 60} minutes. See {LOG} there."
             ref["phase"] = "running"
-            return "running", 55, f"Reinstalling k3s on {node}" + (f": {state['last']}" if state and state["last"] else "")
+            if state and state["last"]:
+                OPS.note_output(item, [state["last"]])
+                return "running", 55, f"Reinstalling k3s on {node}. Its latest output is in the job's Log."
+            return "running", 55, f"Reinstalling k3s on {node}"
         if state["code"] == "20":
             NODE_ACTIONS.set_cordon(node, False)
             return "failed", 100, (f"{node} could not download the k3s installer, so nothing was removed: it is still an app "
@@ -546,7 +550,10 @@ def status(item, now=None):
             except ValueError:
                 joined = None
             if joined is None:
-                return "failed", 100, (f"The reinstall on {node} stopped with code {state['code']}: {state['last']}. "
+                if state["last"]:
+                    OPS.note_output(item, [state["last"]])
+                said = ". Its last output is in the job's Log" if state["last"] else ""
+                return "failed", 100, (f"The reinstall on {node} stopped with code {state['code']}{said}. "
                                        f"The agent has been removed, and k3s is as the installer left it. See {LOG} there. Check "
                                        f"Cluster for {node} among the etcd members. To bring it back as an app host, run this "
                                        f"there: {_rejoin()}")
