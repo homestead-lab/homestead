@@ -1,12 +1,12 @@
 """Homestead's own data is checked for what made 2026-11-10's outage: a
 shared volume with one copy of Homestead, and its only copy off the system
 disk (design 3.1). Each finding names the reviewed move that fixes it."""
+import os
 import sys
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "server"))
+sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 import homestead_self_data_placement as P
 import homestead_self_data_prepare as PREPARE
 

@@ -12,7 +12,7 @@ import urllib.error
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_shared as SHARED
 import homestead_self_data_admission as D

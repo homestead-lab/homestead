@@ -1,14 +1,14 @@
 """Homestead's data, on local-path on a one-host k3s install, moves to Longhorn
 by itself once a second host can keep a copy, through the same reviewed move
 a person makes (design 3.1, decision 7)."""
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "server"))
+sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_self_data_grow as G
 from rebind import keep_bound
