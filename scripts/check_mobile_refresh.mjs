@@ -31,8 +31,10 @@ export async function checkMobileRefresh(page, context, installed) {
     }, { distance, options });
     if (!options.skipIdle) await idle();
   };
-  await page.locator("#refresh").click(); await idle();
-  assert.equal(await calls(), 1, "the mobile button refreshes the page");
+  // A phone's top bar has no refresh button, for room: pulling down refreshes.
+  assert.equal(await page.locator("#refresh").isVisible(), false, "a phone's top bar leaves out refresh");
+  await page.evaluate(() => manualRefresh()); await idle();
+  assert.equal(await calls(), 1, "a manual refresh refreshes the page");
   await pull();
   assert.equal(await calls(), installed ? 2 : 1, "only the installed app handles pull-to-refresh");
   if (!installed) {
@@ -125,13 +127,18 @@ export async function checkMobileRefresh(page, context, installed) {
   await page.evaluate(() => { VIEWS.dash[1] = window.__originalRefreshView; document.querySelector("#toast").replaceChildren(); });
   for (const width of [375, 360]) {
     await page.setViewportSize({ width, height: 839 });
-    // The setup guide is another top-bar control that must fit with refresh.
+    // The setup guide is another top-bar control: the bar fits it without refresh.
     await page.locator("#setupbtn").evaluate(el => el.classList.remove("hidden"));
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
-    const refresh = await page.locator("#refresh").boundingBox();
-    assert.ok(refresh.x >= 0 && refresh.x + refresh.width <= width);
-    await page.screenshot({ path: `release-assets/pages/mobile-pwa/refresh-button-${width}.png` });
+    assert.equal(await page.locator("#refresh").isVisible(), false);
+    const guide = await page.locator("#setupbtn").boundingBox();
+    assert.ok(guide.x >= 0 && guide.x + guide.width <= width);
+    await page.screenshot({ path: `release-assets/pages/mobile-pwa/top-bar-${width}.png` });
   }
+  // A tablet keeps the button.
+  await page.setViewportSize({ width: 768, height: 1024 });
+  assert.equal(await page.locator("#refresh").isVisible(), true, "a tablet's top bar keeps refresh");
+  await page.locator("#refresh").click(); await idle();
   await page.setViewportSize({ width: 412, height: 839 });
 
   // A rejected discard keeps both the URL and the settings edits intact.

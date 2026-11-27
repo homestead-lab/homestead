@@ -89,8 +89,9 @@ column headings are the one small upper-case label.
    titled by its family's name over a picker of its pages ("Containers" over
    "Running ▾"), which replaces the tab strip. ＋ does the page's main button
    (Deploy, Create volume, New VM) for whoever may use it, and the page's own
-   copy of that button is hidden. The cluster switch is in the menu;
-   refresh and the setup guide's button stay, and a long title ends in "…".
+   copy of that button is hidden. The cluster switch is in the menu.
+   Refresh is not in the bar, because pulling the page down refreshes it.
+   The setup guide's button stays, and a long title ends in "…".
    On the page, the summary
    line keeps the list's controls on its right: Containers' group picker and
    Options, Virtual machines' All VMs scope and Options, ⋯ elsewhere.
@@ -128,10 +129,12 @@ column headings are the one small upper-case label.
   Running now, each with its progress - then Needs you: a new Homestead,
   container updates, failed image checks and failed jobs. All jobs opens every
   job with its log. Nothing floats over the page.
-- **On a phone**, refresh replaces the gear in the top bar; Settings stays in
-  the drawer and on the account button. Installed apps also refresh by pulling
-  down at the top of the content pane. Refresh updates the current page;
-  **Reload app** in the drawer reloads the whole app. Neither refresh action
+- **On a phone** (560 px and narrower), the page refreshes by pulling it down:
+  the installed app refreshes the current page from the top of the content
+  pane, and a browser tab uses the browser's own pull. The top bar has no
+  refresh button, for room. A tablet keeps the button in place of the gear.
+  Settings stays in the drawer and on the account button. **Reload app** in the
+  drawer reloads the whole app. Neither refresh action
   replaces unsaved settings, form pages, open dialogs or editors.
 
 ### Detail pages
