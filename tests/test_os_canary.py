@@ -111,10 +111,12 @@ class RolloutTests(unittest.TestCase):
             ROLLOUT.step(state, now=T)
             with mock.patch.object(CANARY, "watch", lambda soak, now: ("stop", "the canary failed its checks: b is not Ready")):
                 ROLLOUT.step(state, now=T + 60)
-            self.assertTrue(state["rollout"]["failed"])
+            self.assertTrue(state["rollout"]["stop"])
             ROLLOUT.step(state, now=T + 120)
-        self.assertEqual("failed", state["rollout"]["status"])
-        self.assertIn("stopped: the canary failed its checks: b is not Ready", state["rollout"]["message"])
+        # A hold, not a host that broke (#1527): the other hosts were left as they are.
+        self.assertEqual("stopped", state["rollout"]["status"])
+        self.assertIn("b was updated first, and restarted, then its check stopped the update. The canary failed its checks: b is not Ready",
+                      state["rollout"]["message"])
 
     def test_no_canary_on_one_host_or_when_the_first_host_failed(self):
         for extra in ({"canary": ""}, {"results": [{"node": "b", "ok": False, "note": "x"}]}):
