@@ -12,8 +12,6 @@ const ANSWERS = {
   "/api/volumes": [VOLUME],
   "/api/storage": { avail_gb: 321, cap_gb: 400, provisioned_gb: 10, actual_gb: 2, used_pct: 20, healthy: 1, degraded: 0,
     faulted: 0, attached: 1, volumes: 1, disks: [] },
-  "/api/storage/classes": [], "/api/storage/v2": { enabled: false },
-  "/api/longhorn/capacity": null,
   "/api/storage/forecast": { rows: [], min_days: 7, show_days: 60, warn_days: 14 },
   "/api/volumes/old-copies": [{ pv: "pvc-old-1", was: "lab/old-data", storage_class: "longhorn", size: "5Gi" }],
   "/api/volumes/other": [{ namespace: "lab", name: "scratch-cache", storage_class: "local-path", size: "1Gi",
@@ -29,7 +27,8 @@ function page() {
     platformLacks: () => false, paint: html => paints.push(html), moreMenu: () => "", meter: () => "",
     fmtAgo: String, clusterAttr: () => "", clusterTag: () => "", tip: () => "", icon: () => "",
     esc: s => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
-    api: path => new Promise((resolve, reject) => { reads.push(path); (waiting[path] ||= []).push({ resolve, reject }); }) };
+    // A read the page should not make is answered at once, so a test of it fails rather than waits.
+    api: path => new Promise((resolve, reject) => { reads.push(path); if (!(path in ANSWERS)) return resolve(null); (waiting[path] ||= []).push({ resolve, reject }); }) };
   ctx.jsq = s => ctx.esc(JSON.stringify(s)); ctx.window = ctx;
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   vm.runInContext(src, ctx);
@@ -44,6 +43,20 @@ test("every read of the page starts at once, not in two waves", async () => {
   ctx.viewStorage();
   await settle();
   assert.deepEqual([...reads].sort(), [...PATHS].sort());
+});
+
+test("a load and a refresh read only what the page draws, not what its dialogs use (#1211)", async () => {
+  const { ctx, reads, answer } = page();
+  for (let tick = 0; tick < 2; tick++) {
+    const done = ctx.viewStorage();
+    await settle();
+    for (const p of PATHS) answer(p);
+    await done;
+  }
+  assert.equal(reads.length, 2 * PATHS.length, `${reads.length} reads in two loads: ${reads.join(", ")}`);
+  for (const p of ["/api/storage/classes", "/api/storage/v2", "/api/longhorn/capacity"]) {
+    assert.ok(!reads.includes(p), `${p} is read only by the dialog that uses it`);
+  }
 });
 
 test("the volumes are drawn while slower parts are still being read", async () => {
@@ -68,7 +81,7 @@ test("each part is drawn when its own read returns", async () => {
   assert.doesNotMatch(last(), /old-data/);
   answer("/api/volumes/old-copies"); await settle();
   assert.match(last(), /old-data/);
-  for (const p of ["/api/storage/classes", "/api/storage/v2", "/api/longhorn/capacity", "/api/storage/forecast", "/api/volumes/other"]) answer(p);
+  for (const p of ["/api/storage/forecast", "/api/volumes/other"]) answer(p);
   await done;
   assert.match(last(), /scratch-cache/);
   assert.match(last(), /id="volOldCopies"[\s\S]*old-data/, "the old copy is in its own section");
