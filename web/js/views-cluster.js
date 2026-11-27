@@ -25,6 +25,47 @@ function clusterNodeCard(node) {
   </article>`;
 }
 
+/* The page's one line (Nov 2026 mockup): how the platform is, how many hosts
+   are ready and how many voting hosts can fail, and the versions. */
+function clusterSummary(report) {
+  const cp = report.control_plane || {}, versions = report.versions || {}, nodes = report.nodes || [];
+  const ready = nodes.filter(n => n.ready).length, margin = cp.quorum_margin;
+  const head = report.state === "healthy" ? "The platform is healthy." : report.state === "critical" ? "The platform needs action." : "The platform has items to check.";
+  const votes = margin === null || margin === undefined ? "" : margin === 0 ? ", and no voting host can fail" : `, and ${margin} voting host${margin === 1 ? "" : "s"} can fail`;
+  const platform = STATE.platform && !STATE.platform.harvester ? (STATE.platform.version ? `${platformName(STATE.platform)} v${STATE.platform.version}` : "")
+    : versions.harvester ? `Harvester v${versions.harvester}` : "";
+  const kube = versions.kubernetes ? `Kubernetes v${String(versions.kubernetes).replace(/\+.*$/, "")}` : "";
+  return UI.summary({ head: `<b>${head}</b>`, parts: [
+    { text: `${ready} of ${nodes.length} host${nodes.length === 1 ? " is" : "s are"} ready${votes}.${[platform, kube].filter(Boolean).length ? ` ${[platform, kube].filter(Boolean).join(", ")}.` : ""}`, note: true }],
+    narrow: { parts: [] } });
+}
+
+/* The hosts in one line, as the Hosts page has them in full: how many are
+   ready and take apps, and each one that is not, or is under pressure. */
+function clusterHostsLine(report) {
+  const nodes = report.nodes || [], ready = nodes.filter(n => n.ready && n.schedulable !== false);
+  const trouble = nodes.filter(n => !n.ready || n.pressure?.length || n.schedulable === false);
+  const words = n => !n.ready ? "is not ready" : n.pressure?.length ? `is under ${n.pressure.join(" and ").replace(/Pressure/g, " pressure").toLowerCase()}` : "is cordoned";
+  return `<div class="card flat cluster-hosts-line"><i class="share-dot ${trouble.some(n => !n.ready) ? "bad" : ""}" aria-hidden="true"></i>
+    <div><b>${ready.length} of ${nodes.length} host${nodes.length === 1 ? " is" : "s are"} ready</b> <span class="dim">and accept${ready.length === 1 ? "s" : ""} apps and VMs.</span>
+      ${trouble.map(n => `<span class="${!n.ready ? "sum-bad" : "sum-warn"}">${esc(`${n.name} ${words(n)}.`)}</span>`).join(" ")}</div>
+    <button type="button" class="linkish" onclick="go('nodes')">Hosts ›</button></div>`;
+}
+
+/* A platform service as a chip: its health as a dot, its copies on hover. */
+function clusterServiceChip(service) {
+  const tone = service.state === "healthy" ? "ok" : service.state === "attention" ? "warn" : service.pods ? "bad" : "neutral";
+  return `<span class="cluster-service-chip" tabindex="0" data-card="cluster-service|${esc(service.id || service.name)}"><i class="share-dot ${tone === "ok" ? "" : tone === "neutral" ? "off" : "bad"}" aria-hidden="true"></i>${esc(service.name)}</span>`;
+}
+if (typeof HOVER_CARDS === "object") HOVER_CARDS["cluster-service"] = id => {
+  const s = ((STATE.data.cluster || {}).services || []).find(x => (x.id || x.name) === id);
+  if (!s) return "";
+  return UI.card({ title: s.name, chipHtml: clusterPill(s.state, s.state === "attention" ? "Partial" : s.state), rows: [
+    ["Copies ready", s.pods ? esc(`${s.ready} of ${s.pods} pods`) : "Not found", "layers"],
+    ["Needed", s.required ? "Yes: the cluster depends on it" : "No: only some features use it", "info"],
+  ] });
+};
+
 function clusterServiceCard(service) {
   const detail = service.pods ? `${service.ready} of ${service.pods} pods ready` : "Not found";
   return `<article class="cluster-service ${esc(service.state)}">
@@ -57,36 +98,30 @@ async function viewCluster() {
   const margin = cp.quorum_margin;
   const marginCopy = margin === null || margin === undefined ? "Unknown" : margin === 0 ? "None can fail" : `${margin} can fail`;
   const serviceRows = (report.services || []).filter(service => service.pods || service.required);
-  paint(`${UI.pageHeader(`Cluster`, `The health of Harvester and Kubernetes, separate from the health of the apps`, `${moreMenu([{ label: "Shut down cluster…", icon: "power", run: "clusterShutdown()", need: "admin", danger: true }, { label: "Remove a host", icon: "trash", run: "clusterRemovePick()", need: "admin", danger: true }])}
+  const healthyServices = serviceRows.filter(s => s.state === "healthy").length;
+  paint(`${UI.pageHeader(`Cluster`, clusterSummary(report), `${moreMenu([{ label: "Shut down cluster…", icon: "power", run: "clusterShutdown()", need: "admin", danger: true }, { label: "Remove a host", icon: "trash", run: "clusterRemovePick()", need: "admin", danger: true }])}
       <button class="btn pri" data-need="admin" onclick="clusterOnboarding()">${icon("plus")}Add a host</button>`)}
-
-  ${summaryLine("cluster", [
-      clusterPill(report.state, report.state === "healthy" ? "Platform healthy" : report.state === "critical" ? "Platform needs action" : "Items to check"),
-      `Control plane <b>${cp.ready ?? 0} of ${cp.total ?? 0}</b> ready`, `Voting hosts: ${esc(marginCopy)}`,
-      versions.kubernetes ? `Kubernetes <b>v${esc(versions.kubernetes)}</b>` : ""],
-    `<p class="dim small" style="margin:0 0 10px">${esc(report.summary)}</p>
-  <div class="cluster-facts">
-    ${STATE.platform && !STATE.platform.harvester
-      ? `<section><span>${esc(platformName(STATE.platform))}</span><b>${STATE.platform.version ? `v${esc(STATE.platform.version)}` : "Not reported"}</b><small>Kubernetes distribution</small></section>`
-      : `<section><span>Harvester</span><b>${versions.harvester ? `v${esc(versions.harvester)}` : "Not reported"}</b><small>Host operating platform</small></section>`}
-    <section><span>Kubernetes</span><b>${versions.kubernetes ? `v${esc(versions.kubernetes)}` : "Not reported"}</b><small>Cluster API version</small></section>
-    <section><span>Control plane</span><b>${cp.ready ?? 0}/${cp.total ?? 0} ready</b><small>API and scheduling hosts</small></section>
-    <section><span>Cluster votes ${tip("How many more voting hosts can fail before the cluster stops working. Kubernetes stores the cluster state in etcd, and a majority of its members (quorum) must be running.")}</span><b>${esc(marginCopy)}</b><small>${cp.etcd_ready ?? 0} of ${cp.etcd_total ?? 0} ready · ${cp.quorum_needed ?? "—"} needed</small>${etcdMembersHtml(cp, can("admin"))}</section>
-  </div>`)}
 
   ${(report.unavailable || []).length ? `<div class="note"><b>Some platform data is missing.</b> ${esc(report.unavailable.map(row => row.section).join(", "))} could not be read. The other sections are current.</div>` : ""}
 
 
 
-  <section class="card flat" id="clusterHealth">${UI.moduleHeader("Health", "Suggestions for the cluster, most important first", UI.button("Refresh", "HealthInsights.load(true)"))}<div data-insight="full">${HealthInsights.fullBody()}</div></section>
+  <section class="card flat" id="clusterHealth">${UI.moduleHeader("Suggestions", "For the cluster, most important first")}<div data-insight="full">${HealthInsights.fullBody()}</div></section>
+  ${clusterHostsLine(report)}
   <div class="cluster-layout">
-    <section class="card flat cluster-wide">${UI.moduleHeader(`Hosts and capacity pressure`, `Roles, whether each host takes new apps, resource use, and Kubernetes pressure conditions`, `${clusterPill((report.capacity?.unready || []).length ? "critical" : (report.capacity?.pressure || []).length ? "attention" : "healthy",
-        `${(report.nodes || []).filter(node => node.ready).length}/${(report.nodes || []).length} ready`)}`)}
-      <div class="cluster-node-grid">${(report.nodes || []).map(clusterNodeCard).join("") || '<div class="empty">No hosts reported.</div>'}</div></section>
+    <section class="card flat cluster-wide">${UI.moduleHeader(`Platform services`, ``)}
+      <div class="cluster-service-chips">${serviceRows.map(clusterServiceChip).join("") || '<div class="empty">The list of system services is unavailable.</div>'}</div>
+      <div class="dim xs cluster-legend">${healthyServices === serviceRows.length ? `All ${serviceRows.length} services are healthy.` : `${healthyServices} of ${serviceRows.length} services are healthy.`} A service's copies show on hover.${serviceRows.some(s => !s.pods) ? " “Not found” is not treated as failed: some Harvester releases package or label components differently." : ""}</div></section>
 
-    <section class="card flat cluster-wide">${UI.moduleHeader(`Critical platform services`, `System pods, grouped by the job they do`, ``)}
-      <div class="cluster-service-grid">${serviceRows.map(clusterServiceCard).join("") || '<div class="empty">The list of system services is unavailable.</div>'}</div>
-      <div class="dim xs cluster-legend">“Not observed” is not treated as failed: some Harvester releases package or label components differently.</div></section>
+    <div class="cluster-wide">${UI.more("Control plane and votes", `<p class="dim small" style="margin:0 0 10px">${esc(report.summary)}</p>
+      <div class="cluster-facts">
+        ${STATE.platform && !STATE.platform.harvester
+          ? `<section><span>${esc(platformName(STATE.platform))}</span><b>${STATE.platform.version ? `v${esc(STATE.platform.version)}` : "Not reported"}</b><small>Kubernetes distribution</small></section>`
+          : `<section><span>Harvester</span><b>${versions.harvester ? `v${esc(versions.harvester)}` : "Not reported"}</b><small>Host operating platform</small></section>`}
+        <section><span>Kubernetes</span><b>${versions.kubernetes ? `v${esc(versions.kubernetes)}` : "Not reported"}</b><small>Cluster API version</small></section>
+        <section><span>Control plane</span><b>${cp.ready ?? 0}/${cp.total ?? 0} ready</b><small>API and scheduling hosts</small></section>
+        <section><span>Cluster votes ${tip("How many more voting hosts can fail before the cluster stops working. Kubernetes stores the cluster state in etcd, and a majority of its members (quorum) must be running.")}</span><b>${esc(marginCopy)}</b><small>${cp.etcd_ready ?? 0} of ${cp.etcd_total ?? 0} ready · ${cp.quorum_needed ?? "—"} needed</small>${etcdMembersHtml(cp, can("admin"))}</section>
+      </div>`)}</div>
 
     <section class="card flat">${UI.moduleHeader(`Certificates and requests`, `Kubernetes certificate signing requests. Secret material is never shown.`, `${clusterPill(certs.state, certs.state)}`)}
       <div class="cluster-mini-stats"><span><b>${certs.pending || 0}</b> pending</span><span><b>${certs.failed || 0}</b> denied / failed</span><span><b>${certs.expiring || 0}</b> nearing requested lifetime</span></div>
