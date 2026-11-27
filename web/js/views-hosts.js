@@ -79,8 +79,7 @@ function hostCard(n) {
     <div class="nodemetrics">
       <div><div class="between"><span class="dim xs">CPU</span><span class="small mono"><b>${n.cpu_pct}%</b> <span class="dim">of ${n.cpu_cap}</span></span></div>${meter(n.cpu_pct, "", "cpu")}</div>
       <div><div class="between"><span class="dim xs">MEMORY</span><span class="small mono"><b>${n.mem_pct}%</b> <span class="dim">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span></span></div>${meter(n.mem_pct, "", "memory")}</div>
-      <div class="host-disks" data-card="host-disks|${esc(n.name)}">${nodeDiskLines(n)}</div>
-      ${hostProbeLines(n)}
+      <div class="host-storage"><div class="host-disks" data-card="host-disks|${esc(n.name)}">${nodeDiskLines(n)}</div>${hostProbeLines(n)}</div>
     </div>
     <div class="badgegroup host-workloads"><span class="badgecap">WORKLOADS</span><div class="badge-values">
       ${workloads.length ? workloads.slice(0, 5).map(w => `<button type="button" class="tag movable" title="Move ${esc(w)} to another host" onclick="moveWorkload(${jsq(w)})">${esc(w)} <span class="mv" aria-hidden="true">⇄</span></button>`).join("")

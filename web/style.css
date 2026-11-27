@@ -2234,6 +2234,14 @@ div.ipam-line.dim{display:block}
 .host-verdict .ui-callout{margin:0}
 .host-verdict-reading{padding:8px 0}
 .host-actions .actionbar{flex-wrap:wrap}
+/* The cards on one line share their rows (a subgrid), so the head, uptime, CPU, memory, disks, apps,
+   restart verdict and buttons line up across them; each row is as tall as its tallest card's part.
+   A card has eight rows: views-hosts.js hostCard, with CPU, memory and disks lifted out of .nodemetrics. */
+.hostgrid>.hostcard{display:grid;grid-template-rows:subgrid;grid-row:span 8;row-gap:12px;align-content:start}
+.hostgrid>.hostcard>.nodemetrics{display:contents}
+.hostgrid .host-storage{display:grid;gap:9px;align-content:start}
+.hostgrid .host-verdict{display:flex;flex-direction:column}
+.hostgrid .host-verdict>.ui-callout{flex:1}
 /* Cluster (views-cluster.js): the hosts in one line, and the platform services as chips. */
 .cluster-hosts-line{display:flex;align-items:center;gap:12px;padding:12px 16px;margin:14px 0}
 .cluster-hosts-line>div{flex:1 1 auto;min-width:0;font-size:13px}

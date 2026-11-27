@@ -1280,7 +1280,7 @@ async function viewNodes() {
       ])}
       ${n.length > 1 ? `<button class="btn" data-need="operator" onclick="balanceHosts()" data-tip="Move apps and volume copies so that hosts carry similar loads.">${icon("layers")}Balance hosts…</button>` : ""}`)}
    <div id="restartReady"></div>
-   ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(hostCard).join("")}</div>` : nodeComparison(n, "nodes", { singleCard: false })}`);
+   ${layout === "cards" ? `<div class="nodegrid hostgrid stagger">${n.map(hostCard).join("")}</div>` : nodeComparison(n, "nodes", { singleCard: false })}`);
   // The last restart's check is said only when something is still wrong; the summary says the rest.
   ready.then(answer => { const slot = $("#restartReady"); if (slot) slot.innerHTML = answer?.ready ? "" : restartReadyNotice(answer); });
   hostsReadImpact(n);
