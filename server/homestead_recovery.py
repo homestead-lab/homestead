@@ -32,6 +32,7 @@ import threading
 import time
 import zoneinfo
 
+import homestead_history as HISTORY
 import homestead_placement_mode as PLACEMODE
 import homestead_priority as PRIORITY
 import homestead_recovery_auto as AUTO
@@ -435,7 +436,7 @@ def _auto_facts(data, maintenance):
         parts.append(f"{_plural(total, 'container stays where it is', 'containers stay where they are')}, and Balance hosts can still "
                      f"move {'it' if total == 1 else 'them'} if chosen: {named}{more}.")
     verb = "is" if len(hosts) == 1 else "are"
-    title = (f"{who} {verb} back, but moving containers back waits: {' and '.join(away)} {'is' if len(away) == 1 else 'are'} away" if away
+    title = (f"{who} {verb} back, but moving containers back waits: {_away_title(away, waiting.get('away_said') or {})}" if away
              else f"{who} {verb} back: {_plural(moves, 'container', 'containers')} could move to even out the hosts" if moves
              else f"{who} {verb} back: {_plural(later, 'critical app waits', 'critical apps wait')} for the update window" if later
              else f"{who} {verb} back: {_plural(total, 'container stays where it is', 'containers stay where they are')}" if kept
@@ -444,6 +445,14 @@ def _auto_facts(data, maintenance):
                      "body": " ".join(part for part in parts if part),
                      "resolved": CLEARED, "href": "/containers?panel=rebalance",
                      "signals": {"moves": moves, "later": later, "away": len(away), "kept": total}}]
+
+
+def _away_title(away, said):
+    """The hosts away, for the alert's title: in the words the reasons use for a
+    host in maintenance, and "away" for the rest."""
+    plain = [host for host in away if host not in said]
+    parts = [f"{' and '.join(plain)} {'is' if len(plain) == 1 else 'are'} away"] if plain else []
+    return " and ".join(parts + [said[host] for host in away if host in said])
 
 
 def status():
@@ -545,13 +554,15 @@ def _auto_job(now):
     _auto_update(change)
 
 
-def _auto_wait(reasons=(), hosts=None, later=None, left_out=None, kept=None, away=None, flux_out=None, kept_total=None):
+def _auto_wait(reasons=(), hosts=None, later=None, left_out=None, kept=None, away=None, flux_out=None, kept_total=None,
+               away_said=None):
     """What it is waiting for, for Settings and the alert. No cluster read behind it:
     the look stored it."""
     def change(auto):
         waiting = auto.get("waiting") or {"hosts": [], "later": 0, "left_out": 0, "kept": [], "away": [], "flux_out": 0}
         waiting["reasons"] = list(reasons)
-        for key, value in (("hosts", hosts), ("later", later), ("left_out", left_out), ("kept", kept), ("away", away), ("flux_out", flux_out), ("kept_total", kept_total)):
+        for key, value in (("hosts", hosts), ("later", later), ("left_out", left_out), ("kept", kept), ("away", away), ("flux_out", flux_out), ("kept_total", kept_total),
+                           ("away_said", away_said)):
             if value is not None:
                 waiting[key] = value
         auto["waiting"] = waiting
@@ -573,7 +584,31 @@ def _hold_reasons(nodes, data, standby, returned, now):
         if copies:
             reasons.append(f"{len(copies)} cop{'y' if len(copies) == 1 else 'ies'} rebuilding on {host}")
     gone = AUTO.away(nodes, data["worked"], standby, returned)
-    return rows, reasons + [f"{host} is away" for host in gone], gone
+    said = _in_maintenance(gone, now) if gone else {}
+    return rows, reasons + [said.get(host, f"{host} is away") for host in gone], gone, said
+
+
+# A host away in maintenance a person declared, in the Hosts page's words for its
+# state (web/js/host-maintenance.js). One whose maintenance ran out, or whose End
+# did not finish, is away: that is not maintenance going on.
+MAINTENANCE_WORDS = {"open": "{} is in maintenance", "ran_out": "{} is away, maintenance ran out",
+                     "ending": "{} is away, maintenance not finished"}
+_unread_said = [False]
+
+
+def _in_maintenance(hosts, now):
+    """{host: its words} for the hosts away in declared maintenance. Wording only:
+    a store that can't be read says "away" (noted once), and the hosts hold either way."""
+    try:
+        view = HISTORY.declared_view(now)
+    except Exception as error:
+        if not _unread_said[0]:
+            _unread_said[0] = True
+            print(f"recovery: declared maintenance was not read: {str(error)[:120]}", flush=True)
+        return {}
+    _unread_said[0] = False
+    return {host: words.format(host) for state, words in MAINTENANCE_WORDS.items()
+            for host in view.get(state, {}) if host in hosts}
 
 
 def _auto_tick(current, placement, nodes, standby, returned, now):
@@ -597,9 +632,9 @@ def _auto_tick(current, placement, nodes, standby, returned, now):
         return _auto_wait([f"Stopped: {auto['paused'].get('why', '')}"])
     if now - auto.get("ended", 0) < RUN_GAP:
         return _auto_wait([f"The last run ended {max(1, int((now - auto['ended']) // 60))} min ago"])
-    rows, reasons, gone = _hold_reasons(nodes, data, standby, returned, now)
+    rows, reasons, gone, said = _hold_reasons(nodes, data, standby, returned, now)
     if now - _planned[0] < 300:      # a plan reads every pod and volume
-        return _auto_wait(reasons, rows, away=gone)
+        return _auto_wait(reasons, rows, away=gone, away_said=said)
     _planned[0] = now
     deployments = read("/apis/apps/v1/deployments").get("items", [])
     maintenance = current["updates"]["maintenance"]
@@ -620,7 +655,8 @@ def _auto_tick(current, placement, nodes, standby, returned, now):
         reasons.append("The CPU and memory figures are not current")
     kept = whole.get("kept") or []
     flux_out = 0 if placement.get("mode") == "spread" else sum((managed_by(d) or {}).get("by") == "Flux" for d in deployments)
-    _auto_wait(reasons, rows, sum(m["id"] in later for m in whole["moves"]), len(left_out), kept[:KEPT_SHOWN], gone, flux_out, len(kept))
+    _auto_wait(reasons, rows, sum(m["id"] in later for m in whole["moves"]), len(left_out), kept[:KEPT_SHOWN], gone, flux_out, len(kept),
+               away_said=said)
     # Every gate passed and nothing to move: done with this return. Apps left out keep it
     # remembered, for Settings' list, until RETURN_KEEP; nothing else about it runs.
     done = not reasons and not whole["moves"]
