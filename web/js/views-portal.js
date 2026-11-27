@@ -44,10 +44,32 @@ async function viewPortal() {
     .catch(e => { STATE.data.portalStatus = null; STATE.data.portalUnread = e.message; portalDots(); });
 }
 
+/* A link's answer, in words and a state: up, slow or down, from Monitoring
+   for an app and from its port for anything else; null until it is checked. */
+function portalAnswer(link, status = STATE.data.portalStatus) {
+  const s = status?.[link.id];
+  if (!s) return null;
+  const state = s.state || (s.up ? "up" : "down");
+  const ms = s.ms != null ? (s.ms >= 1000 ? `${(s.ms / 1000).toFixed(1)} seconds` : `${s.ms} ms`) : "";
+  return { state, ms, monitored: s.source === "monitoring", error: s.error || "", since: s.since || 0 };
+}
+
+/* The page's one line (Nov 2026 mockup): how many links, then each that answers
+   slowly or not at all, in its colour. Portal has no details to link them to. */
+function portalSummary(links, q = "", shown = links.length) {
+  const head = `${links.length} link${links.length === 1 ? "" : "s"}${q ? `, ${shown} matching “${esc(q)}”,` : ""} to apps and devices.`;
+  const answers = links.map(link => [link, portalAnswer(link)]).filter(([, a]) => a && a.state !== "up");
+  const unread = !STATE.data.portalStatus && STATE.data.portalUnread;
+  return UI.summary({ head: `<b>${head}</b>`, parts: [
+    ...answers.slice(0, 3).map(([link, a]) => ({ text: `${link.title} ${a.state === "slow" ? "answers slowly" : "does not answer"}`, tone: a.state === "slow" ? "warn" : "bad" })),
+    answers.length > 3 && { text: `${answers.length - 3} more`, note: true },
+    unread && { text: "The links could not be checked", tone: "warn" }] });
+}
+
 function portalTiles(rows, {compact = false, list = false} = {}) {
   return portalSections(rows).map(([section, members]) => `<section class="portal-section">
         ${section ? `<div class="sec">${esc(section)}</div>` : ""}
-        <div class="portal-grid${compact ? " portal-compact" : ""}${list ? " portal-list" : ""}">${members.map(link => `<a class="portal-tile card flat" href="${safeHref(link.url)}" target="_blank" rel="noopener noreferrer" data-link="${esc(link.id)}" title="${esc([link.title,portalHost(link.url),link.note].filter(Boolean).join(" · "))}">
+        <div class="portal-grid${compact ? " portal-compact" : ""}${list ? " portal-list" : ""}">${members.map(link => `<a class="portal-tile card flat" href="${safeHref(link.url)}" target="_blank" rel="noopener noreferrer" data-link="${esc(link.id)}" data-card="portal-link|${esc(link.id)}">
           ${portalIcon(link)}<span class="portal-text"><b>${esc(link.title)}</b>
             <span class="dim xs mono"${list?' hidden':''}>${esc(portalHost(link.url))}</span>${link.note && !list ? `<span class="dim xs">${esc(link.note)}</span>` : ""}</span>
           <span class="portal-dot" data-tip="not checked yet"></span></a>`).join("")}</div></section>`).join("");
@@ -58,7 +80,7 @@ function renderPortal() {
   const q = STATE.q.toLowerCase();
   const rows = links.filter(link => !q || link.title.toLowerCase().includes(q) || link.url.toLowerCase().includes(q) ||
     (link.section || "").toLowerCase().includes(q) || (link.note || "").toLowerCase().includes(q));
-  paint(`${UI.pageHeader(`Portal`, `${links.length} link${links.length === 1 ? "" : "s"}${q ? ` · ${rows.length} matching “${esc(q)}”` : ""} to apps and devices`, `${moreMenu([{ label: "Check links", icon: "refresh", run: "portalRecheck()", tip: "See which links answer" }])}
+  paint(`${UI.pageHeader(`Portal`, portalSummary(links, q, rows.length), `${moreMenu([{ label: "Check links", icon: "refresh", run: "portalRecheck()", tip: "See which links answer" }])}
       <button class="btn pri" data-need="admin" onclick="portalEdit()">${icon("edit")}Edit links</button>`)}
     ${!links.length ? `<div class="empty portal-empty"><b>No links yet.</b> Add the containers you open most, and the router, switches and NAS around them.
         <div class="row" style="justify-content:center;margin-top:12px"><button class="btn pri" data-need="admin" onclick="portalEdit(true)">Pick from containers</button>
@@ -81,7 +103,26 @@ function portalDots() {
         : `${state === "slow" ? "Slow" : "Up"}${s.ms != null ? ` · ${s.ms} ms` : ""} · monitored every minute`)
       : s.up ? `answering · ${s.ms} ms` : "not answering on its port";
   });
+  // The summary names what answers slowly or not at all, once the links are checked.
+  const line = document.querySelector("#views .phead > div:first-child > p");
+  const links = (STATE.data.portal || {}).links || [];
+  if (line && STATE.view === "portal") line.innerHTML = portalSummary(links, STATE.q, links.length);
 }
+
+/* A link's card: its answer, where it points and how it is checked, and Open. */
+if (typeof HOVER_CARDS === "object") HOVER_CARDS["portal-link"] = id => {
+  const link = ((STATE.data.portal || {}).links || []).find(l => l.id === id);
+  if (!link) return "";
+  const a = portalAnswer(link);
+  const words = { up: ["Answering", "ok"], slow: ["Slow", "warn"], down: ["Not answering", "bad"] }[a?.state] || ["Not checked yet", "neutral"];
+  return UI.card({ title: link.title, chipHtml: UI.chip(words[0], words[1], { size: "slim" }), rows: [
+    ["Address", `<span class="mono">${esc(portalHost(link.url))}</span>`, "link"],
+    a?.ms && ["Response", esc(a.ms), "pulse"],
+    a?.state === "down" && a.error && ["Why", esc(a.error), "alert"],
+    ["Checked", a?.monitored ? "By Monitoring, every minute" : a ? "Whether its port takes a connection" : "Not yet", "clock"],
+    link.note && ["Note", esc(link.note), "info"],
+  ], link: { label: `Open ${link.title}`, onclick: `window.open(${JSON.stringify(safeHref(link.url))},'_blank','noopener')` } });
+};
 
 window.portalRecheck = async () => {
   try { STATE.data.portalStatus = await api("/api/portal/status?force=1"); portalDots(); toast("Links checked", "ok"); }
