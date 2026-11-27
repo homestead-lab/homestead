@@ -2228,6 +2228,12 @@ div.ipam-line.dim{display:block}
 .share-server>div:first-of-type{flex:1 1 auto;min-width:0;font-size:13px}
 .share-dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:var(--ok)}
 .share-dot.bad{background:var(--crit)}
+/* Hosts (views-hosts.js): a card ends with whether it can restart safely, then its two main actions. */
+.hostcard{display:flex;flex-direction:column;gap:12px}
+.host-open{padding:0;color:var(--tx);font-weight:680;text-align:left}
+.host-verdict .ui-callout{margin:0}
+.host-verdict-reading{padding:8px 0}
+.host-actions .actionbar{flex-wrap:wrap}
 .share-notices{display:grid;gap:10px;margin-bottom:14px}
 .share-open{padding:0;color:var(--tx);font-weight:650;text-align:left}
 .sharetable tr.share-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}

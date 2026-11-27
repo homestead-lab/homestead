@@ -25,9 +25,10 @@ try {
 
     // Host actions offers it.
     await page.evaluate(host => nodeActions(host), HOST);
-    await page.waitForSelector('button[onclick*="hostMaintenanceReview"]');
-    assert.equal(await page.locator('button[onclick*="hostMaintenanceExtend"]').count(), 0);
-    await page.locator('button[onclick*="hostMaintenanceReview"]').click();
+    // In the host actions dialog; a host card offers Start maintenance… too.
+    await page.waitForSelector('#modal button[onclick*="hostMaintenanceReview"]');
+    assert.equal(await page.locator('#modal button[onclick*="hostMaintenanceExtend"]').count(), 0);
+    await page.locator('#modal button[onclick*="hostMaintenanceReview"]').click();
     await page.waitForSelector("#mm_reason");
     const go = page.locator("#mm_execute");
     assert.equal(await go.isDisabled(), true, "nothing typed yet");
@@ -75,11 +76,11 @@ try {
 
     // In maintenance: Extend and End instead, and the power actions stay.
     await page.evaluate(host => nodeActions(host), HOST);
-    await page.waitForSelector('button[onclick*="hostMaintenanceExtend"]');
-    assert.equal(await page.locator('button[onclick*="hostMaintenanceReview"]').count(), 0);
-    assert.equal(await page.locator('button[onclick*="nodePowerReview"]').count(), 2, "Restart host and Shut down host are still available");
+    await page.waitForSelector('#modal button[onclick*="hostMaintenanceExtend"]');
+    assert.equal(await page.locator('#modal button[onclick*="hostMaintenanceReview"]').count(), 0);
+    assert.equal(await page.locator('#modal button[onclick*="nodePowerReview"]').count(), 2, "Restart host and Shut down host are still available");
     await shot("actions");
-    await page.locator('button[onclick*="hostMaintenanceExtend"]').click();
+    await page.locator('#modal button[onclick*="hostMaintenanceExtend"]').click();
     await page.selectOption("#mm_extend_hours", "8");
     await page.locator("#mm_extend_go").click();
     await page.waitForFunction(host => api(`/api/node/maintenance?node=${host}`).then(r => r.declared?.left_s > 7 * 3600), HOST);

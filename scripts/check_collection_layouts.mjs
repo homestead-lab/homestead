@@ -31,7 +31,8 @@ try {
         return result;
       };
     });
-    await page.evaluate(()=>go('nodes'));
+    // The comparison, chosen: a computer shows Hosts as cards unless it is (views-hosts.js).
+    await page.evaluate(()=>{localStorage.setItem('homestead.layout.nodes','rows');go('nodes')});
     await page.waitForFunction(()=>document.querySelectorAll('.comparison-select').length===4);
     const matrix=page.locator('.comparison-table').first();
     assert.equal(await matrix.locator('thead th').count(),5);

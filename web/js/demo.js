@@ -3064,7 +3064,12 @@ ssh_pwauth: true
     // If this host goes down (impact.js): one of each outcome, and a StatefulSet that waits (#440).
     "/api/nodes/impact": url => {
       const node = url.searchParams.get("node") || "harvester-node2";
-      return { node, others_ready: ["harvester-node1", "harvester-node3"].filter(n => n !== node),
+      const others = ["harvester-node1", "harvester-node2", "harvester-node3"].filter(n => n !== node);
+      // Only frigate's host has the Coral USB, so only its restart stops an app.
+      if (node === "harvester-node1") return { node, others_ready: others, unread: [], counts: { stops: 0, waits: 0, unknown: 0, moves: 3, at_risk: 0, fewer_copies: 0, addresses: 1 },
+        apps: ["home-assistant", "mosquitto", "homestead-smb"].map(name => ({ kind: "app", ns: "lab", name, outcome: "moves", to: others, why: "about 15 seconds after the host is marked not ready", notes: [] })),
+        at_risk: [], fewer_copies: [], addresses: [{ ip: "192.0.2.210", kind: "management", services: [] }] };
+      const answer = { node, others_ready: ["harvester-node1", "harvester-node3"].filter(n => n !== node),
         unread: [],
         counts: { stops: 1, waits: 2, unknown: 0, moves: 2, at_risk: 1, fewer_copies: 1, addresses: 1 },
         apps: [
@@ -3078,6 +3083,9 @@ ssh_pwauth: true
         at_risk: [{ name: "scratch-test", namespace: "lab", volume: "pvc-demo-scratch", left: 0, wanted: 1 }],
         fewer_copies: [{ name: "frigate-config", namespace: "lab", volume: "pvc-demo-frigate", left: 1, wanted: 2 }],
         addresses: [{ ip: "192.0.2.214", kind: "vip", services: ["lab/frigate"] }] };
+      // harvester-node3 does not run frigate, so its restart stops nothing; its StatefulSet still waits.
+      if (node === "harvester-node3") return { ...answer, apps: answer.apps.filter(a => a.name !== "frigate"), counts: { ...answer.counts, stops: 0 } };
+      return answer;
     },
     // Search logs (logsearch.js): lines from three apps, one of which wrote
     // more than is read at once, and a pod that could not be read.

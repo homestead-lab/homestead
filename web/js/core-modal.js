@@ -253,9 +253,11 @@ window.childModal = childModal;
    browser and per page; nothing about it is worth a round trip. */
 /* Lists start as rows; nodes compare their metrics in columns. A choice
    made with the switch is kept. */
-const LAYOUT_DEFAULT = { containers: "rows", vms: "rows", nodes: "rows" };
-function viewLayout(page) {
-  const fallback = LAYOUT_DEFAULT[page] || "cards";
+const LAYOUT_DEFAULT = { containers: "rows", vms: "rows", nodes: "cards" };
+/* phone: the layout a phone falls back to when none was chosen, as Hosts keeps its comparison there. */
+function viewLayout(page, { phone = "" } = {}) {
+  const small = phone && typeof matchMedia === "function" && matchMedia("(max-width: 560px)").matches;
+  const fallback = small ? phone : LAYOUT_DEFAULT[page] || "cards";
   try {
     const chosen = localStorage.getItem(`homestead.layout.${page}`);
     return chosen === "rows" || chosen === "cards" ? chosen : fallback;
