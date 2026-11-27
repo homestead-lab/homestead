@@ -9,6 +9,7 @@ import math
 import time
 import urllib.error
 
+import homestead_copy_holds as COPY_HOLDS
 import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_storage_guard as STORAGE_GUARD
@@ -119,7 +120,8 @@ def _consumer(kind, obj, spec, claim, active, detail="", templated=frozenset()):
     }
 
 
-def _consumers(namespace, claim, warnings):
+def _consumers(namespace, claim, warnings, deployments=None):
+    """deployments: a list the namespace's Deployments are added to, as read."""
     result = []
     pods = _items(f"/api/v1/namespaces/{namespace}/pods", "pod", warnings)
     for pod in pods:
@@ -137,6 +139,8 @@ def _consumers(namespace, claim, warnings):
     )
     for kind, path in controllers:
         for obj in _items(path, kind.lower(), warnings):
+            if kind == "Deployment" and deployments is not None:
+                deployments.append(obj)
             desired = int((obj.get("spec", {}) or {}).get("replicas", 1) or 0)
             spec = (((obj.get("spec", {}) or {}).get("template") or {}).get("spec") or {})
             row = _consumer(kind, obj, spec, claim, desired > 0,
@@ -200,8 +204,12 @@ def deletion_plan(namespace, name, volume="", pv=""):
             return orphan_plan(namespace, name, volume)
         raise
     meta, spec, status = pvc.get("metadata", {}) or {}, pvc.get("spec", {}) or {}, pvc.get("status", {}) or {}
-    warnings = []
-    consumers = _consumers(namespace, name, warnings)
+    warnings, deployments = [], []
+    consumers = _consumers(namespace, name, warnings, deployments)
+    # An app a storage copy holds no longer names the volume it copies from,
+    # the only whole copy of its data until the copy is confirmed (#1525).
+    held, unread = COPY_HOLDS.needed(deployments, kget)
+    warnings.extend(COPY_HOLDS.unread_warning(app, why) for _, app, why in unread)
     dependency_inventory_complete = not warnings
     active_consumers = [row for row in consumers if row["active"]]
 
@@ -271,6 +279,7 @@ def deletion_plan(namespace, name, volume="", pv=""):
         protected.append("this claim stores Homestead's own state")
 
     blockers = list(protected)
+    blockers.extend(COPY_HOLDS.reason(app) for app in held.get((namespace, name), []))
     # A Job that finished, or the Pod it left behind, references the claim but
     # will never run again - the copy job from an import is the usual case, and
     # it used to block deleting the very volume it had just filled. A stopped

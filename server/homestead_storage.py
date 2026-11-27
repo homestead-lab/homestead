@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_copy_holds as COPY_HOLDS
 import homestead_kube as KUBE
 import homestead_lhrebuild as LHREBUILD
 import homestead_operations as OPS
@@ -148,7 +149,7 @@ def claim_references(pods=None):
     counted as unused; only KubeVirt being absent means no VMs. The kinds
     that were read still name what uses a claim.
     """
-    refs, unread = {}, []
+    refs, unread, held_apps = {}, [], []
 
     def note(ns, claims, what):
         for claim in claims:
@@ -191,6 +192,8 @@ def claim_references(pods=None):
         def read(obj):
             name, ns = obj["metadata"]["name"], obj["metadata"]["namespace"]
             note(ns, claims_of(spec_of(obj)), f"{kind}/{name}")
+            if kind == "Deployment" and COPY_HOLDS.marked(obj):
+                held_apps.append(obj)
             if kind == "StatefulSet":
                 # A StatefulSet's own claims are made from its template, named
                 # <template>-<set>-<n>; they belong to it too.
@@ -236,6 +239,15 @@ def claim_references(pods=None):
         fetched["/api/v1/pods"] = pods
     for kind, path, spec_of in kinds:
         each(kind, listed(kind, path), workload(kind, spec_of))
+    # The volume a storage copy copies from, which the app no longer names
+    # until the copy is confirmed (#1525). A record that cannot be read leaves
+    # its namespace's volumes not known to be unused.
+    held, held_unread = COPY_HOLDS.needed(held_apps, kget)
+    for (ns, claim), apps in held.items():
+        for app in apps:
+            note(ns, [claim], f"Storage copy/{app}")
+    for ns, _, _ in held_unread:
+        refs[UNREAD + (ns,)] = ["Storage copy"]
     each("VM", listed("VM", vms, absent_ok=True), vm)
 
     def owned_claim(obj):
@@ -359,7 +371,7 @@ def _references_for(refs, ns, claim):
     for key, owners in refs.items():
         if key[0] == "__prefix__" and key[1] == ns and claim.startswith(key[2]):
             found.extend(owners)
-    if not found and refs.get(UNREAD):
+    if not found and (refs.get(UNREAD) or refs.get(UNREAD + (ns,))):
         return None
     return sorted(set(found))
 
