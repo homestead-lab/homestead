@@ -2221,6 +2221,18 @@ div.ipam-line.dim{display:block}
 .protect-kept>div{flex:1 1 auto;min-width:0;font-size:13px}
 .protect-kept-dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:var(--low)}
 .protect-foot{margin:12px 0 0}
+/* Network shares (views-storage-shares-details.js): the servers a line each, and a share's row. */
+.share-servers{display:grid;gap:0;padding:4px 16px;margin-bottom:14px}
+.share-server{display:flex;align-items:center;gap:10px;padding:10px 0;min-width:0}
+.share-server+.share-server{border-top:1px solid var(--line)}
+.share-server>div:first-of-type{flex:1 1 auto;min-width:0;font-size:13px}
+.share-dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:var(--ok)}
+.share-dot.bad{background:var(--crit)}
+.share-notices{display:grid;gap:10px;margin-bottom:14px}
+.share-open{padding:0;color:var(--tx);font-weight:650;text-align:left}
+.sharetable tr.share-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+.sharetable tr.share-problem.warn>td:first-child{box-shadow:inset 3px 0 0 var(--med)}
+@media(max-width:560px){.share-server{flex-wrap:wrap}.share-server>.actionbar{margin-left:17px}}
 /* A VM in trouble colours its row's edge, as an app's does; its name opens the details sidebar. */
 .vm-table tr.vm-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
 .vm-table tr.vm-problem.warn>td:first-child{box-shadow:inset 3px 0 0 var(--med)}

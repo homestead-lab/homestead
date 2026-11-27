@@ -344,6 +344,11 @@ Snapshots, Backups and Restore tests tabs. Schedules is one table - what each
 does, when, which groups and volumes, its last and next run - under the clash
 that needs fixing. Settings holds the backup target, backup storage, the
 groups, housekeeping, previous volumes and consistent snapshots.
+Network shares' summary says how many shares are served and where Windows
+finds them; the SMB and NFS servers are a line each in one card, with what
+their cards used to explain in ⋯; a row's action is Edit share. A share's
+sidebar says plainly when guests can change files, with Change access, then
+its Windows path, NFS path, storage and users, with Access and Activity tabs.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
 pause on the name or the state shows a hover card. The page's summary line
