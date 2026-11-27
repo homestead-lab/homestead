@@ -356,6 +356,9 @@ disks, what runs on it, whether a restart is safe ("A restart stops frigate:
 No other host has a Google Coral USB."), and Restart host… and Start
 maintenance…. Its temperature shows only when the probe is waiting or a
 sensor runs warm; the disks' hover card and the host's page have the rest.
+Portal's summary names each link that answers slowly or not at all, in its
+colour, once the links are checked; a tile's hover card gives its answer,
+address, how it is checked and Open.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
 pause on the name or the state shows a hover card. The page's summary line
