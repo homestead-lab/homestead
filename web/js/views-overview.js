@@ -196,12 +196,13 @@ async function viewDash() {
       : stRead?.unread ? UI.callout("warn", "Storage could not be read", esc(stRead.unread))
       : '<div class="empty">Storage figures are not available yet.</div>'}
     </div>`,
+    busy: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Busiest apps</div></div>${busiestTable(o.top_cpu || [], o.top_mem || [])}</div>`,
     cpu: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top CPU</div></div>${consumerTable(o.top_cpu, "cpu")}</div>`,
     memory: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top memory</div></div>${consumerTable(o.top_mem, "memory")}</div>`,
   };
 
   paint(`
-  ${UI.pageHeader(`Cluster overview`, dashboardScope(o) + dashboardAge(o), `
+  ${UI.pageHeader(`Cluster overview`, dashboardSummary(o) + dashboardAge(o), `
       <button class="btn hide-sm" onclick="Dashboard.start()">${icon("edit")}Edit dashboard</button>
       <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button>
     `, {mobileSummary:"omit",actionsClass:"hide-sm"})}
@@ -256,6 +257,24 @@ function metricsNotice(rows) {
   return "";
 }
 
+/* The Dashboard's one line (Nov 2026 mockup): how many items need attention,
+   each a link to Health, or that every check is clear; with All clusters
+   picked it still says it shows this cluster only. */
+function dashboardSummary(o) {
+  if (fleetAll()) return dashboardScope(o);
+  const issues = o.health_issues || [];
+  const words = x => {
+    const name = String(x.name || "").split("/").pop(), rest = String(x.reason || "").replace(/^(node|volume|app|pod|disk|deployment|statefulset)\s+/i, "");
+    return /^(is|has|was|cannot|can't|does)\b/i.test(rest) ? `${name} ${rest[0].toLowerCase()}${rest.slice(1)}` : `${name}: ${rest}`;
+  };
+  if (!issues.length) return UI.summary({ head: `<b>Nothing needs attention.</b>`, parts: [{ text: `${o.nodes_total} host${o.nodes_total === 1 ? "" : "s"}, all checks clear.`, note: true }] });
+  return UI.summary({ head: `<b>${issues.length === 1 ? "1 item needs" : `${issues.length} items need`} attention.</b>`, parts: [
+    // A long reason is the link's tip, so the line stays one line: "doublecommander needs attention".
+    ...issues.slice(0, 3).map(x => { const said = words(x), short = said.length <= 48;
+      return { text: short ? said : `${String(x.name || "").split("/").pop()} needs attention`, tip: short ? "" : String(x.reason || ""), tone: x.severity === "critical" ? "bad" : "warn", run: "HealthInsights.open('health')" }; }),
+    issues.length > 3 && { text: `${issues.length - 3} more`, note: true }] });
+}
+
 /* Dense host summaries respond to widget width, rather than viewport width. */
 /* The dashboard reads this cluster only. With All clusters picked it says so,
    and points to Nodes, which combines them. */
@@ -296,6 +315,22 @@ function nodeAttention(n) {
   return UI.callout(h.tone === "bad" ? "bad" : "warn", h.status, `<ul class="ui-list">${lines.filter(Boolean).map(l => `<li>${esc(l)}</li>`).join("")}</ul>
     ${UI.actions(UI.button("Review in Health", "HealthInsights.open('health')"))}`);
 }
+/* A host's card on the Dashboard: what the compact summary leaves out. */
+if (typeof HOVER_CARDS === "object") HOVER_CARDS["dash-host"] = name => {
+  const n = ((STATE.data.ov || {}).nodes || STATE.data.nodes || []).find(x => x.name === name);
+  if (!n) return "";
+  const h = nodeHealth(n), known = v => typeof v === "number" && Number.isFinite(v), temp = h.ready ? nodeTemp(n) : null;
+  return UI.card({ title: n.name, chipHtml: UI.chip(h.status, h.tone === "bad" ? "bad" : h.tone === "warn" ? "warn" : "ok", { size: "slim" }), rows: [
+    ["CPU", known(n.cpu_pct) ? esc(`${n.cpu_pct}%`) : "—", "chip"],
+    ["Memory", known(n.mem_pct) ? esc(`${n.mem_pct}% · ${sizePair(n.mem_used_gb, n.mem_cap_gb)}`) : "—", "memory"],
+    ["Node filesystem", known(n.fs_pct) ? esc(`${n.fs_pct}%`) : "—", "disk"],
+    ["Network", h.ready && known(n.rx_mbps) && known(n.tx_mbps) ? esc(ratePair(n.rx_mbps, n.tx_mbps).join(" ")) : "—", "network"],
+    temp && [temp.label, esc(temp.text + (temp.extra ? ` · ${temp.extra}` : "")), "thermo"],
+    ["Pods", esc(n.pods ?? "—"), "box"],
+    ["Uptime", esc(nodeUpFor(n).replace(/^up /, "") || "—"), "clock"],
+  ], link: { label: "Open host", onclick: `nodeDetail(${JSON.stringify(n.name)})` } });
+};
+
 function dashboardNodes(nodes, display="compact") {
   const header=UI.moduleHeader("Host health", "", UI.button("Health", "HealthInsights.open('health')", {attrs:'aria-label="Review cluster health"'}));
   if(display==="detailed")return `<div class="card flat dashboard-nodes">${header}${nodeComparison(nodes,"dashboard")}</div>`;
@@ -308,15 +343,29 @@ function dashboardNodes(nodes, display="compact") {
     const live=value=>ready?value:null;
     const temp=ready?nodeTemp(n):{label:"CPU temp",text:"—",extra:""};
     const network=ready&&known(n.rx_mbps)&&known(n.tx_mbps)?ratePair(n.rx_mbps,n.tx_mbps).join(" "):"—";
+    // CPU and memory (Nov 2026 mockup); the temperature only when it needs a look - the probe
+    // waits, its reading is old, or a sensor runs warm. The rest is in the state's hover card; the name keeps its tooltip.
+    const tempNeeded=["waiting","stale","unreachable"].includes(n.probe?.state) || (temp.value!=null && tempCls(Math.max(temp.value, n.temps?.max_c || 0))!=="t-ok");
     return `<article class="node-compact-host"${clusterAttr(n)}>
       <div class="node-compact-heading">${UI.statusDot(tone,status)}<button class="linkish" onclick="nodeDetail(${jsq(n.name)})" title="${esc(n.name)}">${esc(n.name)}</button></div>
-      <div class="node-compact-state ${tone==="bad"?"t-hot":tone==="warn"?"t-warm":"dim"}">${window.hostMaintenanceChip?.(n.name)||esc(status)}</div>
-      ${percent("CPU",live(n.cpu_pct),"cpu")}${percent("Memory",live(n.mem_pct),"memory")}${percent("Node filesystem",live(n.fs_pct),"disk")}
-      ${line("Network",network,"Receive / transmit")}${line(temp.label,temp.text+(temp.extra?` · ${temp.extra}`:""),"The CPU's temperature, and the hottest sensor when it runs hotter")}
-      ${line("Pods",n.pods ?? "—")}${line("Uptime",nodeUpFor(n).replace(/^up /,"") || "—")}
+      <div class="node-compact-state ${tone==="bad"?"t-hot":tone==="warn"?"t-warm":"dim"}" tabindex="0" data-card="dash-host|${esc(n.name)}">${window.hostMaintenanceChip?.(n.name)||esc(status)}</div>
+      ${percent("CPU",live(n.cpu_pct),"cpu")}${percent("Memory",live(n.mem_pct),"memory")}
+      ${tempNeeded?line(temp.label,temp.text+(temp.extra?` · ${temp.extra}`:""),"The CPU's temperature, and the hottest sensor when it runs hotter"):""}
       ${issues.length?`<button class="node-compact-warning" onclick="HealthInsights.open('health')" title="${esc(issues.join("; "))}">${esc(issues.join("; "))}</button>`:""}
     </article>`;
   }).join("") || '<div class="empty small">No hosts reported.</div>'}</div></div>`;
+}
+
+/* The busiest apps in one table (Nov 2026 mockup): CPU as the figure, and
+   each app's memory beside where it runs, when the memory list has it. */
+function busiestTable(byCpu, byMem) {
+  const memory = new Map(byMem.map(w => [`${w.ns}/${w.name}`, w.mem_mb]));
+  return `<div class="tblwrap"><table class="tbl stack compact consumer-table"><thead><tr><th>App</th><th>CPU</th></tr></thead>
+    <tbody>${byCpu.slice(0, 5).map(w => {
+      const mem = memory.get(`${w.ns}/${w.name}`), details = [w.ns, (w.nodes || []).join(", "), mem != null ? `${workloadMemory(mem)} memory` : ""].filter(Boolean).join(" · ");
+      return `<tr class="consumer-row"><td class="consumer-identity"><b title="${esc(w.name)}">${esc(w.name)}</b><div class="consumer-meta dim" title="${esc(details)}">${esc(details || "—")}</div></td>
+        <td class="consumer-value mono" data-status title="100% equals one CPU core"><b>${workloadCpuPercent(w.cpu)}</b>${meter(Math.min(100, Number(w.cpu || 0) * 100))}</td></tr>`;
+    }).join("") || '<tr><td colspan="2"><div class="empty small">No app is using CPU yet.</div></td></tr>'}</tbody></table></div>`;
 }
 
 function consumerTable(workloads, metric) {

@@ -19,7 +19,9 @@ test("default layouts are fresh independent objects",()=>{
 
 test("new health widgets are optional and retain sizes in saved layouts",()=>{
  const ids=["health","workloads","containers","vms","backups","updates","jobs"];
- assert.equal(dashboard.defaults().length,7);
+ // The Nov 2026 mockup: Busiest apps in place of Top CPU and Top memory, which saved layouts keep.
+ assert.deepEqual(dashboard.defaults().map(w=>w.id),["compute","throughput","storage","nodes","busy","history"]);
+ assert.deepEqual(dashboard.normalize({version:1,items:[{id:"cpu",width:6,height:0},{id:"memory",width:6,height:0}]}).map(w=>w.id),["cpu","memory"]);
  assert.deepEqual(dashboard.normalize({version:1,items:ids.map(id=>({id,width:4,height:360}))}).map(w=>w.id),ids);
 });
 
