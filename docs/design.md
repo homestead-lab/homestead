@@ -362,6 +362,10 @@ address, how it is checked and Open.
 Networking's Overview says in one line how many items need attention and
 what works ("3 virtual IPs and 3 services are working."), in place of the
 three figure cards; the load balancer is named there when it is short of agents.
+Cluster's summary says how the platform is, how many hosts are ready, how many
+voting hosts can fail, and the versions. Suggestions come first; the hosts are
+one line that links to Hosts; the platform services are a row of status items
+whose copies show on hover; the control plane and its votes are folded below.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
 pause on the name or the state shows a hover card. The page's summary line
