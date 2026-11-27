@@ -187,7 +187,7 @@ class JoinRaceTests(unittest.TestCase):
         store_key False: the list is saved, its key not yet (the second of the two writes)."""
         def accept():
             if not store_key:
-                self.a2.fleet._store_key = lambda key, attempts=4: True
+                self.a2.fleet._store_key = lambda key, attempts=4, **_: True
             self.a2.fleet.accept({"key": base64.b64encode(secrets.token_bytes(32)).decode(), "revision": 7,
                                   "url": self.a.url, "members": [{"id": "f00d", "handle": "yard", "name": "Yard",
                                                                   "url": "https://192.0.2.9:8088"}]})
@@ -241,7 +241,7 @@ class JoinRaceTests(unittest.TestCase):
         def fails(key, attempts=4):
             raise RuntimeError("the Secret could not be written")
         self.a2.fleet._store_key = fails
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             self.a2.fleet.remove("garage")
         state, key = self.a.fleet._load(fresh=True)
         self.assertEqual(held, key)
@@ -259,7 +259,7 @@ class JoinRaceTests(unittest.TestCase):
         # join read it, and stores the key a moment later.
         self.a.fleet._ensure()      # this Homestead's own list and key, stored
         deferred = []
-        self.a2.fleet._store_key = lambda key, attempts=4: deferred.append(key) or True
+        self.a2.fleet._store_key = lambda key, attempts=4, **_: deferred.append(key) or True
         self.linked_from_elsewhere()()
         written = second_copy(self.a).fleet._store_key
         clock = mock.Mock(wraps=time)

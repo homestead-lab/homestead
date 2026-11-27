@@ -449,6 +449,7 @@ window.fleetSettingsPaint = async () => {
   const mode = (value, label) => `<button type="button" class="${(value === "all") === all ? "on" : ""}" aria-pressed="${(value === "all") === all}"
     onclick="fleetSetMode(${jsq(value)})">${label}</button>`;
   host.innerHTML = `${UI.moduleHeader(`Linked clusters`, `Other Homesteads managed from this one, even when only this one can be reached from outside.`, `${UI.button("Link a cluster", "fleetLink()", { kind: "pri", attrs: 'data-need="admin"' })}`)}
+    ${view?.notice ? UI.callout("warn", view.notice.title, `<p>${esc(view.notice.detail)}</p>`) : ""}
     ${view ? `<ul class="fleet-list">${fleetMembersHtml(view)}</ul>` : UI.callout("bad", "The linked clusters could not be read", esc(read.unread))
       + UI.button("Try again", "fleetSettingsPaint()")}
     ${view?.linked ? UI.section("Display", `<div class="seg fleet-mode" role="group" aria-label="How linked clusters are shown">

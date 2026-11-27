@@ -420,13 +420,22 @@ def _host_fix_loop():
     limits a busy node outgrows (homestead_host_limits.py), what a node that
     joined later needs to match the others (homestead_node_parity.py), the installer's
     auto-deploy files (homestead_manifests.py), and a second default storage
-    class; and VMs still holding an ISO read-only. Checked a minute after
-    starting, then every ten minutes."""
+    class; and VMs still holding an ISO read-only; and a linked clusters' key
+    change that was not finished. Checked a minute after starting, then every
+    ten minutes."""
     time.sleep(60)
     while True:
         if LEADER.is_leader():
             try:
                 with self_data_activity():
+                    # A key change made here whose key was not stored, finished.
+                    # First, so a tick below that fails cannot keep it from running.
+                    try:
+                        finished = FLEET.finish_key_change()
+                        if finished:
+                            print(f"linked clusters: {finished}", flush=True)
+                    except Exception as error:
+                        print(f"linked clusters: key change not finished: {str(error)[:160]}", flush=True)
                     for node, change in HOST_LIMITS.tick().items():
                         print(f"platform: {node}: inotify limits raised ({change})", flush=True)
                     # VMs start on kernels that stack AppArmor profiles (homestead_apparmor_fix).

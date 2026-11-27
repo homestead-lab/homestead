@@ -30,7 +30,11 @@ FLEET_LISTS = {
 def summary(request):
     conn = MODULE_ROUTES.connected(request)
     conn.who()
-    return FLEET.summary(via=conn.fleet)
+    view = FLEET.summary(via=conn.fleet)
+    # What the notice asks for (unlinking) is an admin's to do.
+    if view.get("notice") and request.role != "admin":
+        view = dict(view, notice=None)
+    return view
 
 
 def state(request):
