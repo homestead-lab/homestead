@@ -2241,6 +2241,9 @@ div.ipam-line.dim{display:block}
 /* A service with its health as a dot: a status item, not a chip (UI.chip has no dot). */
 .cluster-service-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--line2);border-radius:999px;background:var(--surf2);font-size:12px;font-weight:600;color:var(--tx);cursor:default}
 .share-dot.off{background:var(--line2)}
+/* Settings › Homestead's health: the checks that work are folded away until Show all. */
+.health-list:not(.show-all) .health-row:has(> .health-working){display:none}
+.health-shown{margin:0 0 6px}
 .share-notices{display:grid;gap:10px;margin-bottom:14px}
 .share-open{padding:0;color:var(--tx);font-weight:650;text-align:left}
 .sharetable tr.share-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}

@@ -366,6 +366,9 @@ Cluster's summary says how the platform is, how many hosts are ready, how many
 voting hosts can fail, and the versions. Suggestions come first; the hosts are
 one line that links to Hosts; the platform services are a row of status items
 whose copies show on hover; the control plane and its votes are folded below.
+Settings' summary says whether Homestead is up to date and how many of its
+background checks need attention; Homestead's health lists only those checks,
+with the rest behind Show all.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
 pause on the name or the state shows a hover card. The page's summary line
