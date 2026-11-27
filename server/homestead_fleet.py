@@ -887,6 +887,49 @@ def _refuse_plain(sent_to, what, plain_ok):
                          "Agree to send it unencrypted, or give it an https:// address. Nothing was sent.")
 
 
+# How long a link waits for a key change saved on another copy to store its
+# key: its list (naming the key) is written first, the key a moment after.
+KEY_SETTLE = 3
+
+
+def _agreed_key():
+    """The list and key as stored, once the list names the key stored. When
+    they still differ after KEY_SETTLE, that key change never stored its key
+    (the Secret write failed, or the copy stopped between the two writes), and
+    the stored key is used, as before. After a remove or leave here the members
+    still hold it: they are sent a new key only once it is stored. After a key
+    taken from another member (adopt), they already hold the new one, and the
+    link is made with the stored key, as before."""
+    end = time.monotonic() + KEY_SETTLE
+    state, key = _ensure()
+    while state.get(KEY_ID) not in (None, _key_id(key)) and time.monotonic() < end:
+        time.sleep(0.1)
+        state, key = _ensure()
+    return state, key
+
+
+class _Stale(Exception):
+    """What a link was sent on changed before it was saved."""
+
+
+def _unlink_accepted(record, rows, revision, key, reason):
+    """Tell a Homestead that accepted a link not saved here to stand alone
+    again: the list it was sent, without it, under a newer revision, signed
+    with the key it was sent. Returns what to tell the person."""
+    name = record.get("name") or record["url"]
+    try:
+        told = call(record, "POST", "/api/fleet/sync",
+                    {"revision": revision + 1, "updated": time.time(), "members": rows},
+                    timeout=8, signing_key=key).get("left")
+        error = "" if told else "it did not stand alone"
+    except Exception as failed:
+        error = str(failed)[:160]
+    if not error:
+        return f"{name} was not linked: {reason} while it was being asked. {name} was told to stand alone again. Try again."
+    return (f"{name} was not linked: {reason} while it was being asked, and {name} could not be told ({error}). "
+            f"Open {name}, unlink it there, then try again.")
+
+
 def join(url, username, password, own_url="", plain_ok=False):
     """Link another Homestead to this one and every one already linked here.
 
@@ -916,27 +959,45 @@ def join(url, username, password, own_url="", plain_ok=False):
                          "Unlink it there first, or link this one from there.")
     if int(there.get("protocol") or 0) != PROTOCOL:
         raise ValueError("That Homestead links clusters differently. Update both to the same release first.")
-    with _lock:
-        state, key = _ensure()
-        rows = [dict(m, url=own) if m["id"] == state["self"] else m for m in state["members"]]
-        revision = int(state.get("revision") or 0) + 1
-        record, _ = _json(url, "POST", "/api/fleet/accept", {
-            "key": base64.b64encode(key).decode(), "members": rows, "revision": revision, "url": url}, token=token)
-        if not record.get("id"):
-            raise ValueError("that Homestead did not say who it is")
-        record = _plain_handles([{k: record.get(k, "") for k in ("id", "handle", "name", "added")}])[0]
-        record["url"] = url
-        sent = rows + [record]
+    state, key = _agreed_key()
+    me, sent_mark = state["self"], state.get(KEY_ID)
+    rows = [dict(m, url=own) if m["id"] == me else m for m in state["members"]]
+    revision = int(state.get("revision") or 0) + 1
+    # Asked without the lock (#1546): every Fleet read and change takes it,
+    # and the other Homestead may be slow to answer.
+    record, _ = _json(url, "POST", "/api/fleet/accept", {
+        "key": base64.b64encode(key).decode(), "members": rows, "revision": revision, "url": url}, token=token)
+    if not record.get("id"):
+        raise ValueError("that Homestead did not say who it is")
+    record = _plain_handles([{k: record.get(k, "") for k in ("id", "handle", "name", "added")}])[0]
+    record["url"] = url
+    sent = rows + [record]
 
-        def fn(state, _key):
-            # Made on the list stored now: a change another copy saved while
-            # the other Homestead was asked stays, under a newer revision.
-            _settled(state)
-            now = [dict(m, url=own) if m["id"] == state["self"] else m
-                   for m in state.get("members", []) if m["id"] != record["id"]]
-            return {"self": state["self"], "revision": max(int(state.get("revision") or 0) + 1, revision),
-                    "updated": time.time(), "members": now + [record]}, None
+    def fn(state, stored_key):
+        # What the other Homestead was sent must still hold on the list stored
+        # now: every member it was sent, the key it was sent, the address not
+        # linked since. A change another copy saved meanwhile that keeps those
+        # (a rename, an address, a member linked) stays, under a newer revision,
+        # and the new member hears the list as saved.
+        if state.get("self") != me:
+            raise _Stale("the list of linked clusters was removed")
+        # The list names its key (KEY_ID) before the key itself is stored: a
+        # list saved meanwhile with a new key shows here before its key does.
+        if (not stored_key or not hmac.compare_digest(stored_key, key)
+                or state.get(KEY_ID) not in (None, sent_mark)):
+            raise _Stale("the linked clusters' key changed")
+        if not {m["id"] for m in rows} <= {m.get("id") for m in state.get("members", [])}:
+            raise _Stale("a linked cluster was unlinked")
+        if any(m.get("url") == url and m.get("id") != record["id"] for m in state.get("members", [])):
+            raise _Stale("that address was linked")
+        now = [dict(m, url=own) if m["id"] == me else m
+               for m in state.get("members", []) if m["id"] != record["id"]]
+        return {"self": me, "revision": max(int(state.get("revision") or 0) + 1, revision),
+                "updated": time.time(), "members": now + [record]}, None
+    try:
         state, _ = _change(fn)
+    except _Stale as stale:
+        raise ValueError(_unlink_accepted(record, rows, revision, key, str(stale))) from None
     _status.pop(record["id"], None)
     # The new member already has the list it was sent - unless another copy
     # changed the list meanwhile: then it hears the list as saved too.
