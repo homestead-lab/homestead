@@ -160,10 +160,11 @@ VIP_FULL = 30          # a full pass regardless
 
 def _vip_loop():
     """kube-vip can answer for an address and the Service lose it from its
-    status - k3s's ServiceLB empties it when the pods change - and then every
-    port there is refused. The leader records it again, as kube-vip would
-    have (homestead_vips.py): within seconds of it going missing (#365), and
-    in a full pass every VIP_FULL seconds."""
+    status - k3s's ServiceLB empties it on every EndpointSlice change and
+    every 10-hour resync (homestead_vips.py) - and then new connections to its
+    ports can be refused. The leader records it again, as kube-vip would have:
+    within seconds of it going missing (#365), and in a full pass every
+    VIP_FULL seconds."""
     last_full = 0.0
     while True:
         if LEADER.is_leader():

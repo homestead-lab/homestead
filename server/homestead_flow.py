@@ -156,7 +156,7 @@ def get_flow2():
                     {"vol": v["name"], "vid": v["id"], "running": True})
 
     # --- ports & VIPs per app. The address a Service asks for, not only the
-    # one it carries: a VIP kube-vip answers for but never recorded is where
+    # one it carries: a VIP kube-vip answers for but the Service lost is where
     # the app is meant to be, and the page says why it is not reachable there.
     try:
         network = homestead_routes.cached("network", 5, INV.inventory)

@@ -235,3 +235,14 @@ test("Your VIPs that couldn't be read say so, never no saved VIPs or no default"
   assert.equal(ctx.networkDefaultVip({ registered_vips: [], shared_vip: { ip: "" } }), "not configured");
   assert.equal(ctx.networkDefaultVip({ registered_vips: [], shared_vip: { ip: "192.0.2.108" } }), "192.0.2.108");
 });
+
+test("the Address map says which address Homestead put back, without naming a cause", () => {
+  const { ctx } = setup();
+  ctx.fmtAgo = sec => `${sec} s ago`;
+  const html = ctx.networkAddressesHtml({ addresses: { nodes: [], addresses: [],
+    kept: [{ at: Math.round(Date.now() / 1000) - 120, namespace: "lab", name: "plex", ips: ["192.0.2.108"], node: "node-a" }] } });
+  const note = html.replace(/<[^>]+>/g, "");
+  assert.match(note, /lab\/plex was no longer listed at 192\.0\.2\.108 while node-a answered for that address, so new connections could fail\. Homestead added it back 1\d\d s ago\./);
+  // It may have been ServiceLB, or something else: the note says what happened, not why.
+  assert.doesNotMatch(note, /kube-vip|ServiceLB|status/i);
+});
