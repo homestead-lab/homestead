@@ -7,6 +7,7 @@ import urllib.parse
 
 import homestead_cache as CACHE
 import homestead_fleet as FLEET
+import homestead_host_rows as HOST_ROWS
 import homestead_flow as FLOW
 import homestead_move as MOVE
 import homestead_nodes as NODES
@@ -21,7 +22,8 @@ Reply, Cookie = MODULE_ROUTES.Reply, MODULE_ROUTES.Cookie
 FLEET_LISTS = {
     "workloads": lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
     "vms": lambda: CACHE.cached("vms", 5, VM_LIST.list_vms),
-    "nodes": lambda: CACHE.cached("nodes", 5, NODES.get_nodes),
+    # As /api/nodes sends them, so every cluster's rows arrive alike (#1211).
+    "nodes": lambda: HOST_ROWS.list_rows(CACHE.cached("nodes", 5, NODES.get_nodes)),
     "volumes": lambda: CACHE.cached("vol", 8, STORAGE.get_volumes),
     "flow": lambda: FLOW.view(),
 }

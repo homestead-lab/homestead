@@ -18,6 +18,7 @@ import homestead_hardware as HW
 import homestead_history as HISTORY
 import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_os as HOST_OS
+import homestead_host_rows as HOST_ROWS
 import homestead_impact as IMPACT
 import homestead_kube as KUBE
 import homestead_kubelet_stats as KSTATS
@@ -739,7 +740,8 @@ def _drain(request):
 
 
 ROUTES = {
-    ("GET", "/api/nodes"): ("viewer", lambda request: ROUTER.page("nodes", get_nodes)),
+    # Without the detail no list shows (#1211); /api/node keeps it.
+    ("GET", "/api/nodes"): ("viewer", lambda request: HOST_ROWS.list_rows(ROUTER.page("nodes", get_nodes))),
     ("GET", "/api/node"): ("viewer", _node),
     ("GET", "/api/nodes/ports"): ("viewer", _ports),
     ("GET", "/api/node/smart"): ("viewer", _smart),

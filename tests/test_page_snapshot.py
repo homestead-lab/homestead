@@ -256,6 +256,9 @@ class LeaderCycleTests(unittest.TestCase):
     def _each_part_equals_what_the_route_computed_before(self):
         self.cycle()
         from_cycle = {key: self.PAGES.read(key)[1] for key in ROUTES}
+        # The host lists send their rows without what no list shows (#1211).
+        import homestead_host_rows as HOST_ROWS
+        from_cycle["nodes"], from_cycle["ov"] = HOST_ROWS.list_rows(from_cycle["nodes"]), HOST_ROWS.overview(from_cycle["ov"])
         self.PAGES.reset()
         CACHE._cache.clear()
         for key in ROUTES:
