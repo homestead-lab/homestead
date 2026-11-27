@@ -190,10 +190,11 @@ function networkOpen() {
 }
 
 /* The page: header, the section list, and the one section's body. */
-function networkPage(key, bodyHtml, { actions = "", actionsClass = "" } = {}) {
+function networkPage(key, bodyHtml, { actions = "", actionsClass = "", summary = "" } = {}) {
   const items = NETWORK_SECTIONS.map(([id, , group, icon]) => ({ key: id, label: networkSectionLabel(id), group, icon,
     descriptionHtml: networkSectionLine(id) }));
-  paint(`${UI.pageHeader("Networking", esc(networkSectionRow(key)[4]), actions, { mobileSummary: "omit", actionsClass })}
+  // Overview says how the network stands (networkSummary); a section says what it holds.
+  paint(`${UI.pageHeader("Networking", summary || esc(networkSectionRow(key)[4]), actions, { mobileSummary: "omit", actionsClass })}
     ${UI.workspace(UI.workspaceNav(items, { label: "Networking sections", selected: key, onSelect: id => `networkTab(${jsArg(id)})` }),
       `<div class="network-pane" data-pane="${esc(key)}">${bodyHtml}</div>`,
       { open: networkOpen(), backLabel: "All sections", currentLabel: networkSectionLabel(key), back: "networkBack()" })}`);
@@ -232,10 +233,22 @@ async function viewNetworking() {
     vips: `${expose("")}<button class="btn pri" data-need="admin" onclick="vipAdd()">＋ Add virtual IP</button>`,
     lan: `<button class="btn pri" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button>`,
   }[key] || "";
-  networkPage(key, body(), { actions });
+  networkPage(key, body(), { actions, summary: key === "overview" ? networkSummary(data) : "" });
   if (key === "overview" || key === "vips") selfAddressPaint();
   if (key === "lan") await networkVmNetsPaint();
   if (key === "ports" && window.uplinksPaint && STATE.platform?.harvester) uplinksPaint();
+}
+
+/* Overview's one line (Nov 2026 mockup), in place of the three figure cards:
+   how many things need attention, then what works, and the load balancer
+   when it is short of agents. */
+function networkSummary(data) {
+  const attention = networkAttentionAll(), controller = data.controller || {}, s = data.summary || {};
+  const head = attention.length ? `${attention.length} item${attention.length === 1 ? " needs" : "s need"} attention on the network.` : "Nothing needs attention on the network.";
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  return UI.summary({ head: `<b>${head}</b>`, parts: [
+    controller.healthy === false ? { text: `${controller.name || "The load balancer"} has ${controller.ready} of ${controller.desired} agents ready`, tone: "bad", run: "networkTab('vips')" }
+      : { text: `${plural(s.vips || 0, "virtual IP")} and ${plural(s.app_services || 0, "service")} ${(s.vips || 0) + (s.app_services || 0) === 1 ? "is" : "are"} working.`, note: true }] });
 }
 
 function networkOverviewHtml(data, baseline) {
@@ -244,12 +257,6 @@ function networkOverviewHtml(data, baseline) {
   const ports = window.PORTS_VIEW?.report;
   return `${baselineHtml(baseline, "network")}
     ${networkProblemsHtml(data)}
-    ${UI.stats([
-      { title: "Load balancer", value: controller.ready, unit: `/${controller.desired}`, tone: controller.healthy ? "ok" : "bad",
-        sub: `${controller.name} agents ready · ${controller.mode}` },
-      { title: "Virtual IPs", value: data.summary.vips, sub: `${data.summary.listeners} LAN listeners · ${data.available_vip_count} unused in pools` },
-      { title: "Application services", value: data.summary.app_services, sub: `${data.summary.ready_endpoints} ready endpoints` },
-    ])}
     <div class="card flat">${UI.moduleHeader("What needs attention", attention.length ? `${attention.length} item${attention.length === 1 ? "" : "s"}, each shown in its section` : "Every address responds, every service is healthy and every port has a link")}
       ${attention.length ? `<ul class="net-attention">${attention.map(item => `<li>
         <div><b>${esc(item.what)}</b>${item.why ? `<div class="dim xs">${esc(item.why)}</div>` : ""}</div>

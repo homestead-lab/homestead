@@ -359,6 +359,9 @@ sensor runs warm; the disks' hover card and the host's page have the rest.
 Portal's summary names each link that answers slowly or not at all, in its
 colour, once the links are checked; a tile's hover card gives its answer,
 address, how it is checked and Open.
+Networking's Overview says in one line how many items need attention and
+what works ("3 virtual IPs and 3 services are working."), in place of the
+three figure cards; the load balancer is named there when it is short of agents.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
 pause on the name or the state shows a hover card. The page's summary line
