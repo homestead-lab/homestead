@@ -515,8 +515,9 @@ def step(state, now=None):
             host_os.upgrade_done(name, node)
         if state_now["running"]:
             if now - node.get("since", now) > INSTALL_LIMIT:
+                # Its install is in a state no one knows: failed, as an install that stopped with an error is (#1530).
                 _result(rollout, False, f"updates did not finish within two hours. See {host_os.LOG} there")
-                rollout["stop"] = True
+                rollout["stop"], rollout["failed"] = True, True
             elif node.get("unconfirmed") and not state_now.get("active"):
                 # The log's last line may be an earlier install's.
                 rollout["message"] = (f"{name} needs attention: the update launch did not finish within "
@@ -646,7 +647,9 @@ def _finish(state, rollout, now):
     rollout["status"] = "failed" if rollout.get("failed") else "stopped" if rollout.get("stop") and \
         (rollout["index"] < len(rollout["nodes"]) or rollout.get("stopped_waiting")) else "succeeded"
     rollout["finished"] = int(now)
-    words = [f"{len(results)} host{'s' if len(results) != 1 else ''} done", f"{restarted} restarted"]
+    # A host left alone or that failed is not done (#1530); the last that failed is named below.
+    done = sum(1 for r in results if r["ok"])
+    words = [f"{done} host{'s' if done != 1 else ''} done", f"{restarted} restarted"]
     if rollout.get("canary_failed"):
         # What happened to which host, first (#1527): the canary is the one host done.
         first = results[0] if results else {}
