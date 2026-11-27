@@ -171,7 +171,7 @@ async function viewSettings() {
   const userRows = userList.map(u => userRow(u, can("admin"), userList.length)).join("");
 
   const tab = settingsTab();
-  paint(`${UI.pageHeader(`Settings`, `Cluster policy, hardware, access, and installation information`, ``, {mobileSummary:"omit"})}
+  paint(`${UI.pageHeader(`Settings`, settingsSummary(), ``, {mobileSummary:"omit"})}
     ${UI.workspace(UI.workspaceNav(SETTINGS_SECTIONS.map(([key,label,description,,group,icon]) => ({key,label,descriptionHtml:esc(description),group,icon})),
       {label:"Settings sections",selected:tab,onSelect:key => `settingsGo(${jsArg(key)})`}),
       UI.settingsGrid(`
@@ -1196,6 +1196,27 @@ window.hardwareRescan = async button => {
    Whether the parts that work in the background are working: the API it
    leans on, each loop, the node probe and Samba. Add-on controls live in Cluster. */
 const HEALTH_TONE = { ok: "ok", standby: "neutral", starting: "neutral", late: "warn", failing: "bad" };
+// Whether Homestead's health shows every check, or only those that need attention (Nov 2026 mockup).
+let SELF_HEALTH_ALL = false;
+
+/* The page's one line (Nov 2026 mockup): whether Homestead is up to date, as
+   the image check knows it, and how many of its background checks need
+   attention once they are read. */
+function settingsSummary() {
+  const update = typeof homesteadUpdates === "function" ? homesteadUpdates() : {};
+  const head = update.release ? `Homestead ${update.release} is available.` : update.report ? "Homestead is up to date." : `Homestead ${STATE.data.appSettings?.info?.version ? `v${STATE.data.appSettings.info.version}` : ""}.`.replace(" .", ".");
+  const problems = STATE.data.selfHealthProblems;
+  return UI.summary({ head: `<b>${esc(head)}</b>`, parts: [
+    update.release && { text: "Review the update", tone: "info", run: "settingsGo('updates')" },
+    problems === undefined ? null : problems ? { text: `${problems} background check${problems === 1 ? " needs" : "s need"} attention.`, tone: "warn", run: "settingsGo('about')" }
+      : { text: "Every background check is working.", note: true }] });
+}
+window.selfHealthAll = () => {
+  SELF_HEALTH_ALL = !SELF_HEALTH_ALL;
+  const list = $("#selfHealthCard .health-list"), toggle = $("#selfHealthToggle");
+  if (list) list.classList.toggle("show-all", SELF_HEALTH_ALL);
+  if (toggle) toggle.textContent = SELF_HEALTH_ALL ? "Show only what needs attention" : `Show all ${toggle.dataset.total}`;
+};
 const agoText = t => !t ? "not yet" : Date.now() / 1000 - t < 60 ? "just now" : fmtAgo(Math.round(Date.now() / 1000 - t));
 
 /* The card is read again every 15 seconds while Settings shows its section,
@@ -1228,12 +1249,17 @@ async function selfHealthPaint(signal) {
   const metricsOn = !!STATE.data.appSettings?.metrics?.enabled;
   const auditFile = STATE.data.appSettings?.audit?.file !== false;
   STATE.data.sambaInstalled = !!samba.installed;
-  const row = (label, tone, word, detail = "", action = "") => `<div class="health-row">${UI.chip(word, tone)}
-    <div><b>${esc(label)}</b>${detail ? `<div class="dim xs">${detail}</div>` : ""}</div>${action ? `<div class="row">${action}</div>` : ""}</div>`;
+  // A check that works or is off is folded away until Show all (style.css .health-working).
+  let total = 0, working = 0;
+  const row = (label, tone, word, detail = "", action = "") => {
+    const fine = tone === "ok" || tone === "neutral";
+    total += 1; working += fine ? 1 : 0;
+    return `<div class="health-row">${UI.chip(word, tone)}
+    <div${fine ? ' class="health-working"' : ""}><b>${esc(label)}</b>${detail ? `<div class="dim xs">${detail}</div>` : ""}</div>${action ? `<div class="row">${action}</div>` : ""}</div>`;
+  };
   const problems = h.loops.filter(l => ["failing", "late"].includes(l.state)).length + (h.api.ok ? 0 : 1)
     + (probe.installed && probe.ready < probe.desired ? 1 : 0) + (samba.enabled && samba.ready < samba.desired ? 1 : 0);
-  host.innerHTML = `${UI.moduleHeader(`Homestead's health`, `Background tasks, checked every 15 seconds while this page is open`, UI.chip(problems ? `${problems} to look at` : "all well", problems ? "warn" : "ok"))}
-    <div class="health-list">
+  const rows = `
       ${row("Kubernetes API", h.api.ok ? (h.api.ms > 2000 ? "warn" : "ok") : "bad", h.api.ok ? `${h.api.ms} ms` : "no answer",
         h.api.ok ? (h.api.ms > 2000 ? "Slow to respond, so pages and actions are slow." : "Responding normally.") : esc(h.api.error || ""))}
       ${row("Homestead", "ok", `v${h.version}`, `${pods.filter(p => p.ready).length} of ${h.replicas?.desired ?? "?"} cop${(h.replicas?.desired ?? 1) === 1 ? "y" : "ies"} ready`
@@ -1274,8 +1300,15 @@ async function selfHealthPaint(signal) {
       ${row("Metrics for Prometheus", metricsOn ? "ok" : "neutral", metricsOn ? "on" : "off",
         metricsOn ? `<span class="mono">${esc(location.origin)}/metrics</span>, read with an API key as a bearer token.`
           : "When this is on, Prometheus or an uptime checker can read Homestead's health from /metrics with an API key.",
-        admin ? `<button class="btn sm" onclick="metricsSet(${!metricsOn})">${metricsOn ? "Turn off" : "Turn on"}</button>` : "")}
-    </div>`;
+        admin ? `<button class="btn sm" onclick="metricsSet(${!metricsOn})">${metricsOn ? "Turn off" : "Turn on"}</button>` : "")}`;
+  host.innerHTML = `${UI.moduleHeader(`Homestead's health`, `Background tasks, checked every 15 seconds while this page is open`, UI.chip(problems ? `${problems} to look at` : "all well", problems ? "warn" : "ok"))}
+    <p class="dim small health-shown">${working === total ? `All ${total} checks are working.` : `${working} check${working === 1 ? " is" : "s are"} working.`}
+      <button type="button" class="linkish" id="selfHealthToggle" data-total="${total}" onclick="selfHealthAll()">${SELF_HEALTH_ALL ? "Show only what needs attention" : `Show all ${total}`}</button></p>
+    <div class="health-list${SELF_HEALTH_ALL ? " show-all" : ""}">${rows}</div>`;
+  // The page's summary line counts what needs attention.
+  STATE.data.selfHealthProblems = problems;
+  const line = typeof document === "object" && typeof document.querySelector === "function" ? document.querySelector("#views .phead > div:first-child > p") : null;
+  if (line && STATE.view === "settings") line.innerHTML = settingsSummary();
   selfHealthFollow();
 }
 window.selfHealthPaint = selfHealthPaint;
