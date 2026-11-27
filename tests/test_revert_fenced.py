@@ -8,6 +8,7 @@ twice, and nothing a person reads says an app was left alone when it was
 stopped. Through plan, start, resolve and cancel_run, on the shared fake API."""
 import json
 import sys
+import time
 import types
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_agent_tools as AGENT
 import homestead_app_hold as HOLD
+import homestead_auth as AUTH
 import homestead_changes as CHANGES
 import homestead_deploy_server as DEPLOY
 import homestead_kube as K
@@ -101,7 +103,14 @@ class Base(unittest.TestCase):
         self.calls = []
         REVERT.bind(K.kget, K.ksend, RECLASS, lambda ns, name: False, self.lh_call)
         self.fits = True
+        # A write through K.ksend is marked with the second it is made in, when a signing key
+        # can be read, and a new mark moves a Deployment's generation: the mark goes by this
+        # clock too, and no key or account store another test file left is at hand.
+        changes_time = types.SimpleNamespace(time=self.clock, gmtime=time.gmtime, strftime=time.strftime)
         for patch in (mock.patch.object(REVERT, "time", types.SimpleNamespace(time=self.clock)),
+                      mock.patch.object(CHANGES, "time", changes_time),
+                      mock.patch.dict(CHANGES._known, clear=True),
+                      mock.patch.dict(AUTH._store_cache, {"at": 0, "data": None}, clear=True),
                       mock.patch.object(REVERT.ACCESS, "reachable", return_value=""),
                       mock.patch.object(REVERT.OPS, "checkpoint", lambda item: None),
                       mock.patch.object(DEPLOY, "copy_admission", lambda obj: {"blocked": not self.fits}),
@@ -206,6 +215,26 @@ class ChangedAfterTheReview(Base):
         rows = {c["name"]: c for c in item["ref"]["consumers"]}
         self.assertEqual(3, rows["app-a"]["replicas"])
         K.ksend("PATCH", A, {"status": {"readyReplicas": 3}}, ctype=MERGE)
+        status, _, message = self.rounds(item)
+        self.assertEqual("succeeded", status, message)
+        self.assertEqual(3, self.replicas(A))
+
+    def test_a_wall_clock_second_between_two_marked_writes_is_not_a_change(self):
+        """CI, 23 Nov: with a signing key at hand, every write through K.ksend carries
+        a mark stamped with the second it was made in, and on a Deployment a new mark
+        moves the generation. The scale and the status write above landed in two
+        wall-clock seconds once in a thousand runs, and the job refused. Here the wall
+        clock passes a second between them every time: the marks are made by the
+        test's clock, so the job still goes ahead."""
+        wall = [1_700_000_000.9]
+        # The account store as another test file left it in CI: read moments ago, with a key.
+        with mock.patch("time.time", lambda: wall[0]), \
+                mock.patch.dict(AUTH._store_cache, at=wall[0], data={"users": {}, "signing_key": "example-key"}):
+            self.scale_on_read(1, 3)
+            item = self.begin()
+            self.assertIn(CHANGES.AUTHOR, self.notes(A), "no mark: the test needs a signing key")
+            wall[0] += 1
+            K.ksend("PATCH", A, {"status": {"readyReplicas": 3}}, ctype=MERGE)
         status, _, message = self.rounds(item)
         self.assertEqual("succeeded", status, message)
         self.assertEqual(3, self.replicas(A))
