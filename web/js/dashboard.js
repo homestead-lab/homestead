@@ -6,8 +6,10 @@ const Dashboard = (() => {
     throughput: {title:"Throughput", description:"Network traffic and local disk", width:4, widths:[4,6,8,12]},
     storage: {title:"Storage", description:"Capacity and the health of volume copies", width:4, widths:[4,6,8,12]},
     nodes: {title:"Host health", description:"Host metrics and drive warnings", width:12, widths:[4,6,8,12]},
-    cpu: {title:"Top CPU", description:"The busiest apps", width:6, widths:[4,6,8,12]},
-    memory: {title:"Top memory", description:"Apps using the most RAM", width:6, widths:[4,6,8,12]},
+    // Busiest apps (Nov 2026 mockup) is in the default layout; Top CPU and Top memory stay for layouts that have them.
+    busy: {title:"Busiest apps", description:"The apps using the most CPU, with their memory", width:12, widths:[6,8,12]},
+    cpu: {title:"Top CPU", description:"The busiest apps", width:6, widths:[4,6,8,12], optional:true},
+    memory: {title:"Top memory", description:"Apps using the most RAM", width:6, widths:[4,6,8,12], optional:true},
     history: {title:"Over time", description:"Recorded cluster metrics", width:12, widths:[8,12]},
     ...Object.fromEntries([
       ["health","Health suggestions","Checks and next steps, most important first"],

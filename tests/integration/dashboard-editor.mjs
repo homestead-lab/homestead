@@ -13,7 +13,7 @@ try{
   await page.locator("#historyCard .spark").first().waitFor();
   await page.evaluate(theme=>{window.__loopTimer?.stop();SET.theme=theme;applySettings();},theme);
   const order=()=>page.locator('.dashboard-widget').evaluateAll(els=>els.map(el=>el.dataset.widget));
-  const initial=await order();assert.equal(initial.length,7);
+  const initial=await order();assert.equal(initial.length,6,'the default layout: Busiest apps in place of Top CPU and Top memory');
   if(width<=900){
     assert.equal(await page.getByRole('button',{name:'Edit dashboard',exact:true}).isVisible(),false);
     await page.evaluate(()=>Dashboard.start());

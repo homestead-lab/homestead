@@ -37,5 +37,7 @@ test("numbers a minute or more old are flagged, and say why", () => {
 });
 
 test("the Dashboard's subtitle carries the age", () => {
-  assert.match(between(source, "async function viewDash", "historyPaint();"), /dashboardScope\(o\)\s*\+\s*dashboardAge\(o\)/);
+  assert.match(between(source, "async function viewDash", "historyPaint();"), /dashboardSummary\(o\)\s*\+\s*dashboardAge\(o\)/);
+  // The summary names what needs attention, and says it shows this cluster only when All clusters is picked.
+  assert.match(between(source, "function dashboardSummary", "\n}\n"), /if \(fleetAll\(\)\) return dashboardScope\(o\);/);
 });

@@ -9,7 +9,7 @@ const core = require("./helpers/core-source")();
 
 function context() {
   const c = { document: { addEventListener() {}, querySelector() { return null; } }, FLEET: { view: {} }, icon: () => "",
-    clusterAttr: () => "", clusterTag: () => "", fleetAll: () => false, Diagram: null,
+    clusterAttr: () => "", clusterTag: () => "", fleetAll: () => false, Diagram: null, HOVER_CARDS: {},
     meter: () => "", sev: () => "", hardwareTags: () => "", remoteRow: () => "", sizePair: (used, cap) => `${used}/${cap} GB`, ratePair: (rx, tx) => [`↓${rx}`, `↑${tx}`] };
   c.window = c; vm.createContext(c);
   vm.runInContext(between(core, null, "/* Put text on the clipboard."), c);
@@ -77,7 +77,9 @@ test("nodeTemp gives the CPU temperature, and the hottest sensor when it runs ho
 
 test("the dashboard, Nodes and the node's page give the same temperature and disk labels", () => {
   const c = context();
-  const card = c.dashboardNodes([warm], "compact"), summary = c.nodePageSummary(warm);
+  // The compact card shows CPU and memory; its name's hover card has the temperature and filesystem, labelled the same.
+  vm.runInContext(`STATE.data.ov = ${JSON.stringify({ nodes: [warm] })}`, c);
+  const card = c.HOVER_CARDS["dash-host"](warm.name), summary = c.nodePageSummary(warm);
   const rows = vm.runInContext("nodeComparisonRows", c)([warm]);
   assert.match(card, /CPU temp[\s\S]*39°C/); assert.doesNotMatch(card, /Max temp/);
   assert.ok(rows.some(row => row.label === "CPU temp" && /39°C/.test(row.values[0])), rows.map(r => r.label).join());

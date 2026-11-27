@@ -369,6 +369,12 @@ whose copies show on hover; the control plane and its votes are folded below.
 Settings' summary says whether Homestead is up to date and how many of its
 background checks need attention; Homestead's health lists only those checks,
 with the rest behind Show all.
+The Dashboard's summary names the items that need attention, as links to
+Health (a long reason is the link's tip). Host health shows each host's CPU
+and memory, and its temperature only when the probe waits, its reading is old
+or a sensor runs warm; the host's state opens a card with the rest. The default
+layout has one Busiest apps card in place of Top CPU and Top memory, which a
+saved layout keeps.
 The rest, and the facts the row leaves out, such as the image and how long it
 has run, are in the details sidebar, which a click on the name opens; a
 pause on the name or the state shows a hover card. The page's summary line
