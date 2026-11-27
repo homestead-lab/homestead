@@ -485,12 +485,11 @@ class ExtendAndEndTests(Case):
 
     def test_it_uncordons_before_it_starts_what_waited(self):
         self.declared()
-        order = []
-        real_cordon, real_restore = NODE_ACTIONS.set_cordon, HOLD.restore
-        with mock.patch.object(NODE_ACTIONS, "set_cordon", lambda *a: order.append("uncordon") or real_cordon(*a)), \
-             mock.patch.object(HOLD, "restore", lambda *a: order.append("restore") or real_restore(*a)):
+        seen = []
+        real_restore = HOLD.restore
+        with mock.patch.object(HOLD, "restore", lambda *a: seen.append(self.cordoned()) or real_restore(*a)):
             HM._end(req({"node": "node-a"}))
-        self.assertEqual(["uncordon", "restore"], order)
+        self.assertEqual([False], seen, "the host was uncordoned when what waited was started")
 
     def test_end_keeps_a_cordon_that_was_there_before(self):
         self.edit(lambda n: n["spec"].update(unschedulable=True))
@@ -641,9 +640,10 @@ class ExtendAndEndTests(Case):
     def test_end_on_a_host_someone_uncordoned_says_what_is_true(self):
         self.declared()
         self.edit(lambda n: n["spec"].update(unschedulable=False))
-        writes = [w for w in self.kube.writes if w[0] == "PATCH" and w[1].endswith("/nodes/node-a")]
+        before = len(self.kube.writes)
         out = HM._end(req({"node": "node-a"}))
-        self.assertEqual(writes, [w for w in self.kube.writes if w[0] == "PATCH" and w[1].endswith("/nodes/node-a")])
+        # Only the job's own cordon mark may go: nothing is cordoned or uncordoned.
+        self.assertEqual([], [w for w in self.kube.writes[before:] if "unschedulable" in str(w[2])])
         self.assertNotIn("cordoned", out["detail"])
         self.assertIn("already allowed", out["detail"])
 

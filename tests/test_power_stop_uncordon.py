@@ -186,7 +186,7 @@ class OtherCordonTests(Case):
         self.assertIn("The host was replaced during this job, so its cordon was left alone", item["message"])
 
     def test_an_uncordon_that_fails_says_the_host_stays_cordoned(self):
-        self.kube.fail(NODE, 500, method="PATCH", skip=1, times=5)    # the job's cordon goes through
+        self.kube.fail(NODE, 500, method="PATCH", skip=2, times=5)    # the job's cordon (its mark, then its step) goes through
         item = self.send()
         self.assertTrue(self.cordoned())
         self.assertIn("The host stays cordoned, because uncordoning it failed", item["message"])

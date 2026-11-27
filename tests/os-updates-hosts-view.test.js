@@ -1,6 +1,7 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 /* The OS updates dialog's rows and its review (#1174): real ui.js and
    host-os.js over a stand-in for the page, answering as the server does. */
@@ -206,10 +207,13 @@ test("one host's review says what installs and what the checks say today", async
 test("a restart the checks would refuse: the review offers no restart, and says the row will", async () => {
   const t = await reviewed(preview([previewHost("node-a", { restart_refusal: "Something would keep this host from draining: 3 orphan records." })]));
   const html = t.html();
-  assert.match(html, /will not restart it automatically/);
+  assert.match(html, /With this choice the updates install, but Homestead will not restart node-a by itself\./);
+  assert.doesNotMatch(html, /today/);
+  // An older server sends no parts: its one sentence, as before.
   assert.match(html, /3 orphan records\./);
   assert.doesNotMatch(html, /3 orphan records\.\./);
-  assert.match(html, /waits for an admin to choose Restart host…/);
+  assert.match(html, /After the updates install, press Restart host… on this host(&#39;|&#x27;|')s row to review and restart it\./);
+  assert.doesNotMatch(html, /…\./, "no full stop straight after the ellipsis");
   assert.doesNotMatch(html, /nodePowerReview|nodeActions/, "a restart before installing would be the wrong order");
   assert.equal((html.match(/<button/g) || []).length, 2, "go and cancel");
   assert.doesNotMatch(button(html, "osu_review_go"), /\bdisabled\b/, "the update itself goes ahead");
@@ -218,9 +222,9 @@ test("a restart the checks would refuse: the review offers no restart, and says 
 test("what may clear by itself says it may wait first, not that it won't restart", async () => {
   const hosts = [previewHost("node-a", { restart_refusal: "Something would keep this host from draining: engines still listed", restart_may_clear: true })];
   const t = await reviewed(preview(hosts));
-  assert.match(t.html(), /may wait up to 15 minutes first/);
+  assert.match(t.html(), /With this choice the updates install, and if node-a needs a restart, Homestead may wait up to 15 minutes first\./);
   assert.match(t.html(), /engines still listed/);
-  assert.doesNotMatch(t.html(), /will not restart it automatically/);
+  assert.doesNotMatch(t.html(), /will not restart/);
   const several = await reviewed(preview([...hosts, previewHost("node-b")]));
   assert.match(several.html(), /may wait up to 15 minutes first/);
 });
@@ -502,4 +506,133 @@ test("a host name is escaped wherever it is shown", async () => {
   assert.doesNotMatch(t.html(), /data-osu-pick="a"/);
   const r = await reviewed(preview([previewHost(name)]));
   assert.doesNotMatch(r.html(), /<b>a"<b>/);
+});
+
+/* #1494: the verdict answers "After installing", one line per reason, names
+   behind a disclosure, and the next step on its own line. */
+const SETTING = "Restart a host even when a volume has its only healthy copy there";
+const REASONS = [
+  { kind: "drain-engine-orphans", text: "2 Longhorn orphan records keep this host from draining.", count: 2,
+    names: ["2 Longhorn orphan records on node-a for volumes pvc-1, pvc-2, now running on node-b"],
+    clears: "Tick or remove them in this host's Restart host… review. An automatic restart cannot." },
+  { kind: "single-copy", text: "5 volumes have their only healthy copy on this host.", count: 5, names: ["apps/uploads", "apps/db", "data/metrics", "data/dumps"],
+    clears: `Turn on "${SETTING}" in the Host updates settings, or wait until Longhorn has rebuilt copies on two other hosts.` },
+  { kind: "host-data", text: "1 pod keeps data on this host itself.", count: 1, names: ["dev/builder-0 (/srv/cache)"],
+    clears: `Turning on "${SETTING}" in the Host updates settings accepts this.` },
+];
+const REFUSAL = "Something would keep this host from draining: 2 Longhorn orphan records on node-a for volumes pvc-1, pvc-2, now running on node-b; "
+  + "a volume has its only healthy copy on this host: apps/uploads, apps/db, data/metrics, data/dumps; pods keep data on this host itself: "
+  + "dev/builder-0 (/srv/cache) (the settings do not accept that)";
+const verdictOf = html => between(html, '<div class="osu-verdict">', null);
+const words = html => html.replace(/<[^>]*>/g, " ").replace(/&#39;|&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ");
+// What shows before the notice or a disclosure is opened.
+const closedText = html => words(html.replace(/<div class="ui-callout-body">[\s\S]*?<\/div><\/details>/g, "</details>")
+  .replace(/<details class="ui-more"[\s\S]*?<\/details>/g, ""));
+
+test("one host: the verdict answers the choice, under it, a line per reason, and the next step", async () => {
+  const t = await reviewed(preview([previewHost("node-a", { restart_refusal: REFUSAL, restart_reasons: REASONS })]));
+  const html = t.html();
+  const title = "With this choice the updates install, but Homestead will not restart node-a by itself.";
+  assert.ok(html.indexOf('id="osu_review_restart"') < html.indexOf(title), "under After installing");
+  assert.ok(html.indexOf(title) < html.indexOf('id="osu_review_go"'), "before the button");
+  assert.equal((html.match(/class="osu-verdict"/g) || []).length, 1);
+  assert.equal((html.match(/class="ui-callout /g) || []).length, 1, "one notice");
+  const verdict = verdictOf(html);
+  // Closed, the bar: the title, how many reasons, the first one's count, and the next step.
+  const closed = closedText(verdict);
+  assert.match(closed, /With this choice the updates install, but Homestead will not restart node-a by itself\./);
+  assert.match(verdict, /aria-label="3 concerns"/);
+  assert.match(closed, /2 Longhorn orphan records keep this host from draining\./);
+  assert.match(closed, /After the updates install, press Restart host… on this host's row to review and restart it\./);
+  assert.doesNotMatch(closed, /apps\/uploads|dev\/builder-0|pvc-1/, "names wait until it is opened");
+  // Opened: a line each, what clears it, then the names.
+  const lines = verdict.match(/<li class="ui-issue">[\s\S]*?<\/li>/g) || [];
+  assert.equal(lines.length, 3, "a line each");
+  assert.match(words(lines[0]), /keep this host from draining\. Tick or remove them in this host's Restart host… review\. An automatic restart cannot\. 2 Longhorn orphan records on node-a for volumes pvc-1, pvc-2, now running on node-b\./);
+  assert.match(words(lines[1]), /^ ?5 volumes have their only healthy copy on this host\. Turn on "Restart a host even when a volume has its only healthy copy there" in the Host updates settings, or wait until Longhorn has rebuilt copies on two other hosts\. The first 4: apps\/uploads, apps\/db, data\/metrics, data\/dumps\./);
+  assert.match(words(lines[2]), /1 pod keeps data on this host itself\. Turning on "Restart a host[^"]*" in the Host updates settings accepts this\. dev\/builder-0 \(\/srv\/cache\)\./);
+  assert.match(lines[1], /<span class="ui-issue-short">5 volumes have their only healthy copy on this host\.<\/span>/, "the count is the short line");
+  assert.doesNotMatch(verdict, /the settings do not accept that/, "not the one long sentence");
+  assert.doesNotMatch(html, /…\./);
+  assert.doesNotMatch(html, /today/);
+});
+
+test("one host: choosing Do not restart hides the verdict", async () => {
+  const t = await reviewed(preview([previewHost("node-a", { restart_refusal: REFUSAL, restart_reasons: REASONS })]));
+  const box = { hidden: false };
+  t.fields[".osu-verdict"] = box;
+  t.fields["#osu_review_restart"] = { value: "never" };
+  t.c.window.osUpdatesReviewRestart();
+  assert.equal(box.hidden, true);
+  t.fields["#osu_review_restart"].value = "when-needed";
+  t.c.window.osUpdatesReviewRestart();
+  assert.equal(box.hidden, false);
+});
+
+test("several hosts: each host's verdict stays in its own section, the reasons behind More", async () => {
+  const t = await reviewed(preview([previewHost("node-b"), previewHost("node-a", { restart_refusal: REFUSAL, restart_reasons: REASONS })]));
+  const html = t.html();
+  assert.equal((html.match(/class="ui-callout /g) || []).length, 0);
+  const a = between(html, "<h4>node-a</h4>", 'id="osu_review_restart"');
+  assert.match(closedText(a), /will not restart node-a by itself\./);
+  assert.match(a, /<summary>The 3 reasons, and what to do<\/summary>/);
+  assert.equal((a.match(/<li class="osu-reason">/g) || []).length, 3);
+  assert.match(words(a), /5 volumes have their only healthy copy on this host\. Turn on "Restart a host/);
+  assert.match(words(a), /After the updates install, press Restart host… on this host's row to review and restart it\./);
+  assert.doesNotMatch(closedText(a), /5 volumes|apps\/uploads|After the updates install/, "behind More: the review stays short");
+  const b = between(html, "<h4>node-b</h4>", "<h4>node-a</h4>");
+  assert.match(b, /it can go ahead/);
+  assert.doesNotMatch(b, /osu-reason/);
+});
+
+test("reasons that may clear by themselves: the may-wait title, its lines, and what happens if they don't", async () => {
+  const reasons = [{ kind: "drain-engines-elsewhere", text: "This host's Longhorn instance-manager still lists engines that run on another host.", count: null,
+    names: ["node-a's Longhorn instance-manager still lists engine vol-x-e-0, which no longer runs on node-a"], clears: "This may clear by itself within minutes." }];
+  const t = await reviewed(preview([previewHost("node-a", { restart_refusal: "Something would keep this host from draining: engines", restart_may_clear: true, restart_reasons: reasons })]));
+  const shown = words(verdictOf(t.html()));
+  assert.match(shown, /With this choice the updates install, and if node-a needs a restart, Homestead may wait up to 15 minutes first\./);
+  assert.match(shown, /still lists engines that run on another host\. This may clear by itself within minutes\./);
+  assert.match(shown, /This can clear by itself\. If it does not, press Restart host… on this host's row after the updates install\./);
+  assert.doesNotMatch(shown, /will not restart/);
+});
+
+test("names and reasons from the cluster are escaped", async () => {
+  const reasons = [{ kind: "host-data", text: "1 pod <i>keeps</i> data on this host itself.", count: 1, names: ['apps/<img src=x onerror="1">'],
+    clears: "Turning on <b>it</b> accepts this." }];
+  for (const several of [false, true]) {
+    const hosts = [previewHost("node-a", { restart_refusal: "pods keep data", restart_reasons: reasons })];
+    const html = (await reviewed(preview(several ? [previewHost("node-b"), ...hosts] : hosts))).html();
+    assert.doesNotMatch(html, /<img src=x|<i>keeps|<b>it<\/b>/);
+    assert.match(html, /apps\/&lt;img src=x onerror=&quot;1&quot;&gt;/);
+    assert.match(html, /Turning on &lt;b&gt;it&lt;\/b&gt; accepts this\./);
+  }
+});
+
+test("a drain blocker's rows are sentences each, not a list joined by commas", async () => {
+  const reasons = [{ kind: "drain-stuck-pod", text: "2 pods are still stopping long after they should have, which keeps this host from draining.", count: 2,
+    names: ["Pod apps/a on node-a has been terminating past its grace period", "Pod apps/b on node-a has been terminating past its grace period, and its volumes could not be checked"],
+    clears: "Tick or remove them in this host's Restart host… review. An automatic restart cannot." }];
+  const html = (await reviewed(preview([previewHost("node-a", { restart_refusal: "stuck", restart_reasons: reasons })]))).html();
+  assert.match(words(html), /grace period\. Pod apps\/b on node-a has been terminating past its grace period, and its volumes could not be checked\./);
+  assert.doesNotMatch(html, /grace period, Pod/);
+});
+
+test("several hosts from an older server: each host's one sentence behind More", async () => {
+  const t = await reviewed(preview([previewHost("node-b"), previewHost("node-a", { restart_refusal: "some workloads have no other host to run on" })]));
+  const a = between(t.html(), "<h4>node-a</h4>", 'id="osu_review_restart"');
+  assert.match(closedText(a), /will not restart node-a by itself\./);
+  assert.match(a, /<summary>Why, and what to do<\/summary>/);
+  assert.match(words(a), /Some workloads have no other host to run on\. After the updates install, press Restart host…/);
+  assert.equal((t.html().match(/class="ui-callout /g) || []).length, 0);
+});
+
+test("one host while the run can't start: the verdict is plain lines under the choice, the notice is the block", async () => {
+  const t = await reviewed(preview([previewHost("node-a", { restart_refusal: REFUSAL, restart_reasons: REASONS })], { blocked: "An OS update is running" }));
+  const html = t.html();
+  assert.equal((html.match(/class="ui-callout /g) || []).length, 1, "only the block");
+  const verdict = verdictOf(html);
+  assert.ok(html.indexOf('id="osu_review_restart"') < html.indexOf('<div class="osu-verdict">'));
+  assert.match(closedText(verdict), /With this choice the updates install, but Homestead will not restart node-a by itself\./);
+  assert.match(verdict, /<summary>The 3 reasons, and what to do<\/summary>/);
+  assert.match(button(html, "osu_review_go"), /\bdisabled\b/);
 });

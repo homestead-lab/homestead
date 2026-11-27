@@ -15,6 +15,7 @@ import urllib.parse
 import homestead_cordon as CORDON
 import homestead_disks as DISKS
 import homestead_hardware as HW
+import homestead_history as HISTORY
 import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_os as HOST_OS
 import homestead_impact as IMPACT
@@ -349,7 +350,9 @@ def cordon_holder(node, jobs):
     """Which Homestead job holds this host's cordon, from the marks the jobs
     write (homestead_cordon.holders): {"job", "kind", "title", "running"}, a
     running holder first; job "" when its job is no longer in the list, title
-    "" when the job has none (never its raw kind). None when the
+    "" when the job has none (never its raw kind). A maintenance's job that
+    ended when its maintenance opened is left out while that maintenance is
+    open: the page shows the maintenance. None when the
     host is not cordoned, carries no Homestead mark (a person's own cordon, or
     another tool's), or the job list (jobs None) could not be read."""
     if jobs is None or not (node.get("spec") or {}).get("unschedulable"):
@@ -362,10 +365,26 @@ def cordon_holder(node, jobs):
         item = next((j for j in jobs if (kind == CORDON.PERSON_KIND or j.get("kind") == kind) and (
             str(j.get("id")) == ident or kind == "cluster-shutdown" and str((j.get("ref") or {}).get("run")) == ident)), None)
         running = bool(item) and kind != CORDON.PERSON_KIND and item.get("status") not in OPS.TERMINAL
+        if not running and _maintenance_job(kind, ident, item, node):
+            continue    # the host shows its maintenance, which End gives back
         found.append({"job": str(item["id"]) if item else "", "kind": (item or {}).get("kind") or kind,
                       "title": (item or {}).get("title") or "", "running": running})
     running, known = [f for f in found if f["running"]], [f for f in found if f["job"]]
     return (running or known or found or [None])[0]
+
+
+def _maintenance_job(kind, ident, item, node):
+    """Whether this ended (or pruned) job is the maintenance still open on the
+    host: its job ends when the maintenance opens, and its cordon is held
+    until End. A history that cannot be read counts as open, so the page
+    never says to uncordon a host that may still be in maintenance."""
+    if kind != "node-power" or (item and (item.get("ref") or {}).get("action") != "maintenance"):
+        return False
+    try:
+        event = HISTORY.declared_for((node.get("metadata") or {}).get("name"), strict=True)
+    except Exception:
+        return True
+    return bool(event) and str(event.get("op")) == ident
 
 
 def get_nodes(pods=None, vols=None):
