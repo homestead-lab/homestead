@@ -81,12 +81,20 @@ class IconCacheTests(unittest.TestCase):
     def test_cached_icon_requests_are_release_versioned(self):
         # core.js and its parts (#911): the icon loader and the repaints that call it.
         core = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "web" / "js").glob("core*.js")))
-        self.assertIn('icon.startsWith("/api/icons/")', core)
+        self.assertIn('ICON_PATH.test(icon)', core)
         self.assertIn('fetch(url, { credentials: "same-origin" })', core)
         self.assertIn("URL.createObjectURL(blob)", core)
         self.assertIn("loadAppIcons(host)", core)
         self.assertIn('img.addEventListener("load", loaded', core)
         self.assertIn('img.addEventListener("error", failed', core)
+
+    def test_the_page_draws_pictures_inside_a_value_of_the_types_the_server_allows(self):
+        import re
+        core = (ROOT / "web" / "js" / "core.js").read_text(encoding="utf-8")
+        found = re.search(r"const ICON_DATA = /\^data:\((.+?)\);base64", core)
+        self.assertIsNotNone(found, "core.js names the picture types appAvatar draws")
+        page = {part.replace("\\", "") for part in found.group(1).split("|")}
+        self.assertEqual(set(icons.MIME_EXTENSIONS), page)
 
     def test_only_content_addressed_icon_route_is_public(self):
         self.assertTrue(server.WEB_PATHS.is_public_path("/api/icons/" + "a" * 64 + ".png"))

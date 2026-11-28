@@ -53,7 +53,7 @@ function renderHelm() {
     ${rows.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack" data-sort="helm"><thead><tr>
       <th>Release</th><th>Chart</th><th>App</th><th>Status</th><th>Revision</th><th data-nosort>Updated</th><th data-nosort></th></tr></thead><tbody>
       ${rows.map(r => `<tr>
-        <td><div class="row nowrap" style="gap:9px">${appAvatar(r.name, r.icon && /^https:/.test(r.icon) ? r.icon : "")}<div><b>${esc(r.name)}</b>
+        <td><div class="row nowrap" style="gap:9px">${appAvatar(r.name, r.icon && /^https:/.test(r.icon) ? r.icon : "", "", { remote: true })}<div><b>${esc(r.name)}</b>
           ${HELM_MANAGED[r.managed] ? UI.chip(HELM_MANAGED[r.managed][0], HELM_MANAGED[r.managed][1], { tip: HELM_MANAGED[r.managed][2] }) : ""}
           <div class="dim xs mono">${esc(r.namespace)}</div></div></div></td>
         <td data-label="Chart" class="mono small">${esc(r.chart)}${r.chart_version ? `-${esc(r.chart_version)}` : ""}</td>
