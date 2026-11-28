@@ -10,9 +10,9 @@ function load() {
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const listeners = {};
   const c = { console, esc, jsq: s => esc(JSON.stringify(String(s))), jsArg: s => JSON.stringify(String(s ?? "")), icon: n => `<i data-icon="${n}"></i>`,
-    document: { getElementById: () => null, addEventListener: (t, f) => { listeners[t] = f; }, querySelector: () => null },
-    STATE: { data: {} }, location: { search: "" }, URLSearchParams, JSON, Date, Math, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {}, Element: class {} };
-  c.window = c; c.addEventListener = () => {}; c.$ = () => null; c.$$ = () => [];
+    document: { getElementById: () => null, addEventListener: (t, f) => { (listeners[t] ||= []).push(f); }, querySelector: () => null, querySelectorAll: () => [] },
+    STATE: { data: {} }, location: { search: "" }, URLSearchParams, JSON, Date, Math, performance, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {}, Element: class {} };
+  c.window = c; c.addEventListener = () => {}; c.$ = () => null; c.$$ = () => []; c.listeners = new Proxy({}, { get: (_, t) => e => (listeners[t] || []).forEach(f => f(e)) });
   vm.createContext(c);
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/core-tooltips-sort.js", "utf8"), c);
@@ -83,4 +83,49 @@ test("a card shown for an app on a linked cluster carries that cluster, so its l
   owner.closest = closest;
   c.showCard(owner);
   assert.equal(made.dataset.cluster, undefined, "one on this cluster leaves it off");
+});
+
+// An element as the touch code reads it: a button or a plain chip, with or without a card.
+const touchable = (c, { card, tip, button }) => {
+  const el = Object.assign(Object.create(c.Element.prototype), { dataset: card ? { card } : {}, isConnected: true });
+  el.closest = sel => (sel === "[data-card]" && card) || (sel === "[data-tip],[title]" && tip) || (sel.startsWith("button") && button) ? el : null;
+  el.contains = node => node === el;
+  return el;
+};
+const touch = target => ({ pointerType: "touch", target, clientX: 10, clientY: 10 });
+
+test("on a phone, a tap on a button runs it with no tooltip naming it, and a tap on a plain status shows its tooltip", () => {
+  const c = load();
+  const shown = [];
+  c.showTooltip = owner => shown.push(owner);
+  c.listeners.pointerdown(touch(touchable(c, { tip: true, button: true })));
+  assert.deepEqual(shown, [], "the menu button's tooltip would cover the menu it opens");
+  const status = touchable(c, { tip: true });
+  c.listeners.pointerdown(touch(status));
+  assert.deepEqual(shown, [status]);
+  c.listeners.focusin({ target: status });
+  assert.equal(shown.length, 1, "the focus that follows a tap shows nothing more");
+});
+
+test("on a phone, a tap on a status shows its card at once, and a press and hold on a name shows its card instead of opening it", () => {
+  const c = load();
+  const timers = [], cards = [];
+  c.setTimeout = f => timers.push(f);
+  c.HOVER_CARDS.app = () => "<b>card</b>";
+  c.showCard = owner => { cards.push(owner); return true; };
+  const chip = touchable(c, { card: "app|a" });
+  c.listeners.pointerdown(touch(chip));
+  assert.deepEqual(cards, [chip], "a status that does nothing else opens its card on a tap");
+
+  const name = touchable(c, { card: "app|b", button: true });
+  c.listeners.pointerdown(touch(name));
+  assert.equal(cards.length, 1, "a tap on a name still opens the name's page");
+  timers.pop()();
+  assert.deepEqual(cards, [chip, name], "held long enough, the name shows its card");
+  const click = { target: name, composedPath: () => [name], prevented: 0, preventDefault() { this.prevented++; }, stopImmediatePropagation() { this.prevented++; } };
+  c.listeners.click(click);
+  assert.equal(click.prevented, 2, "the lift that ends the hold does not open the page too");
+  const next = { target: name, composedPath: () => [name], prevented: 0, preventDefault() { this.prevented++; }, stopImmediatePropagation() {} };
+  c.listeners.click(next);
+  assert.equal(next.prevented, 0, "the next tap opens it");
 });

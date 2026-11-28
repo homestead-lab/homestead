@@ -1782,7 +1782,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .voltable td[data-label="Last used"]{order:4}
   .voltable td[data-label="Attached to"]{order:5;flex:0 1 auto;flex-wrap:wrap}
   .voltable .ui-reason.under{margin:0;max-width:none}
-  .voltable tr.vol-problem>td:first-child{box-shadow:none}
+  .voltable tr.vol-problem:is(.bad,.warn)>td:first-child{box-shadow:none}
   .voltable tr.vol-problem.bad{box-shadow:inset 3px 0 0 var(--crit)}
   .voltable tr.vol-problem.warn{box-shadow:inset 3px 0 0 var(--med)}
   .voltable .volusage{order:7;flex:1 1 100%;min-width:0}
@@ -2263,6 +2263,14 @@ div.ipam-line.dim{display:block}
 /* A VM in trouble colours its row's edge, as an app's does; its name opens the details sidebar. */
 .vm-table tr.vm-problem.bad>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
 .vm-table tr.vm-problem.warn>td:first-child{box-shadow:inset 3px 0 0 var(--med)}
+/* On a phone each row is a card, and its first cell no longer starts at its edge,
+   so the coloured edge moves from that cell to the card, as Volumes and Containers do. */
+@media(max-width:560px){
+  .protect-table tr.protect-problem:is(.bad,.warn)>td:first-child,.schedules-table tr.protect-problem:is(.bad,.warn)>td:first-child,
+  .sharetable tr.share-problem:is(.bad,.warn)>td:first-child,.vm-table tr.vm-problem:is(.bad,.warn)>td:first-child{box-shadow:none}
+  .protect-table tr.protect-problem.bad,.schedules-table tr.protect-problem.bad,.sharetable tr.share-problem.bad,.vm-table tr.vm-problem.bad{box-shadow:inset 3px 0 0 var(--crit)}
+  .protect-table tr.protect-problem.warn,.schedules-table tr.protect-problem.warn,.sharetable tr.share-problem.warn,.vm-table tr.vm-problem.warn{box-shadow:inset 3px 0 0 var(--med)}
+}
 .vm-open{padding:0;color:var(--tx);font-weight:650;text-align:left;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .vm-table .vm-state{margin-right:6px}
 .vm-table .vm-actions{flex-wrap:nowrap}
@@ -4336,6 +4344,8 @@ html[data-motion="off"] .details-panel{transition:none}
 .uicard{position:fixed;z-index:10000;width:min(320px,calc(100vw - 20px));padding:13px 14px 11px;border:1px solid var(--line2);border-radius:12px;
   background:rgba(20,20,23,.98);box-shadow:0 16px 45px rgba(0,0,0,.6);backdrop-filter:blur(20px);color:var(--tx);font-size:12.5px;line-height:1.45}
 .uicard[hidden]{display:none}
+/* On a phone, a press and hold on a name shows its card, not a text selection or the browser's menu. */
+@media(hover:none){[data-card]{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}}
 .ui-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
 .ui-card-head b{font-size:13.5px}
 .ui-card-chart{margin:2px 0 9px}

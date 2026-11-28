@@ -288,8 +288,12 @@ icons, a small chart (`UI.spark`) or uptime strip (`UI.strip`) where the trend
 matters, and one link to the next step (`UI.card`). The element is marked
 `data-card="kind|key"` and the page registers `HOVER_CARDS[kind] = (key,
 element) => UI.card(...)`, so the card is built when the pointer arrives,
-never for every row. It opens after a short pause, at once on keyboard focus
-or a tap, and stays while the pointer is over it. A card never holds the
+never for every row. It opens after a short pause, at once on keyboard focus,
+and stays while the pointer is over it. A phone has no hover: a tap on an
+element that does nothing else opens its card at once, and a tap on a name or
+row that opens something still opens it, so there a press and hold opens the
+card. A card or tooltip opened by a tap stays until the next tap elsewhere. A
+tap on a button never shows the tooltip that names it. A card never holds the
 only way to act: its link leads somewhere the page or the details sidebar
 also reaches. With no card to build, the element's plain tooltip
 (`data-tip`) stands.
