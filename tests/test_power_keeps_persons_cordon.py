@@ -16,6 +16,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_auth as AUTH
+import homestead_changes as CHANGES
 import homestead_cordon as CORDON
 import homestead_history as HISTORY
 import homestead_host_maintenance as HM
@@ -33,6 +35,9 @@ DRAINED = {"evicted": [], "skipped": []}
 
 class PersonsCordonTests(Case):
     def setUp(self):
+        # The account store and change-author key the tests fill go back when each ends (CacheRatchet).
+        self.enterContext(mock.patch.dict(AUTH._store_cache, {"at": 0, "data": None}, clear=True))
+        self.enterContext(mock.patch.dict(CHANGES._known, clear=True))
         super().setUp()
         # What the drain and the recheck read is not what these tests are about.
         self.enterContext(mock.patch.object(POWER, "recheck_after_drain", lambda plan: None))
@@ -244,6 +249,9 @@ class HeldRestartTests(MAINTENANCE_TESTS.Case):
     objects = MAINTENANCE_TESTS.ExtendAndEndTests.objects
 
     def setUp(self):
+        # The account store and change-author key the tests fill go back when each ends (CacheRatchet).
+        self.enterContext(mock.patch.dict(AUTH._store_cache, {"at": 0, "data": None}, clear=True))
+        self.enterContext(mock.patch.dict(CHANGES._known, clear=True))
         super().setUp()
         for target, name, value in ((POWER, "power_enabled", lambda: True), (LC, "NODE_POWER_ENABLED", True),
                                     (POWER, "recheck_after_drain", lambda plan: None)):

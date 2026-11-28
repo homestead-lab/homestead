@@ -7,6 +7,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_auth as AUTH
+import homestead_changes as CHANGES
 import homestead_alerts as ALERTS
 import homestead_fetch as FETCH
 import homestead_history as HISTORY
@@ -38,6 +40,9 @@ class CanaryStopShown(unittest.TestCase):
     goes first as the canary; a degraded alert raised in its soak stops the run."""
 
     def setUp(self):
+        # The account store and change-author key the tests fill go back when each ends (CacheRatchet).
+        self.enterContext(mock.patch.dict(AUTH._store_cache, {"at": 0, "data": None}, clear=True))
+        self.enterContext(mock.patch.dict(CHANGES._known, clear=True))
         keep_bound(self, ROLLOUT)
         keep_bound(self, CANARY)
         keep_bound(self, ALERTS)
