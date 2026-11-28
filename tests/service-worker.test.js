@@ -153,3 +153,75 @@ test("summaries prioritize critical conditions and bound lock-screen text",async
  const sw=worker({pending:answer({alerts})});await sw.fire("push");
  assert.match(sw.shown[0].body,/^Critical disk/);assert.ok(sw.shown[0].body.length<=300);assert.equal(sw.shown[0].data.href,"/settings?tab=device");
 });
+
+/* A stand-in for one Cache: requests kept by their full URL, as the browser keys them. */
+function store(urls) {
+  const kept = new Map(urls.map(url => [url, "old"]));
+  const key = request => typeof request === "string" ? new URL(request, "https://home.example.com/").href : request.url;
+  return {
+    kept,
+    keys: async () => [...kept.keys()].map(url => new Request(url)),
+    delete: async request => kept.delete(key(request)),
+    put: async (request, response) => { kept.set(key(request), response); },
+    match: async request => kept.get(key(request)),
+    add: async () => {},
+  };
+}
+
+/* Loads web/sw.js with one cache, then makes a page load that the server answers with html. */
+async function navigate(cache, html, { ok = true, type = "basic", contentType = "text/html; charset=utf-8", offline = false } = {}) {
+  const handlers = {};
+  const self = { location: new URL("https://home.example.com/"), addEventListener: (type, fn) => { handlers[type] = fn; },
+    registration: {}, clients: { claim: async () => {} }, skipWaiting: async () => {}, navigator: {} };
+  const page = () => ({ ok, type, status: ok ? 200 : 500, headers: new Headers({ "Content-Type": contentType }), clone: page, text: async () => html });
+  const context = { self, URL, Response, Request, Headers, Promise, JSON, atob, Uint8Array,
+    caches: { open: async () => cache, keys: async () => [], match: async request => cache.match(request) },
+    fetch: async () => { if (offline) throw new TypeError("Failed to fetch"); return page(); } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "web", "sw.js"), "utf8"), context);
+  const pending = [];
+  let answered;
+  handlers.fetch({ request: { method: "GET", mode: "navigate", url: "https://home.example.com/settings" },
+    respondWith: p => { answered = p; }, waitUntil: p => { pending.push(p); } });
+  await answered.catch(() => {});
+  await Promise.all(pending);
+  for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+  return [...cache.kept.keys()].map(url => url.replace("https://home.example.com", "")).sort();
+}
+
+/* The release this sw.js says, as bump_version.py writes it. */
+const RELEASE = /const VERSION = "([^"]+)"/.exec(fs.readFileSync(path.join(__dirname, "..", "web", "sw.js"), "utf8"))[1];
+
+test("a page load keeps only the files of the build that page names", async () => {
+  const cache = store([
+    `https://home.example.com/assets/homestead-mark.svg?v=${RELEASE}`,
+    "https://home.example.com/js/core.js?v=c111111111111", "https://home.example.com/style.css?v=c111111111111",
+    "https://home.example.com/vendor/@c111111111111/xterm/xterm.js",
+    "https://home.example.com/js/core.js?v=c222222222222", "https://home.example.com/vendor/@c222222222222/xterm/xterm.js",
+    "https://home.example.com/icons/icon-192.png", "https://home.example.com/vendor/fonts/Inter.0123456789.woff2",
+  ]);
+  const left = await navigate(cache, '<script src="/js/core.js?v=c222222222222"></script>');
+  // The sign-in mark is named by the release even on other builds (auth.js), so it stays.
+  assert.deepEqual(left, ["/", `/assets/homestead-mark.svg?v=${RELEASE}`, "/icons/icon-192.png", "/js/core.js?v=c222222222222",
+    "/vendor/@c222222222222/xterm/xterm.js", "/vendor/fonts/Inter.0123456789.woff2"]);
+});
+
+test("a page that names no build leaves the cache as it was", async () => {
+  const cache = store(["https://home.example.com/js/core.js?v=c111111111111"]);
+  const left = await navigate(cache, "<p>Signing in</p>");
+  assert.deepEqual(left, ["/", "/js/core.js?v=c111111111111"]);
+});
+
+test("only an html page is read for its build", async () => {
+  const cache = store(["https://home.example.com/js/core.js?v=c111111111111"]);
+  const left = await navigate(cache, '<script src="/js/core.js?v=c222222222222"></script>', { contentType: "text/plain" });
+  assert.deepEqual(left, ["/", "/js/core.js?v=c111111111111"]);
+});
+
+test("a failed, offline or other-site page load leaves the cache as it was", async () => {
+  const html = '<script src="/js/core.js?v=c222222222222"></script>';
+  for (const how of [{ ok: false }, { type: "opaqueredirect" }, { offline: true }]) {
+    const cache = store(["https://home.example.com/js/core.js?v=c111111111111"]);
+    const left = await navigate(cache, html, how);
+    assert.deepEqual(left, ["/js/core.js?v=c111111111111"], JSON.stringify(how));
+  }
+});
