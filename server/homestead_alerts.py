@@ -4,6 +4,7 @@ Acknowledgement suppresses the observed baseline, never the underlying health
 finding. New signals, higher severity or worse measurements re-arm an incident.
 Source failures retain prior observations; only confirmed absence resolves it.
 """
+import bisect
 import hashlib
 import http.client
 import json
@@ -645,11 +646,56 @@ def _apply(index, text, kept):
     return pattern.sub(replace, text)
 
 
+# The rules read at most this many characters of an error, once it is one
+# line: the first rule's time grows with the square of a run of joined words
+# (measured: about 20 seconds at 100,000 characters), and at this length
+# the slowest text found takes under 10 ms a pass. A real error from the API server
+# or Longhorn is a few hundred characters, and at most 240 are shown.
+_HEAD = 2000
+_OPENER = re.compile(r"\b(?:host|server|address)=['\"]", re.I)    # where the second rule starts a match
+_BEARER = re.compile(r"bearer$", re.I)                            # a word the sixth rule may join to the next
+
+
+def _head(text):
+    """text (one line, one space between words) and whether it was cut: when
+    longer than _HEAD, its longest start of at most _HEAD characters that
+    ends before a space, so every rule sees whole words, shortened while its
+    last word ends in "bearer" (_PLAIN's sixth rule reads the word after it)
+    or a quote the second rule may open (host=") is not followed by a quote
+    that stays for it to close on (one in a word without "://", which the
+    first rule may take). What _hidden_more reads past a space (a quoted or
+    bracketed value, a header's or block's value) runs to the end of the
+    head. So every character the head's text shows, the whole text's shows
+    at the same place (tests: LongTextTests)."""
+    if len(text) <= _HEAD:
+        return text, False
+    end = max(text.rfind(" ", 0, _HEAD + 1), 0)
+    closers = [word.start() + at for word in _WORD.finditer(text, 0, end) if "://" not in word.group(0)
+               for at, char in enumerate(word.group(0)) if char in "'\""]
+    openers = [(m.start(), m.end() - 1) for m in _OPENER.finditer(text, 0, end)]
+    quotes = [quote for _, quote in openers]
+    while end:
+        word = text.rfind(" ", 0, end) + 1
+        if _BEARER.search(text, word, end):
+            end = max(word - 1, 0)
+            continue
+        before = bisect.bisect_left(closers, end)
+        last = closers[before - 1] if before else -1
+        first = bisect.bisect_left(quotes, last)         # the first opener with no closer after its quote
+        if first < len(openers) and openers[first][0] < end:
+            end = max(text.rfind(" ", 0, openers[first][0]), 0)
+            continue
+        break
+    return text[:end], True
+
+
 def plain_error(text, limit=160):
     """An error as it may go to a notification channel: one short line,
     addresses, URLs and token-shaped strings replaced, cut at limit; a
-    Longhorn volume's name and Homestead's API groups kept (above)."""
-    text = " ".join(str(text or "").split())
+    Longhorn volume's name and Homestead's API groups kept (above). Of a
+    text longer than _HEAD characters only its head is read (_head), and
+    " …" says so."""
+    text, cut = _head(" ".join(str(text or "").split()))
     slotted, kept = _SLOTS.sub("\ufffd", text), []
     for index in range(len(_PLAIN)):
         slotted = _apply(index, slotted, kept)
@@ -663,6 +709,8 @@ def plain_error(text, limit=160):
         plain = _hidden_more(plain)
         if kept and _SLOTS.sub(lambda m: kept[ord(m.group(0)) - 0xe000][1], slotted) == plain:
             plain = _SLOTS.sub(lambda m: kept[ord(m.group(0)) - 0xe000][0], slotted)
+    if cut:
+        plain = f"{plain} …".lstrip()
     return plain if len(plain) <= limit else plain[:limit - 1] + "…"
 
 

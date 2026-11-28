@@ -524,15 +524,17 @@ class SecretsStayHiddenTests(unittest.TestCase):
     def test_the_whole_call_stays_within_about_twice_dev_s_time(self):
         """Dev's work is _PLAIN's rules, then _hidden_more. With a name set
         aside the branch does that twice, once on the text with names set
-        aside and once as dev does, then compares; with none, once. On
-        100,000 characters: under four times dev's time, with room for a
-        busy machine."""
+        aside and once as dev does, then compares; with none, once. Each
+        text here is 100,000 characters, of which the rules read only the
+        head (about 2,000, LongTextTests): so this guards that with a name
+        kept the second pass on a text at the cap stays within four times
+        dev's work on it plus 50 ms, not the ratio on the whole text."""
         import time
         for text in (('"longhorn.io"' + " ") * 7142, (VOLUME + " ") * 2439, ('"kube.example.com"' + " ") * 5263,
                      ("x" * 30 + "1 ") * 3225, "pvc-" * 25000, "\ue000" * 100000):
             with self.subTest(text=text[:20]):
                 start = time.perf_counter()
-                plain = " ".join(text.split())
+                plain = ALERTS._head(" ".join(text.split()))[0]
                 for pattern, word in ALERTS._PLAIN:
                     plain = pattern.sub(word, plain)
                 ALERTS._hidden_more(plain)
@@ -607,6 +609,157 @@ class NamesAreKeptTests(unittest.TestCase):
                 quoted = re.findall(r"['\"]([^'\"]+)['\"]", raw)[-1]
                 self.assertNotIn(quoted, text)
                 self.assertIn("<address>", text)
+
+
+def filler(length):
+    """Ordinary words, one space between them, ending in a space: exactly length characters."""
+    words = ("abcd " * (length // 5 + 2))[:length - 1]
+    return (words[:-1] + "x" if words.endswith(" ") else words) + " "
+
+
+class LongTextTests(unittest.TestCase):
+    """A text longer than _HEAD characters (once made one line) is made plain
+    from its head only, a start of it that ends before a space, so its time
+    is bounded; " …" says it was cut. Every character the head's output
+    shows, the whole text's output shows at the same place (dev's rules on
+    the whole text, by outcomes() above), or it is in a kept name."""
+
+    # What a rule reads across a space, or what a value hides to its end.
+    ACROSS = [
+        'host="kube example com" next', "server='a b c' next", 'ADDRESS="x y z" next',
+        "host=\"a server='" + "kube.example.com" + "' b\" end",      # a closed match inside an open one
+        'host="a b c://x"y d" end', "host=\"a b c://x'y d\" end",     # the first rule takes a quote
+        'host="a b" c" end', "x-host='a b' end", "pass" + "word=b'" + "two words' next",
+        "pass" + "word = b'" + "two words' next", "token: [[a, b], c] next",
+        "Bearer " + "s3cr" + "3tvalue next", "Bearer Bearer " + "s3cr" + "3t next", "x.Bearer " + "s3cr" + "3t",
+        "bearer " + "s3cr" + "3t next",
+        "Authorization: Basic " + "dXNl" + "cjpw" + " and more words", "Authorization: Custom a b c",
+        'password="hunter two three" next', "token: [a, b, c] next", "secret: | a b c", "secret: >- a b",
+        '\\"password\\": \\"hunter two\\" next', "Cookie: a=b; c=d; e=f", "token=a; b=c; d=e",
+        "spec.token: Invalid value: hunter two", 'password=abc"hunter two" next', "pass" + "word : hunter next",
+        "dial ann:hunter@db.example.com failed", VOLUME + " " + SECRET + " " + VOLUME,
+        '"longhorn.io" password=' + "hunter" + ' "longhorn.io"',
+    ]
+
+    def check(self, raw):
+        """Fails unless plain_error(raw) is the head's output and " …", and
+        the head shows nothing the whole text hides. Returns the head."""
+        text = " ".join(raw.split())
+        head, cut = ALERTS._head(text)
+        self.assertEqual(len(text) > ALERTS._HEAD, cut)
+        if not cut:
+            self.assertEqual(text, head)
+            return head
+        self.assertLessEqual(len(head), ALERTS._HEAD)
+        self.assertEqual(text[:len(head)], head)
+        self.assertTrue(head == "" or text[len(head)] == " ", "the head ends before a space")
+        self.assertEqual(f"{ALERTS.plain_error(head, limit=10 ** 7)} …".lstrip(), ALERTS.plain_error(raw, limit=10 ** 7))
+        for limit in (160, 240):
+            out = ALERTS.plain_error(raw, limit=limit)
+            self.assertLessEqual(len(out), limit)
+        self.assertEqual([], self.shows(text, head), raw[len(head) - 40:len(head) + 60])
+        return head
+
+    @staticmethod
+    def shows(text, head):
+        """The characters the head's output shows that the whole text's does
+        not (dev's rules on the whole text), kept names aside. The plain pass
+        on the head (dev's rules, which plain_error returns when nothing is
+        kept or its check fails) is always compared; the pass with names set
+        aside only when it is what plain_error returns (as fault() does)."""
+        dev = outcomes(text)[1]
+        dev_out, plain, named, marked, branch, kept_at, _ = outcomes(head)
+        shown = plain - dev
+        out = ALERTS.plain_error(head, limit=10 ** 7)
+        if out != dev_out:
+            if out != named or marked != dev_out:
+                return [f"output {out!r} is neither pass"]
+            shown |= branch - dev - kept_at
+        return [text[i] for i in sorted(shown)]
+
+    def test_a_text_up_to_the_cap_is_not_cut(self):
+        self.assertGreaterEqual(ALERTS._HEAD, 1000)             # well above a real error and the 240 shown
+        for raw in ("x" * ALERTS._HEAD, filler(ALERTS._HEAD + 1).strip(), "  " + "a b " * 500):
+            with self.subTest(raw=raw[:20]):
+                self.assertEqual(raw.split(), self.check(raw).split())
+                self.assertNotIn("…", ALERTS.plain_error(raw, limit=10 ** 7))
+
+    def test_a_kept_name_near_the_start_of_a_long_text_is_kept(self):
+        """The cut comes before names are set aside, and both passes read the
+        same head: a kept name in it stays in the output."""
+        raw = (f'volumes.longhorn.io "{VOLUME}" is forbidden in API group "longhorn.io": '
+               + filler(3 * ALERTS._HEAD))
+        self.check(raw)
+        for limit in (160, 240):
+            said = ALERTS.plain_error(raw, limit=limit)
+            self.assertIn(f'"{VOLUME}"', said)
+            self.assertIn('API group "longhorn.io"', said)
+            self.assertTrue(said.endswith("…"), said)
+
+    def test_what_crosses_the_cut_stays_hidden(self):
+        """Each text above and each of _PLAIN's secrets, placed so the cut
+        falls at every character of it and just around it."""
+        naive = 0
+        texts = self.ACROSS + SecretsStayHiddenTests.HIDDEN
+        for secret in texts:
+            for into in range(-2, len(secret) + 2):
+                raw = filler(ALERTS._HEAD - into) + secret + " tail" * 20
+                with self.subTest(secret=secret[:30], into=into):
+                    self.check(raw)
+                text = " ".join(raw.split())
+                if self.shows(text, text[:max(text.rfind(" ", 0, ALERTS._HEAD + 1), 0)]):
+                    naive += 1
+        # A cut back to the last space alone shows what the whole text hides
+        # (the address rule's quotes, Bearer): these texts reach that.
+        # 95 of 2855 when written.
+        self.assertGreaterEqual(naive, 50)
+
+    def test_generated_long_texts_show_nothing_the_whole_text_hides(self):
+        """400 texts of 2,000 to 2,400 characters of the generated test's
+        pieces, seeded, so repeatable."""
+        import random
+        rng = random.Random(1495)
+        pieces = (self.ACROSS + SecretsStayHiddenTests.HIDDEN + list(NamesAreKeptTests.PLAIN)
+                  + ["Bearer", "host=", "server='", 'address="', '"', "'", "://", "x://", "[", "|", "Cookie:",
+                     "Authorization:", "token:", "password=", "<hidden>", VOLUME, '"longhorn.io"', "\ue000", "word"])
+        cut = shortened = 0
+        for _ in range(400):
+            size, parts = rng.randint(ALERTS._HEAD, ALERTS._HEAD + 400), []
+            while sum(map(len, parts)) < size:
+                parts.append(rng.choice(pieces) + rng.choice([" ", " ", "", "-", ".", ":", "=", '"', "'"]))
+            raw = "".join(parts)
+            text = " ".join(raw.split())
+            with self.subTest(raw=raw[-60:]):
+                head = self.check(raw)
+                cut += len(head) < len(text)
+                shortened += len(head) < text.rfind(" ", 0, ALERTS._HEAD + 1)
+        # Every text is cut; some heads end before the last space in reach
+        # (an open host=" or a Bearer). Seeded: 400 and 59 when written.
+        self.assertGreaterEqual(cut, 350)
+        self.assertGreaterEqual(shortened, 25)
+
+    def test_a_long_text_is_made_plain_quickly(self):
+        """Joined words make the first rule's time grow with the square of
+        their length: 100,000 characters took about 20 seconds, 1,000,000
+        would take about a hundred times that. Now under a second; also with
+        a name kept (two passes on the head), and as an HTTP reason of the
+        most http.client reads (65,536 bytes)."""
+        import time
+        for size in (10 ** 5, 10 ** 6):
+            for unit in ("a.", "a-", "pvc-", "eyJ.", "a1-", "a." * 999 + " "):
+                raw = (unit * (size // len(unit) + 1))[:size]
+                start = time.perf_counter()
+                ALERTS.plain_error(raw)
+                self.assertLess(time.perf_counter() - start, 1.0, (unit[:8], size))
+        raw = f"volume {VOLUME} " + ("a." * 999 + " ") * 500
+        start = time.perf_counter()
+        said = ALERTS.plain_error(raw, limit=10 ** 7)
+        self.assertLess(time.perf_counter() - start, 1.0)
+        self.assertTrue(said.startswith(f"volume {VOLUME} "), said[:80])
+        start = time.perf_counter()
+        said = ALERTS.read_failure(urllib.error.HTTPError("https://example.com/x", 500, "a." * 32768, {}, None))
+        self.assertLess(time.perf_counter() - start, 1.0)
+        self.assertTrue(said.startswith("the cluster's API answered 500"), said)
 
 
 if __name__ == "__main__":
