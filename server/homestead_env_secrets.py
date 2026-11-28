@@ -224,6 +224,45 @@ def removed(current, proposed, data, masked=()):
     return out
 
 
+def missing(dep, data):
+    """The variables of dep that refer to a key of its own Secret that data
+    (held_or_unknown()) does not hold, {"key", "container", "name"} each: for
+    an undo, whose settings from before may name a value a save deleted since
+    (removed()). Kubernetes starts no container whose Secret key is missing;
+    one marked optional is left out. None when data is None (could not check)
+    and dep refers to at least one key of it: one that uses none needs no read."""
+    name = own(dep)
+    spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
+    refs = [{"key": ref.get("key"), "container": container.get("name"), "name": item.get("name")}
+            for container in (spec.get("containers") or []) + (spec.get("initContainers") or [])
+            for item in container.get("env") or []
+            for ref in [(item.get("valueFrom") or {}).get("secretKeyRef") or {}]
+            if name and ref.get("name") == name and not ref.get("optional")]
+    if not refs:
+        return []
+    if data is None:
+        return None
+    return [r for r in refs if r["key"] not in data]
+
+
+def refuse_missing(ns, current, proposed, read):
+    """Refuse an undo whose settings (proposed) refer to values the app's
+    Secret no longer holds, naming them as the Edit review names the values a
+    save deletes; or when the Secret could not be read, as that review does."""
+    gone = missing(proposed, held_or_unknown(ns, current, read))
+    if gone is None:
+        raise ValueError("Homestead could not read this app's Secret. It cannot check the values "
+                         "those settings use. Nothing was changed: try again.")
+    if gone:
+        several = len({v["container"] for v in gone}) > 1
+        names = [f"{v['name']} ({v['container']})" if several else v["name"] for v in gone]
+        shown = ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+        # Counted by variable, as the Edit review counts them: two may share one key.
+        count = "1 variable whose value" if len(gone) == 1 else f"{len(gone)} variables whose values"
+        raise ValueError(f"those settings use {count} this app's Secret no longer holds. "
+                         f"Homestead cannot restore {'it' if len(gone) == 1 else 'them'}: {shown}.")
+
+
 def _decoded(encoded):
     try:
         return base64.b64decode(encoded).decode("utf-8")
