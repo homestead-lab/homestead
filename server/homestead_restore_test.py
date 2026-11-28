@@ -498,7 +498,7 @@ def start_test(ns, name, why="Test now", unless=()):
     forget_plans()
     return OPS.start(KIND, f"Restore test of {name}",
                      {"kind": "Deployment", "name": name, "namespace": ns},
-                     "/data-protection#restore-tests", {"namespace": ns, "name": name, "phase": "plan", "why": why},
+                     "/data-protection/restore-tests", {"namespace": ns, "name": name, "phase": "plan", "why": why},
                      "Finding each volume's newest backup", unless=unless)
 
 

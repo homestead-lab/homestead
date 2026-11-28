@@ -63,7 +63,7 @@ class TrimHealthTests(unittest.TestCase):
         with mock.patch.object(ALERTS.HISTORY, "maintenance_view", return_value=(set(), set(), {"open": {}, "ran_out": {}, "ending": {}})):
             facts = ALERTS.health_facts({"health_issues": [{"kind": "Trim", "name": "data-c", "severity": "degraded",
                                                             "reason": "x"}]})
-        self.assertEqual(("Weekly trim failed: data-c", "Weekly trim worked again: data-c", "/data-protection#housekeeping"),
+        self.assertEqual(("Weekly trim failed: data-c", "Weekly trim worked again: data-c", "/data-protection/settings#housekeeping"),
                          (facts[0]["title"], facts[0]["resolved"], facts[0]["href"]))
 
     def test_last_state_reads_the_saved_result_and_is_empty_when_it_cannot(self):

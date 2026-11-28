@@ -373,7 +373,7 @@ def health_facts(overview):
         kind, name, issues = row["kind"], row["name"], row["issues"]
         critical = any(i.get("severity") == "critical" for i in issues)
         href = {"Node": "/nodes", "Disk": "/nodes", "Volume": "/volumes", "Backup": "/data-protection",
-                "Trim": "/data-protection#housekeeping"}.get(kind, "/containers")
+                "Trim": "/data-protection/settings#housekeeping"}.get(kind, "/containers")
         if all(i.get("one_host") for i in issues):
             # Short of hosts, not broken (#841): the offer is in Cluster Health.
             href = "/system/cluster?section=health"
