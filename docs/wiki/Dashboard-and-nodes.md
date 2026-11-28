@@ -253,8 +253,12 @@ From a node you can:
   host page's **Move everything off** clear the marks of a cluster upgrade, a
   cluster shutdown and a Longhorn V2 clean-up on the host. So when a cluster
   shutdown or a V2 clean-up ends, it leaves the host as the person set it. A
-  cluster upgrade that has not ended can still take the host back and uncordon
-  it at its end, when the cordon was made while its upgrade ran on that host;
+  cluster upgrade that fails, is stopped or runs out of time leaves a host
+  cordoned, and names it, once a person has pressed **Cordon host** on it;
+  when that host's own upgrade succeeds, the system upgrade controller
+  uncordons it, as before. After the other actions, a cluster upgrade that has
+  not ended can still take the host back and uncordon it at its end, when the
+  cordon was made while its upgrade ran on that host.
 - open its **Disks** and give a new disk to Longhorn - see [Storage](Storage#disks);
 - run a **SMART self-test** on a drive (short or extended), followed in the job
   tray;
@@ -550,9 +554,13 @@ step is offered once that one is done.
   (`homestead.io/upgrade-cordon`) only when its cordon was made while that
   host's upgrade job ran, and uncordons only a host that still carries the
   mark, is Ready, and has no other host job on it. A host cordoned before
-  the upgrade, or by anyone else, stays as it is; **Cordon host** or **Uncordon host**
-  on the Hosts page clears the mark, but until the upgrade ends it can take back a
-  host cordoned while its upgrade ran there. A host not yet safe is waited
+  the upgrade, or by anyone else, stays as it is. **Cordon host** on the Hosts
+  page makes the cordon a person's: an upgrade that fails, is stopped or runs
+  out of time leaves that host cordoned and names it (when the host's own
+  upgrade succeeds, the system upgrade controller uncordons it, as before).
+  **Uncordon host**, **Move apps off**, **Drain host** and **Move everything
+  off** clear the mark, but until the upgrade ends it can take back a host
+  cordoned while its upgrade ran there. A host not yet safe is waited
   for up to 15 minutes; then the job ends, naming each host left cordoned and
   why. Inspect it and use **Uncordon** once it is safe.
 - **Longhorn, KubeVirt and CDI** that Homestead installed (Settings > Hardware and storage >

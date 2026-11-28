@@ -218,6 +218,9 @@ Homestead also changes and deletes existing objects when you ask:
   the import created only if you tick it in the review;
 - a `Node` when you cordon, drain, label or remove a host, and the Cluster
   API `Machine` behind it, where there is one;
+- a `Node`'s annotation `homestead.io/person-cordon` (when a person last
+  pressed **Cordon host**, so a cluster upgrade's end leaves that cordon) when
+  you cordon a host; uncordoning it through Homestead removes it;
 - a `PersistentVolume`'s reclaim policy and claim while a volume moves to
   another class, and a stuck storage `VolumeAttachment`'s finalizers when a
   dead host is removed;

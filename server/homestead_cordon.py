@@ -56,6 +56,13 @@ BY_MARK_ONLY = ("os-rollout", "cluster-shutdown", "longhorn-v2-cleanup")
 # live and never stale: no job takes it away or uncordons past it.
 PERSON_KIND = "person"
 
+# When a person last pressed Cordon host on the Hosts page (an API timestamp).
+# A cluster upgrade's end never takes back a cordon a person made or took
+# over at or after that cordon's own time (homestead_components._claim).
+# Uncordoning through Homestead removes it; one left by anything else is
+# older than the next cordon, so it holds nothing.
+PERSON_CORDON = NAMES.key("person-cordon")
+
 # cordon() reasons that mean the host was cordoned before this job. Both mean
 # "was cordoned before": the job records that and never releases it. Any other
 # done False from cordon() may follow a write whose reply was lost (applied,

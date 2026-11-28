@@ -57,10 +57,17 @@ def set_cordon(node, unschedulable, take_over=False):
     # Cordon or Uncordon on the Hosts page only: every Homestead job's cordon
     # mark goes too (homestead_cordon), so the page never shows the person's
     # cordon as a job's. A job never takes over: another job's mark stays, and
-    # that job still gives the host back at its end.
+    # that job still gives the host back at its end. A person's Cordon also
+    # records when (CORDON.PERSON_CORDON): a host already cordoned keeps its
+    # taint's time, so without it the upgrade would mark it again; any
+    # uncordon here removes the record.
     marks = (CORDON.MARK, *CORDON.OLD_MARKS) if take_over else (NAMES.key("upgrade-cordon"),)
+    annotations = {key: None for key in marks}
+    if not unschedulable or take_over:
+        annotations[CORDON.PERSON_CORDON] = (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                                             if unschedulable else None)
     L.ksend("PATCH", f"/api/v1/nodes/{node}",
-          {"metadata": {"annotations": {key: None for key in marks}},
+          {"metadata": {"annotations": annotations},
            "spec": {"unschedulable": bool(unschedulable)}},
           ctype="application/merge-patch+json")
     L._bust("nodes", "ov", "node:", "impact:")

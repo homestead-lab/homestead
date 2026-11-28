@@ -793,6 +793,99 @@ class ClusterUpgradeEndTests(unittest.TestCase):
         C.cancel_run(self.item(), {})
         self.assertFalse(self.cordoned("node-1"))
 
+    def press_cordon(self, name):
+        """A person presses Cordon host on the Hosts page, through its route."""
+        import homestead_lifecycle as L
+        from types import SimpleNamespace
+        self.enterContext(mock.patch.object(L, "ksend", K.ksend))
+        self.enterContext(mock.patch.object(L, "_bust", lambda *keys: None))
+        L.ROUTES[("POST", "/api/node/cordon")][1](SimpleNamespace(body={"node": name, "cordon": True}, query={}))
+
+    def test_a_host_a_person_cordons_while_the_upgrade_holds_it_stays_cordoned(self):
+        # The upgrade's cordon step cordons node-1; a person then presses
+        # Cordon on it to keep it out of use. The host is already cordoned, so
+        # its taint, and the taint's time, stay the upgrade's.
+        suc = UpgradeController(self, "node-1", "homestead-agent")
+        suc.start()
+        suc.cordon_step(ago=200)
+        self.press_cordon("node-1")
+        suc.fail(ago=60)
+        message = C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"), "the person's cordon stays")
+        self.assertNotIn(self.MARK, self.node("node-1")["metadata"].get("annotations") or {})
+        self.assertIn("node-1 stays cordoned: a person cordoned it on the Hosts page", message)
+
+    def test_a_host_a_person_cordons_while_the_upgrade_waits_for_it_stays_cordoned(self):
+        # The upgrade's job on node-1 failed and the upgrade ended, marking
+        # node-1. node-1 is not Ready, so the job's pod is still listed
+        # (deleted, but its kubelet has not confirmed it gone), and the
+        # upgrade waits for both.
+        pod = self.upgrade_pod("node-1", 0)
+        pod["metadata"]["deletionTimestamp"] = stamp(60)
+        self.cluster([node("node-1", unschedulable=True, ready=False)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1",
+                         failed=6, conditions=[{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]),
+                     pod)
+        item = self.item()
+        self.assertEqual("running", C.status(item)[0])
+        self.assertEqual("releasing", item["ref"]["phase"])
+        self.assertEqual("op-7", self.node("node-1")["metadata"]["annotations"][self.MARK])
+        self.press_cordon("node-1")
+        # node-1 comes back; its pod goes a round later.
+        self.c.kube.add({**self.node("node-1"), "status": {"conditions": [{"type": "Ready", "status": "True"}]}})
+        self.assertEqual("running", C.status(item)[0])
+        self.c.kube.discard(f"/api/v1/namespaces/{C.SUC_NS}/pods/apply-homestead-server-on-node-1-x1")
+        status, _, message = C.status(item)
+        self.assertEqual("failed", status)
+        self.assertTrue(self.cordoned("node-1"), "the person's cordon stays")
+        self.assertNotIn(self.MARK, self.node("node-1")["metadata"].get("annotations") or {})
+        self.assertIn("node-1 stays cordoned: a person cordoned it on the Hosts page", message)
+
+    def test_a_persons_cordon_from_before_the_upgrades_own_is_no_reason_to_keep_it(self):
+        # A person cordoned node-1 long ago and it was uncordoned since by
+        # something that left the record (kubectl, or a job): the upgrade's
+        # own later cordon is still its own to undo.
+        suc = UpgradeController(self, "node-1", "homestead-agent")
+        self.c.kube.add({**self.node("node-1"), "metadata": {
+            "name": "node-1", "annotations": {"homestead.io/person-cordon": stamp(3600)}}})
+        suc.start()
+        suc.cordon_step(ago=200)
+        suc.fail(ago=60)
+        message = C.cancel_run(self.item(), {})
+        self.assertFalse(self.cordoned("node-1"))
+        self.assertIn("uncordoned node-1", message)
+
+    def test_a_persons_cordon_on_a_taint_with_no_time_is_kept(self):
+        # The taint has no timeAdded, and the upgrade pod's cordon step is
+        # done: with nothing to tell an old record from, the record counts.
+        bare = self.timeless("node-1")
+        bare["metadata"]["annotations"] = {"homestead.io/person-cordon": stamp(10)}
+        self.cluster([bare], job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1),
+                     self.upgrade_pod("node-1", 0))
+        message = C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"), "the person's cordon stays")
+        self.assertNotIn(self.MARK, self.node("node-1")["metadata"].get("annotations") or {})
+        self.assertIn("node-1 stays cordoned: a person cordoned it on the Hosts page", message)
+
+    def person_record_before_the_taint(self, by):
+        """The upgrade's cordon step cordons node-1 (its taint 199 s ago);
+        a person's record says Cordon host was pressed `by` seconds before
+        that taint's time, by Homestead's clock. -> whether node-1 stays cordoned."""
+        suc = UpgradeController(self, "node-1", "homestead-agent")
+        suc.start()
+        suc.cordon_step(ago=200)
+        self.c.kube.add({**self.node("node-1"), "metadata": {
+            "name": "node-1", "annotations": {"homestead.io/person-cordon": stamp(199 + by)}}})
+        suc.fail(ago=60)
+        C.cancel_run(self.item(), {})
+        return self.cordoned("node-1")
+
+    def test_a_person_record_just_inside_the_clock_skew_counts(self):
+        self.assertTrue(self.person_record_before_the_taint(C.CORDON_CLOCK_SKEW - 2))
+
+    def test_a_person_record_just_outside_the_clock_skew_does_not_count(self):
+        self.assertFalse(self.person_record_before_the_taint(C.CORDON_CLOCK_SKEW + 2))
+
     def test_a_v2_clean_up_on_the_host_blocks_its_release(self):
         self.cluster([node("node-1", unschedulable=True)],
                      job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
