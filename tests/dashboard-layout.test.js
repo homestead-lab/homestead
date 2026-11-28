@@ -64,3 +64,15 @@ test("custom cards are optional, independent and bounded",()=>{
  assert.equal(rows[0].format,'html');assert.equal(rows[0].content,'<b>Private</b>');
  assert.equal(rows[1].format,'text');assert.equal(rows[1].title.length,80);assert.equal(rows[1].content.length,16384);
 });
+
+test("a saved layout's Top CPU and Top memory draw their own cards, not a health insight's (2.9.1-dev.4 crashed)",()=>{
+ const before=globalThis.HealthInsights;
+ globalThis.HealthInsights={widget:id=>{throw new Error(`asked for the insight ${id}`);}};
+ try{
+  Object.assign(dashboard.content,{cpu:"<top cpu>",memory:"<top memory>"});
+  assert.equal(dashboard.widgetContent("cpu"),"<top cpu>");
+  assert.equal(dashboard.widgetContent("memory"),"<top memory>");
+  globalThis.HealthInsights={widget:id=>`<insight ${id}>`};
+  assert.equal(dashboard.widgetContent("jobs"),"<insight jobs>","a real insight still goes to HealthInsights");
+ }finally{globalThis.HealthInsights=before;}
+});
