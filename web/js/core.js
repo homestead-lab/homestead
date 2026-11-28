@@ -43,7 +43,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.9.1-dev.4";
+const HOMESTEAD_VERSION = "2.9.1-dev.5";
 const ICON_BLOBS = new Map();
 // The picture of each logo that has arrived: a panel or dialog drawn again sets it at once (#1211).
 const ICON_READY = new Map();
