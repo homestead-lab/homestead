@@ -186,7 +186,6 @@ CACHE_LEAKS = frozenset({
     "test_edit_unread_secret",
     "test_failover",
     "test_fs_freeze",
-    "test_host_list_reads",   # from #1547 (adds it)
     "test_host_maintenance",
     "test_host_move",
     "test_host_move_status_writes",
@@ -197,21 +196,16 @@ CACHE_LEAKS = frozenset({
     "test_move_gives_up",
     "test_node_probe_smart_thread",
     "test_node_probes",
-    "test_os_canary_stop_shown",   # from #1532 (adds it)
-    "test_os_update_install_timeout",   # from #1533 (adds it)
     "test_page_snapshot",
     "test_power_handoff",
-    "test_power_keeps_persons_cordon",   # from #1541 (adds it)
     "test_reclass_legacy_waits",
     "test_restart_moves",
     "test_restore_test_reads",
-    "test_revert_fenced",
     "test_revert_stop",
     "test_review_status_writes",
     "test_self",
     "test_sessions",
     "test_start_order",
-    "test_volume_copy_hold",   # from #1528 (adds it)
     "test_workload_not_ready_age",
     "test_write_gate",
 })
@@ -226,20 +220,16 @@ CACHE_LEAKS = frozenset({
 # merges (WORKFLOW.md, after merge): take its files off these two lists, lower
 # CACHE_PENDING_CEILING, and for a fix take the file off CACHE_LEAKS and lower CACHE_CEILING
 # too; a PR closed unmerged: take its files off everything and lower both.
-CACHE_LEAKS_PENDING = frozenset({
-    "test_revert_fenced",   # from #1570 (fixes it)
-})
-CACHE_LEAKS_ARRIVING = frozenset({
-    "test_host_list_reads",             # from #1547
-    "test_os_canary_stop_shown",        # from #1532
-    "test_os_update_install_timeout",   # from #1533
-    "test_power_keeps_persons_cordon",  # from #1541
-    "test_volume_copy_hold",            # from #1528
-})
+# 28 Nov: all six PRs merged. #1570 fixed test_revert_fenced (it leaves none on dev now), and the
+# five files those PRs added put both caches back in setUp, so all six came off: both lists are empty.
+CACHE_LEAKS_PENDING = frozenset()
+CACHE_LEAKS_ARRIVING = frozenset()
 # The list may only shrink: lower these with it. A new name needs a higher ceiling in the
 # same change, which this check makes visible.
-CACHE_CEILING = 42
-CACHE_PENDING_CEILING = 6
+# 42 -> 36 on 28 Nov: test_revert_fenced (#1570) and the five arriving files are off the list.
+CACHE_CEILING = 36
+# 6 -> 0 on 28 Nov: no open PR of ours adds or fixes a listed file.
+CACHE_PENDING_CEILING = 0
 
 
 class CacheRatchet(unittest.TestCase):

@@ -19,6 +19,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_auth as AUTH
+import homestead_changes as CHANGES
 import homestead_copy_job as flow
 import homestead_kube as K
 import homestead_restructure as restructure
@@ -62,6 +64,9 @@ class Scene(unittest.TestCase):
     and `keep`; before the edit they named `old` and `keep`."""
 
     def setUp(self):
+        # The account store and change-author key the tests fill go back when each ends (CacheRatchet).
+        self.enterContext(mock.patch.dict(AUTH._store_cache, {"at": 0, "data": None}, clear=True))
+        self.enterContext(mock.patch.dict(CHANGES._known, clear=True))
         objects = [obj for name in ("old", "new", "keep") for obj in claim(name)]
         self.kube = Kube(*objects, absent_groups=("kubevirt.io",))
         self.kube.__enter__()
@@ -285,7 +290,13 @@ class VolumesPageTests(Scene):
 class RealCopyTests(unittest.TestCase):
     """With the real copy code: what it records is what the review reads."""
     DEP = base.CopyDeadlineTests.DEP
-    setUp = base.CopyDeadlineTests.setUp
+
+    def setUp(self):
+        # The account store and change-author key the tests fill go back when each ends (CacheRatchet).
+        self.enterContext(mock.patch.dict(AUTH._store_cache, {"at": 0, "data": None}, clear=True))
+        self.enterContext(mock.patch.dict(CHANGES._known, clear=True))
+        base.CopyDeadlineTests.setUp(self)
+
     edit = base.CopyDeadlineTests.edit
     controller = base.CopyDeadlineTests.controller
     apply = base.CopyDeadlineTests.apply

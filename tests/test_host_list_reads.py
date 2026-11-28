@@ -13,6 +13,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
+import homestead_auth as AUTH
+import homestead_changes as CHANGES
 import homestead_cache as CACHE
 import homestead_names as NAMES
 import homestead_node_probes as PROBES
@@ -74,6 +76,9 @@ def size(value):
 
 class HostListReadsTests(unittest.TestCase):
     def setUp(self):
+        # The account store and change-author key the tests fill go back when each ends (CacheRatchet).
+        self.enterContext(mock.patch.dict(AUTH._store_cache, {"at": 0, "data": None}, clear=True))
+        self.enterContext(mock.patch.dict(CHANGES._known, clear=True))
         clean_cache(self)
         PROBES.reset()
         self.addCleanup(PROBES.reset)
