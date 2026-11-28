@@ -13,7 +13,7 @@
    A build that is not a release names its files by a hash of the web folder,
    so each build adds its own; a page load keeps only the build that page
    names (and this worker's release) and drops the files of every other. */
-const VERSION = "2.9.1-dev.5";
+const VERSION = "2.9.1-dev.6";
 const CACHE = `homestead-${VERSION}`;
 const SHELL = "/";
 const ICON = "/icons/icon-192.png";
