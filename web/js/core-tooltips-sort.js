@@ -119,8 +119,38 @@ window.dropOrphanTooltip = dropOrphanTooltip;
 window.HOVER_CARDS = HOVER_CARDS;
 window.showCard = showCard;
 window.hideCard = hideCard;
+// A phone has no hover, and a touch ends with a pointerout as the finger lifts, so
+// touches are handled on pointerdown alone. A tap on something that opens a page,
+// a sidebar or a menu does that, with no tooltip naming it; a press and hold
+// shows its card instead. A tap on a status or a figure that does nothing else
+// shows its card or tooltip, which stays until the next tap elsewhere.
+const CARD_HOLD = 450;
+const TAP_ACTION = "button:not(:disabled),a[href],[onclick],[role=button],summary,select,input,textarea";
+let lastTouch = -Infinity;
+let holdTimer = 0;
+let holdFrom = null;
+let heldCard = null;
+const tapActs = el => !!el?.closest(TAP_ACTION);
+const touchedRecently = () => performance.now() - lastTouch < 800;
+function endHold() { clearTimeout(holdTimer); holdFrom = null; }
+function touchDown(e, card) {
+  lastTouch = performance.now();
+  heldCard = null;
+  endHold();
+  if (tooltipOwner && !tooltipOwner.contains(e.target)) hideTooltip();
+  if (card) {
+    if (card === cardOwner) return;
+    if (!tapActs(card)) { showCard(card); return; }
+    holdFrom = [e.clientX, e.clientY];
+    holdTimer = setTimeout(() => { holdFrom = null; if (card.isConnected && showCard(card)) heldCard = card; }, CARD_HOLD);
+    return;
+  }
+  const owner = tooltipTarget(e.target);
+  if (owner && !tapActs(owner)) showTooltip(owner);
+}
 document.addEventListener("pointerover", e => {
   dropOrphanTooltip();
+  if (e.pointerType === "touch") return;
   const card = cardTarget(e.target);
   if (card) {
     if (card === cardOwner) { clearTimeout(cardHideTimer); return; }
@@ -130,9 +160,22 @@ document.addEventListener("pointerover", e => {
   const owner = tooltipTarget(e.target);
   if (owner && !owner.contains(e.relatedTarget)) showTooltip(owner);
 });
-document.addEventListener("pointermove", dropOrphanTooltip, { passive: true });
+document.addEventListener("pointermove", e => {
+  dropOrphanTooltip();
+  if (holdFrom && Math.hypot(e.clientX - holdFrom[0], e.clientY - holdFrom[1]) > 10) endHold();
+}, { passive: true });
+document.addEventListener("pointerup", endHold);
+document.addEventListener("pointercancel", endHold);
+// The tap that ends a press and hold only showed the card, so the row's own
+// action does not run as well.
+document.addEventListener("click", e => {
+  if (heldCard && heldCard.contains(e.target)) { e.preventDefault(); e.stopImmediatePropagation(); }
+  heldCard = null;
+}, true);
+document.addEventListener("contextmenu", e => { if (touchedRecently() && cardTarget(e.target)) e.preventDefault(); });
 document.addEventListener("pointerout", e => {
   dropOrphanTooltip();
+  if (e.pointerType === "touch") return;
   const card = cardTarget(e.target);
   if (card && !card.contains(e.relatedTarget)) {
     clearTimeout(cardTimer);
@@ -140,16 +183,18 @@ document.addEventListener("pointerout", e => {
   }
   if (tooltipOwner && tooltipOwner.contains(e.target) && !tooltipOwner.contains(e.relatedTarget)) hideTooltip(tooltipOwner);
 });
-// A tap on a phone opens a card at once; a tap anywhere else closes it.
+// A tap anywhere but the card or its element closes the card.
 document.addEventListener("pointerdown", e => {
   const inside = $("#uiCard")?.contains(e.target);
   const card = cardTarget(e.target);
-  if (e.pointerType === "touch" && card && card !== cardOwner) showCard(card);
-  else if (cardOwner && !inside && card !== cardOwner) hideCard();
+  if (cardOwner && !inside && card !== cardOwner) hideCard();
+  if (e.pointerType === "touch" && !inside) touchDown(e, card);
 });
 document.addEventListener("keydown", e => { if (e.key === "Escape" && cardOwner) hideCard(); });
 document.addEventListener("focusin", e => {
   if ($("#uiCard")?.contains(e.target)) { clearTimeout(cardHideTimer); return; }
+  // Focus that follows a tap was handled by the tap.
+  if (touchedRecently()) return;
   const card = cardTarget(e.target);
   if (card) { showCard(card); return; }
   showTooltip(tooltipTarget(e.target));
@@ -358,7 +403,8 @@ document.addEventListener("click", event => {
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
   tooltipOwner, tooltipTarget, hideTooltip, showTooltip, HOVER_CARDS, CARD_DELAY, CARD_LINGER, cardOwner, cardTimer, cardHideTimer,
-  cardTarget, cardFor, hideCard, lingerCard, showCard, dropOrphanTooltip, ACTION_ICONS, enhanceActions,
+  cardTarget, cardFor, hideCard, lingerCard, showCard, dropOrphanTooltip, CARD_HOLD, TAP_ACTION, lastTouch, holdTimer,
+  holdFrom, heldCard, tapActs, touchedRecently, endHold, touchDown, ACTION_ICONS, enhanceActions,
   labelStackTables, SORT_UNITS, sortState, sortValue, sortRows, firstDataRow, sortBody, sortBar, saveSort,
   sortTables
 };
