@@ -7,9 +7,10 @@ const Dashboard = (() => {
     storage: {title:"Storage", description:"Capacity and the health of volume copies", width:4, widths:[4,6,8,12]},
     nodes: {title:"Host health", description:"Host metrics and drive warnings", width:12, widths:[4,6,8,12]},
     // Busiest apps (Nov 2026 mockup) is in the default layout; Top CPU and Top memory stay for layouts that have them.
+    // They draw their own card (own), as before: an optional card without it is a health insight.
     busy: {title:"Busiest apps", description:"The apps using the most CPU, with their memory", width:12, widths:[6,8,12]},
-    cpu: {title:"Top CPU", description:"The busiest apps", width:6, widths:[4,6,8,12], optional:true},
-    memory: {title:"Top memory", description:"Apps using the most RAM", width:6, widths:[4,6,8,12], optional:true},
+    cpu: {title:"Top CPU", description:"The busiest apps", width:6, widths:[4,6,8,12], optional:true, own:true},
+    memory: {title:"Top memory", description:"Apps using the most RAM", width:6, widths:[4,6,8,12], optional:true, own:true},
     history: {title:"Over time", description:"Recorded cluster metrics", width:12, widths:[8,12]},
     ...Object.fromEntries([
       ["health","Health suggestions","Checks and next steps, most important first"],
@@ -133,7 +134,7 @@ const Dashboard = (() => {
       <div id="dashboardMonitoring" class="dashboard-resource-scroll" data-width="${item.width || 6}">${monitorWidget(item)}</div></div>`;
     if (id === "timeline") return `<div class="card flat dashboard-resource-widget" style="--resource-list-height:${item.height || 360}px">${UI.moduleHeader("Since the last visit", "", '<button class="btn sm" onclick="go(\'timeline\')">Open</button>')}
       <div id="dashboardTimeline" class="dashboard-resource-scroll">${Timeline.widget(item)}</div></div>`;
-    if (widgets[id]?.optional) return HealthInsights.widget(id,item);
+    if (widgets[id]?.optional && !widgets[id].own) return HealthInsights.widget(id,item);
     if (id === "portal") return `<div class="card flat dashboard-portal dashboard-resource-widget" style="--resource-list-height:${item.height || 360}px">${UI.moduleHeader("Portal links", "", '<button class="btn sm" onclick="go(\'portal\')">Open Portal</button>')}
       <div id="dashboardPortal" class="dashboard-resource-scroll">${portalBody(item)}</div></div>`;
     if (id === "history") return `<section class="card flat history-card" id="historyCard">${STATE.data.historyHtml || '<div class="empty small">History is loading…</div>'}</section>`;
@@ -305,7 +306,7 @@ const Dashboard = (() => {
     saving=false;clearGesture();draft=null;resetPaint();await viewDash();toast("Dashboard layout saved to the account","ok");
     document.querySelector('[onclick="Dashboard.start()"]')?.focus();
   }
-  const apiObject={widgets, defaults, normalize, positions, settings, refreshOptions, content:{}, render, loadPortal, loadMonitoring, loadTimeline, load, notice:()=>loadError?{title:"Dashboard layout unavailable",text:"The saved layout could not be refreshed. Editing is unavailable until the connection returns."}:null, editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
+  const apiObject={widgets, defaults, normalize, positions, settings, refreshOptions, content:{}, widgetContent, render, loadPortal, loadMonitoring, loadTimeline, load, notice:()=>loadError?{title:"Dashboard layout unavailable",text:"The saved layout could not be refreshed. Editing is unavailable until the connection returns."}:null, editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
     invalidate(){window.HealthInsights?.reset();session++;layout=null;revision=null;loadedUser=null;loadError="";layoutRequest=null;saving=false;clearGesture();draft=null;undo=[];redo=[];portalRequest=null;apiObject.content={};},
     add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();if(id==="monitoring")loadMonitoring();if(id==="timeline")loadTimeline();if(widgets[id]?.optional && !widgets[id].custom && !widgets[id].own)HealthInsights.load();},
     remove(id){if(!Object.hasOwn(widgets,id))return;change(()=>{draft=draft.filter(item=>item.id!==id);if(selected===id)selected=draft[0]?.id || "";},`${widgets[id].title} removed. Use Undo to restore it.`);},
