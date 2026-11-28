@@ -181,7 +181,7 @@ def start(why="weekly"):
     """Start one weekly trim as a job; one runs at a time."""
     slot = last_slot(time.time(), *slot_of(last_state()))
     operation = OPS.start(KIND, "Weekly trim", {"kind": "Longhorn", "name": "weekly trim"},
-                          "/data-protection#housekeeping", {"phase": "plan", "why": why, "slot": slot},
+                          "/data-protection/settings#housekeeping", {"phase": "plan", "why": why, "slot": slot},
                           "Finding attached volumes", unless=(KIND,))
     _update(lambda state: state.update(tried=slot))
     return operation
