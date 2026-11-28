@@ -170,16 +170,22 @@ def body(node, lifetime=900, name=""):
 
 
 def _delete(path):
+    """Remove a run's helper. Never raises: it runs in _run's finally, where
+    any error would replace the script's answer or its own error. A helper
+    left behind is cleared by a later run once it has ended (_clear_ended),
+    or ends at its activeDeadlineSeconds."""
     try:
         ksend("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0})
-    except urllib.error.HTTPError:
+    except Exception:
         pass
 
 
 def _clear_ended():
     """Helpers of runs that ended without removing theirs (the run's process
     stopped, or the pod reached its deadline) are deleted - never one still
-    running, which is another run's. Housekeeping: a failed read skips it."""
+    running, which is another run's. Housekeeping: a failed read skips it,
+    and a failed delete leaves that helper for a later run; neither stops
+    the run that asked."""
     selector = urllib.parse.quote(NAMES.key("task") + "=" + TASK)
     try:
         pods = (kget(f"/api/v1/namespaces/{NS}/pods?labelSelector={selector}") or {}).get("items") or []
@@ -193,7 +199,7 @@ def _clear_ended():
                 ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{meta['name']}",
                       {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0,
                        **({"preconditions": {"uid": meta["uid"]}} if meta.get("uid") else {})})
-            except urllib.error.HTTPError:
+            except Exception:
                 pass
 
 
